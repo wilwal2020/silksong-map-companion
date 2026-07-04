@@ -22,23 +22,10 @@ export class Fog {
     this.rebuild();
   }
 
-  // Reveal a rectangle given in full map coordinates, with feathered edges.
-  revealRect(x, y, w, h, feather = 40) {
-    const s = this.maskScale;
-    const ctx = this.maskCtx;
-    ctx.save();
-    ctx.filter = `blur(${Math.max(2, feather * s)}px)`;
-    ctx.fillStyle = '#fff';
-    // inset a little so the blur doesn't reveal past the true edges
-    const inset = feather * s * 0.5;
-    ctx.fillRect(x * s + inset, y * s + inset, w * s - inset * 2, h * s - inset * 2);
-    ctx.restore();
-    this.rebuild();
-  }
-
   // Reveal using an arbitrary alpha mask canvas, mapped onto the rectangle
-  // (x, y, w, h) in full map coordinates. Used for full-map updates where only
-  // explored rooms should be revealed.
+  // (x, y, w, h) in full map coordinates. Only what the mask marks as
+  // explored gets revealed — never a plain rectangle, which would spoil
+  // neighbouring rooms.
   revealMask(maskCanvas, x, y, w, h) {
     const s = this.maskScale;
     const ctx = this.maskCtx;

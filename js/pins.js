@@ -40,7 +40,10 @@ export class PinManager {
   add(data, { select = false } = {}) {
     const el = document.createElement('div');
     el.className = 'pin';
-    const entry = { data, el, card: null, imgUrl: null };
+    const ico = document.createElement('span');
+    ico.className = 'pin-ico';
+    el.appendChild(ico);
+    const entry = { data, el, ico, card: null, imgUrl: null };
     this.pins.set(data.id, entry);
     this.layer.appendChild(el);
     this._decorate(entry);
@@ -108,7 +111,7 @@ export class PinManager {
 
   _decorate(entry) {
     const cat = catById(entry.data.cat);
-    entry.el.textContent = cat.icon;
+    entry.ico.textContent = cat.icon;
     entry.el.title = cat.label + (entry.data.note ? ' — ' + entry.data.note : '');
     entry.el.classList.toggle('done', !!entry.data.done);
   }

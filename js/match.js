@@ -54,6 +54,60 @@ export function locate(shot, mapImage, mode, onProgress) {
   return run;
 }
 
+// Find the player marker (the white Hornet icon) in a map screenshot.
+// Returns { fx, fy } as fractions of the screenshot size, or null.
+// Strategy: the marker is the biggest compact near-white blob — room borders
+// are thin (low fill ratio) and text/icons are much smaller.
+export function detectPlayerMarker(shot) {
+  const W = Math.min(800, shot.width);
+  const scale = W / shot.width;
+  const H = Math.max(1, Math.round(shot.height * scale));
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(shot, 0, 0, W, H);
+  const d = ctx.getImageData(0, 0, W, H).data;
+
+  const bin = new Uint8Array(W * H);
+  for (let i = 0, p = 0; p < bin.length; i += 4, p++) {
+    bin[p] = (d[i] > 205 && d[i + 1] > 205 && d[i + 2] > 205) ? 1 : 0;
+  }
+
+  // connected components via BFS
+  const seen = new Uint8Array(W * H);
+  const stack = new Int32Array(W * H);
+  let bestBlob = null;
+  for (let start = 0; start < bin.length; start++) {
+    if (!bin[start] || seen[start]) continue;
+    let top = 0;
+    stack[top++] = start;
+    seen[start] = 1;
+    let area = 0, sx = 0, sy = 0;
+    let minX = W, maxX = 0, minY = H, maxY = 0;
+    while (top > 0) {
+      const p = stack[--top];
+      const x = p % W, y = (p / W) | 0;
+      area++; sx += x; sy += y;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (x > 0 && bin[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack[top++] = p - 1; }
+      if (x < W - 1 && bin[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack[top++] = p + 1; }
+      if (y > 0 && bin[p - W] && !seen[p - W]) { seen[p - W] = 1; stack[top++] = p - W; }
+      if (y < H - 1 && bin[p + W] && !seen[p + W]) { seen[p + W] = 1; stack[top++] = p + W; }
+    }
+    const bw = maxX - minX + 1, bh = maxY - minY + 1;
+    const fill = area / (bw * bh);
+    const aspectOk = bw / bh > 0.4 && bw / bh < 1.4;
+    const sizeOk = area > 120 && area < 6000 && bh < H * 0.25;
+    if (sizeOk && aspectOk && fill > 0.4) {
+      if (!bestBlob || area > bestBlob.area) {
+        bestBlob = { area, fx: (sx / area) / W, fy: (sy / area) / H };
+      }
+    }
+  }
+  return bestBlob ? { fx: bestBlob.fx, fy: bestBlob.fy } : null;
+}
+
 // For full-map updates: build an alpha mask of which parts of the screenshot
 // are explored rooms (anything that differs from the dominant background
 // color) so the fog only reveals rooms you have actually been to.

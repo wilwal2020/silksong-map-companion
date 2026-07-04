@@ -1,13 +1,14 @@
 import { Fog } from './fog.js';
 import { MapView } from './mapview.js';
 import { store } from './store.js';
-import { locate, computeExploredMask } from './match.js';
+import { locate, computeExploredMask, detectPlayerMarker } from './match.js';
 import { PinManager, CATEGORIES, catById } from './pins.js';
 
 const $ = s => document.querySelector(s);
 
 let view, fog, pins, mapImage;
-let placing = null; // active placement { resolve }
+let placing = null;      // active placement { resolve }
+let newPinPending = null; // freshly created pin waiting for its area screenshot
 
 // ---------------------------------------------------------------- utilities
 
@@ -22,6 +23,12 @@ function toast(msg, kind = '') {
 function spinner(show, msg) {
   $('#spinner').classList.toggle('hidden', !show);
   if (msg) $('#spinner-msg').textContent = msg;
+}
+
+const HINT_DEFAULT = 'paste a screenshot of your in-game map';
+function setHint(text) {
+  $('#hint-text').textContent = text || HINT_DEFAULT;
+  $('#paste-hint').classList.toggle('highlight', !!text);
 }
 
 function debounce(fn, ms) {
@@ -105,8 +112,11 @@ function endPlacement(confirmed) {
 $('#btn-place-ok').addEventListener('click', () => endPlacement(true));
 $('#btn-place-cancel').addEventListener('click', () => endPlacement(false));
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && placing) endPlacement(false);
-  if (e.key === 'Enter' && placing) endPlacement(true);
+  if (e.key === 'Escape' && placing) { endPlacement(false); return; }
+  if (e.key === 'Enter' && placing) { endPlacement(true); return; }
+  if (e.key === 'Escape' && !document.querySelector('dialog[open]') && pins?.awaitingId) {
+    skipAwaitingEnv();
+  }
 });
 
 // ------------------------------------------------------------- pin editing
@@ -179,31 +189,72 @@ async function handleMapScreenshot(blob) {
     Math.min(1, (window.innerWidth * 0.6) / rect.w));
 
   const final = await placeOverlay(bitmap, rect, msg);
+  if (!final) { bitmap.close?.(); return; }
+
+  // reveal only the rooms actually drawn in the screenshot — never a
+  // rectangle or blur that would spoil the surroundings
+  const mask = computeExploredMask(bitmap);
+  fog.revealMask(mask, final.x, final.y, final.w, final.h);
+
+  // drop the pin on the player marker (white Hornet icon) if we can find it
+  const marker = detectPlayerMarker(bitmap);
   bitmap.close?.();
-  if (!final) return;
-
-  fog.revealRect(final.x, final.y, final.w, final.h, 60);
-
   const data = {
     id: crypto.randomUUID(),
-    x: final.x + final.w / 2,
-    y: final.y + final.h / 2,
+    x: final.x + (marker ? marker.fx : 0.5) * final.w,
+    y: final.y + (marker ? marker.fy : 0.5) * final.h,
     cat: 'other', note: '', done: false, img: null,
     created: Date.now(),
   };
   pins.add(data, { select: true });
-  const edit = await openPinEditor(data, true);
-  if (!edit) {
-    pins.remove(data.id);
-    toast('Area revealed (no pin added).');
-    return;
-  }
-  data.cat = edit.cat;
-  data.note = edit.note;
-  pins.update(data);
   persistPin(data);
   pins.setAwaiting(data.id);
-  toast('Pin saved — now paste a screenshot of the area itself 📷', 'ok');
+  newPinPending = data;
+  setHint('now paste a screenshot of the area itself — Esc to skip');
+  toast(marker
+    ? 'Revealed — pin placed at your position. Paste the area screenshot now 📷'
+    : 'Revealed — pin added (drag it onto your spot). Paste the area screenshot now 📷', 'ok');
+}
+
+// a paste while a pin is awaiting its screenshot attaches directly — no dialog
+async function attachToAwaiting(blob) {
+  const entry = pins.pins.get(pins.attachTarget());
+  if (!entry) return;
+  entry.data.img = blob;
+  pins.update(entry.data);
+  persistPin(entry.data);
+  pins.setAwaiting(null);
+  setHint(null);
+  if (newPinPending && newPinPending.id === entry.data.id) {
+    newPinPending = null;
+    const edit = await openPinEditor(entry.data, true);
+    if (edit) {
+      entry.data.cat = edit.cat;
+      entry.data.note = edit.note;
+      pins.update(entry.data);
+      persistPin(entry.data);
+    }
+    toast('Pin complete — hover it to see the area.', 'ok');
+  } else {
+    toast('Screenshot attached — hover the pin to see it.', 'ok');
+  }
+}
+
+// Esc skips the "waiting for area screenshot" step
+function skipAwaitingEnv() {
+  const wasNew = newPinPending;
+  pins.setAwaiting(null);
+  setHint(null);
+  if (wasNew) {
+    newPinPending = null;
+    openPinEditor(wasNew, true).then(edit => {
+      if (!edit) return;
+      wasNew.cat = edit.cat;
+      wasNew.note = edit.note;
+      pins.update(wasNew);
+      persistPin(wasNew);
+    });
+  }
 }
 
 async function handleEnvScreenshot(blob) {
@@ -257,6 +308,11 @@ let currentPaste = null; // { blob, url } while the type chooser is open
 function routePaste(blob) {
   if (placing) {
     toast('Finish placing the current screenshot first.', 'error');
+    return;
+  }
+  // a pin is waiting for its area screenshot → attach without asking
+  if (pins.awaitingId) {
+    attachToAwaiting(blob);
     return;
   }
   currentPaste = { blob, url: URL.createObjectURL(blob) };
@@ -401,6 +457,7 @@ async function init() {
     onLightbox: showLightbox,
     onRequestAttach: data => {
       pins.setAwaiting(data.id);
+      setHint('paste the screenshot for this pin — Esc to cancel');
       toast('Now paste (Ctrl+V) the screenshot for this pin.');
     },
     onEdit: async data => {
@@ -448,6 +505,7 @@ async function init() {
       type === 'map' ? handleMapScreenshot(blob)
       : type === 'env' ? handleEnvScreenshot(blob)
       : handleFullMap(blob),
+    routePaste,
     endPlacement,
   };
 }

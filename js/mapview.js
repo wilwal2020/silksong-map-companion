@@ -11,7 +11,6 @@ export class MapView {
     this.scale = 0.2;
     this.ox = 0;
     this.oy = 0;
-    this.fogAlpha = 0.94;
 
     // placement overlay: { img, x, y, w } in map coords (h from aspect)
     this.placement = null;
@@ -76,10 +75,14 @@ export class MapView {
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(this.map, 0, 0);
 
-    // fog darkness (mask is half-res; stretch to map size)
-    ctx.globalAlpha = this.fogAlpha;
+    // fog darkness (mask is half-res; stretch to map size). Fully opaque:
+    // unexplored map must not be visible at all — no spoilers.
     ctx.drawImage(this.fog.dark, 0, 0, this.map.width, this.map.height);
-    ctx.globalAlpha = 1;
+
+    // subtle bounds so you can tell where the world map area is
+    ctx.strokeStyle = 'rgba(216, 220, 237, 0.08)';
+    ctx.lineWidth = 2 / this.scale;
+    ctx.strokeRect(0, 0, this.map.width, this.map.height);
 
     if (this.placement) {
       const p = this.placement;
