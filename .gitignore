@@ -1,0 +1,7 @@
+# original map file (committed copy lives in assets/map.png)
+silksong map.png
+
+.claude/
+node_modules/
+Thumbs.db
+.DS_Store

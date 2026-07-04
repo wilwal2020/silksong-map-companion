@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Silksong Map Companion</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header id="toolbar">
+  <h1>Silksong <span>Map Companion</span></h1>
+
+  <div id="filters" title="Filter pins by category"></div>
+
+  <div class="toolbar-right">
+    <label class="toggle" title="Show pins you've already checked off">
+      <input type="checkbox" id="show-done" checked> show done
+    </label>
+    <button id="btn-export" class="btn">Export</button>
+    <button id="btn-import" class="btn">Import</button>
+    <button id="btn-help" class="btn">Help</button>
+    <button id="btn-reset" class="btn danger" title="Erase all revealed map and pins">Reset</button>
+  </div>
+</header>
+
+<main id="stage">
+  <canvas id="map-canvas"></canvas>
+  <div id="pin-layer"></div>
+
+  <div id="paste-hint">
+    <div class="hint-key">Ctrl+V</div>
+    <div>paste a screenshot of your in-game map</div>
+  </div>
+
+  <!-- placement controls shown while positioning a pasted screenshot -->
+  <div id="placement-bar" class="hidden">
+    <span id="placement-msg">Adjust the screenshot position</span>
+    <span class="placement-tip">drag to move &middot; scroll to resize</span>
+    <button id="btn-place-ok" class="btn primary">Confirm</button>
+    <button id="btn-place-cancel" class="btn">Cancel</button>
+  </div>
+
+  <div id="spinner" class="hidden">
+    <div class="spin"></div>
+    <span id="spinner-msg">Locating screenshot on the map&hellip;</span>
+  </div>
+</main>
+
+<!-- paste type chooser -->
+<dialog id="dlg-paste">
+  <h2>What did you paste?</h2>
+  <img id="paste-preview" alt="pasted screenshot preview">
+  <div class="dlg-actions vertical">
+    <button class="btn primary" data-type="map">📍 Map screenshot — reveal this area &amp; add a pin</button>
+    <button class="btn" data-type="env">🖼 Area screenshot — attach to the current pin</button>
+    <button class="btn" data-type="full">🗺 Full map — update everything I've explored</button>
+    <button class="btn subtle" data-type="cancel">Cancel</button>
+  </div>
+</dialog>
+
+<!-- pin editor -->
+<dialog id="dlg-pin">
+  <h2 id="pin-dlg-title">New pin</h2>
+  <div id="pin-cats"></div>
+  <input id="pin-note" type="text" maxlength="120" placeholder="Note — e.g. “locked gate, need a key?”">
+  <div class="dlg-actions">
+    <button id="btn-pin-save" class="btn primary">Save</button>
+    <button id="btn-pin-cancel" class="btn">Cancel</button>
+  </div>
+</dialog>
+
+<!-- help -->
+<dialog id="dlg-help">
+  <h2>How it works</h2>
+  <ol class="help-steps">
+    <li><b>In game:</b> open your map at the spot you want to remember and take a screenshot <span class="kbd">Win+Shift+S</span> works great — snip just the map area.</li>
+    <li><b>Here:</b> press <span class="kbd">Ctrl+V</span> and choose <i>Map screenshot</i>. The site finds where it belongs, reveals that part of the map and drops a pin. Drag the pin onto your exact spot if needed.</li>
+    <li>Pick a category (locked door, needs ability, vendor&hellip;) and write a short note.</li>
+    <li><b>In game:</b> screenshot what's actually there (the door, the NPC, the ledge you can't reach) and paste it here as an <i>Area screenshot</i>. Hovering the pin now shows it.</li>
+    <li>When you finally come back and deal with it — open the pin and hit <b>✓ done</b>.</li>
+    <li>Zoom your in-game map all the way out, screenshot it and paste as <i>Full map</i> to update everything you've explored in one go.</li>
+  </ol>
+  <p class="help-note">Everything is stored in this browser only — nothing is uploaded. Use <b>Export</b> now and then to keep a backup file.</p>
+  <div class="dlg-actions">
+    <button id="btn-help-close" class="btn primary">Got it</button>
+  </div>
+</dialog>
+
+<input type="file" id="import-file" accept="application/json" class="hidden">
+<div id="toasts"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
