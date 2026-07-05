@@ -36,27 +36,9 @@
     <div id="hint-text">paste a screenshot of your in-game map</div>
   </div>
 
-  <!-- placement controls shown while positioning a pasted screenshot -->
-  <div id="placement-bar" class="hidden">
-    <span id="placement-msg">Adjust the screenshot position</span>
-    <span class="placement-tip">drag to move &middot; scroll to resize</span>
-    <button id="btn-place-ok" class="btn primary">Confirm</button>
-    <button id="btn-place-cancel" class="btn">Cancel</button>
-  </div>
-
   <div id="spinner" class="hidden">
     <div class="spin"></div>
     <span id="spinner-msg">Locating screenshot on the map&hellip;</span>
-  </div>
-
-  <!-- step 2: waiting for the area screenshot for a pin -->
-  <div id="await-bar" class="hidden">
-    <div class="await-step">2</div>
-    <div class="await-text">
-      <b id="await-title">Now screenshot the area itself</b>
-      <span id="await-sub">Go back to the game, screenshot what's actually at this spot, and paste it here with <span class="kbd">Ctrl+V</span></span>
-    </div>
-    <button id="btn-await-skip" class="btn">Skip</button>
   </div>
 </main>
 
@@ -69,6 +51,15 @@
     <button class="btn" data-type="env">🖼 Area screenshot — attach to the current pin</button>
     <button class="btn" data-type="full">🗺 Full map — update everything I've explored</button>
     <button class="btn subtle" data-type="cancel">Cancel</button>
+  </div>
+</dialog>
+
+<!-- step 2: waiting for the area screenshot for a pin -->
+<dialog id="dlg-await">
+  <h2 id="await-title">Step 2 — screenshot the area itself</h2>
+  <p id="await-sub" class="await-sub">Go back to the game, screenshot what's actually at this spot, and paste it here with <span class="kbd">Ctrl+V</span>. This dialog waits for your paste.</p>
+  <div class="dlg-actions">
+    <button id="btn-await-skip" class="btn">Skip this step</button>
   </div>
 </dialog>
 
@@ -88,8 +79,8 @@
   <h2>How it works</h2>
   <ol class="help-steps">
     <li><b>In game:</b> open your map at the spot you want to remember and take a screenshot <span class="kbd">Win+Shift+S</span> works great — snip just the map area.</li>
-    <li><b>Here:</b> press <span class="kbd">Ctrl+V</span> and choose <i>Map screenshot</i>. The site finds where it belongs (you can drag/scroll to fine-tune, then confirm), reveals exactly the rooms shown in your screenshot, and drops a pin on your player marker.</li>
-    <li><b>In game:</b> screenshot what's actually there (the door, the NPC, the ledge you can't reach) and just paste it — it attaches to the new pin automatically. Press <span class="kbd">Esc</span> to skip this step.</li>
+    <li><b>Here:</b> press <span class="kbd">Ctrl+V</span> and choose <i>Map screenshot</i>. The site finds where it belongs, reveals exactly the rooms shown in your screenshot, and drops a pin on your player marker — all automatic. If it isn't confident enough it reveals nothing and asks for a wider screenshot. <span class="kbd">Ctrl+Z</span> undoes the last paste.</li>
+    <li><b>In game:</b> screenshot what's actually there (the door, the NPC, the ledge you can't reach) and just paste it — it attaches to the new pin automatically, or hit <i>Skip</i>.</li>
     <li>Pick a category (locked door, needs ability, vendor&hellip;), write a short note, and drag the pin if it isn't exactly on the spot. Hovering the pin now shows your screenshot.</li>
     <li>When you finally come back and deal with it — open the pin and hit <b>✓ done</b>.</li>
     <li>Zoom your in-game map all the way out, screenshot it and paste as <i>Full map</i> to update everything you've explored in one go.</li>

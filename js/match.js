@@ -111,47 +111,94 @@ export function detectPlayerMarker(shot) {
 // For full-map updates: build an alpha mask of which parts of the screenshot
 // are explored rooms (anything that differs from the dominant background
 // color) so the fog only reveals rooms you have actually been to.
+// Fill regions that are fully enclosed by content (room interiors): flood
+// from the image border through non-content; whatever non-content remains
+// unreached is inside a room and becomes content.
+export function fillEnclosed(mask, W, H) {
+  const seen = new Uint8Array(W * H);
+  const q = new Int32Array(W * H);
+  let head = 0, tail = 0;
+  const push = p => { if (!mask[p] && !seen[p]) { seen[p] = 1; q[tail++] = p; } };
+  for (let x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
+  for (let y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
+  while (head < tail) {
+    const p = q[head++];
+    const x = p % W;
+    if (x > 0) push(p - 1);
+    if (x < W - 1) push(p + 1);
+    if (p >= W) push(p - W);
+    if (p < W * (H - 1)) push(p + W);
+  }
+  for (let p = 0; p < mask.length; p++) {
+    if (!mask[p] && !seen[p]) mask[p] = 255;
+  }
+  return mask;
+}
+
+// Binary "something is drawn here" mask against a LOCAL background estimate
+// (the screenshot heavily downscaled and stretched back). A single dominant
+// color fails on the in-game map's bright, vignetted backgrounds; comparing
+// each pixel to its local surroundings is robust to gradients and lighting.
+export function contentMaskData(shot, W) {
+  const H = Math.round(shot.height * W / shot.width);
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(shot, 0, 0, W, H);
+  const d = ctx.getImageData(0, 0, W, H).data;
+
+  // background = shot at ~1/20 scale, stretched back up (a huge cheap blur)
+  const bs = document.createElement('canvas');
+  bs.width = Math.max(1, Math.round(W / 20));
+  bs.height = Math.max(1, Math.round(H / 20));
+  bs.getContext('2d').drawImage(shot, 0, 0, bs.width, bs.height);
+  const bc = document.createElement('canvas');
+  bc.width = W; bc.height = H;
+  const bctx = bc.getContext('2d', { willReadFrequently: true });
+  bctx.imageSmoothingEnabled = true;
+  bctx.imageSmoothingQuality = 'high';
+  bctx.drawImage(bs, 0, 0, W, H);
+  const b = bctx.getImageData(0, 0, W, H).data;
+
+  const TH = 1800; // squared color distance to local background
+  const mask = new Uint8Array(W * H);
+  for (let i = 0, p = 0; p < mask.length; i += 4, p++) {
+    const dr = d[i] - b[i], dg = d[i + 1] - b[i + 1], db = d[i + 2] - b[i + 2];
+    mask[p] = (dr * dr + dg * dg + db * db > TH) ? 255 : 0;
+  }
+
+  // close small gaps (dashed outlines of partially explored rooms) then fill
+  // the enclosed room interiors so rooms are solid, not outline-only
+  const cm = document.createElement('canvas');
+  cm.width = W; cm.height = H;
+  const cmCtx = cm.getContext('2d', { willReadFrequently: true });
+  const id = cmCtx.createImageData(W, H);
+  for (let p = 0; p < mask.length; p++) id.data[p * 4 + 3] = mask[p];
+  cmCtx.putImageData(id, 0, 0);
+  const c2 = document.createElement('canvas');
+  c2.width = W; c2.height = H;
+  const ctx2 = c2.getContext('2d', { willReadFrequently: true });
+  ctx2.filter = 'blur(3px)';
+  ctx2.drawImage(cm, 0, 0);
+  const d2 = ctx2.getImageData(0, 0, W, H).data;
+  for (let p = 0; p < mask.length; p++) mask[p] = d2[p * 4 + 3] > 80 ? 255 : 0;
+
+  fillEnclosed(mask, W, H);
+  return { mask, W, H };
+}
+
 export function computeExploredMask(shot) {
   // high enough resolution that thin text strokes and room corners survive
-  const W = Math.min(1200, shot.width);
-  const scale = W / shot.width;
-  const c = document.createElement('canvas');
-  c.width = W;
-  c.height = Math.round(shot.height * scale);
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(shot, 0, 0, c.width, c.height);
-  const img = ctx.getImageData(0, 0, c.width, c.height);
-  const d = img.data;
-
-  // dominant color via coarse quantization (5 bits per channel)
-  const hist = new Map();
-  for (let i = 0; i < d.length; i += 16) {
-    const key = (d[i] >> 3 << 10) | (d[i + 1] >> 3 << 5) | (d[i + 2] >> 3);
-    hist.set(key, (hist.get(key) || 0) + 1);
+  const { mask, W, H } = contentMaskData(shot, Math.min(1200, shot.width));
+  const out = document.createElement('canvas');
+  out.width = W; out.height = H;
+  const ctx = out.getContext('2d');
+  const id = ctx.createImageData(W, H);
+  for (let p = 0; p < mask.length; p++) {
+    const o = p * 4;
+    id.data[o] = id.data[o + 1] = id.data[o + 2] = 255;
+    id.data[o + 3] = mask[p];
   }
-  let bgKey = 0, bgCount = -1;
-  for (const [k, v] of hist) if (v > bgCount) { bgCount = v; bgKey = k; }
-  const bg = [(bgKey >> 10 & 31) << 3, (bgKey >> 5 & 31) << 3, (bgKey & 31) << 3];
-
-  const TH = 40 * 40;
-  for (let i = 0; i < d.length; i += 4) {
-    const dr = d[i] - bg[0], dg = d[i + 1] - bg[1], db = d[i + 2] - bg[2];
-    const on = dr * dr + dg * dg + db * db > TH;
-    d[i] = d[i + 1] = d[i + 2] = 255;
-    d[i + 3] = on ? 255 : 0;
-  }
-  ctx.putImageData(img, 0, 0);
-
-  // blur + generous re-threshold: closes gaps and slightly dilates, so
-  // text, room corners and thin outlines are fully included in the reveal
-  const c2 = document.createElement('canvas');
-  c2.width = c.width; c2.height = c.height;
-  const ctx2 = c2.getContext('2d');
-  ctx2.filter = 'blur(4px)';
-  ctx2.drawImage(c, 0, 0);
-  const img2 = ctx2.getImageData(0, 0, c2.width, c2.height);
-  const d2 = img2.data;
-  for (let i = 3; i < d2.length; i += 4) d2[i] = d2[i] > 55 ? 255 : 0;
-  ctx2.putImageData(img2, 0, 0);
-  return c2;
+  ctx.putImageData(id, 0, 0);
+  return out;
 }

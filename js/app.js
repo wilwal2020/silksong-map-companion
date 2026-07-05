@@ -7,17 +7,31 @@ import { PinManager, CATEGORIES, catById } from './pins.js';
 const $ = s => document.querySelector(s);
 
 let view, fog, pins, mapImage;
-let placing = null;      // active placement { resolve }
 let newPinPending = null; // freshly created pin waiting for its area screenshot
+let lastUndo = null;      // { maskCopy, pinId } — one level of paste undo
+
+// auto-placement confidence gates: matches that fail these reveal nothing.
+// `ratio` (runner-up peak / best peak) is the reliable signal — genuine
+// matches measure ~0.65-0.70, non-map or ambiguous images ~0.95.
+const RATIO_GATE = 0.88;
+const SCORE_GATE = 0.2;
+const confident = rect => rect && rect.score >= SCORE_GATE && (rect.ratio ?? 1) <= RATIO_GATE;
 
 // ---------------------------------------------------------------- utilities
 
-function toast(msg, kind = '') {
+function toast(msg, kind = '', action = null) {
   const el = document.createElement('div');
   el.className = 'toast ' + kind;
   el.textContent = msg;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.textContent = action.label;
+    b.addEventListener('click', () => { el.remove(); action.fn(); });
+    el.appendChild(b);
+  }
   $('#toasts').appendChild(el);
-  setTimeout(() => el.remove(), 4200);
+  setTimeout(() => el.remove(), action ? 8000 : 4200);
 }
 
 function spinner(show, msg) {
@@ -25,22 +39,35 @@ function spinner(show, msg) {
   if (msg) $('#spinner-msg').textContent = msg;
 }
 
-const HINT_DEFAULT = 'paste a screenshot of your in-game map';
-function setHint(text) {
-  $('#hint-text').textContent = text || HINT_DEFAULT;
-  $('#paste-hint').classList.toggle('highlight', !!text);
-}
-
-function showAwaitBar(title, sub) {
+function showAwaitDialog(title, sub, skipLabel) {
   $('#await-title').textContent = title;
   $('#await-sub').innerHTML = sub;
-  $('#await-bar').classList.remove('hidden');
-  $('#paste-hint').classList.add('hidden');
+  $('#btn-await-skip').textContent = skipLabel;
+  $('#dlg-await').showModal();
 }
 
-function hideAwaitBar() {
-  $('#await-bar').classList.add('hidden');
-  $('#paste-hint').classList.remove('hidden');
+// one-level undo of the last paste (fog reveal + created pin)
+function snapshotForUndo(pinId = null) {
+  const copy = document.createElement('canvas');
+  copy.width = fog.mask.width;
+  copy.height = fog.mask.height;
+  copy.getContext('2d').drawImage(fog.mask, 0, 0);
+  lastUndo = { maskCopy: copy, pinId };
+}
+
+function undoLast() {
+  if (!lastUndo) { toast('Nothing to undo.'); return; }
+  fog.maskCtx.clearRect(0, 0, fog.mask.width, fog.mask.height);
+  fog.maskCtx.drawImage(lastUndo.maskCopy, 0, 0);
+  fog.rebuild();
+  if (lastUndo.pinId) {
+    pins.remove(lastUndo.pinId);
+    store.deletePin(lastUndo.pinId);
+    if (newPinPending && newPinPending.id === lastUndo.pinId) newPinPending = null;
+    if ($('#dlg-await').open) $('#dlg-await').close();
+  }
+  lastUndo = null;
+  toast('Undone.', 'ok');
 }
 
 function debounce(fn, ms) {
@@ -93,44 +120,17 @@ function persistPin(data) {
   store.putPin(data);
 }
 
-// --------------------------------------------------------------- placement
+// ---------------------------------------------------------------- keyboard
 
-// Show `bitmap` as a draggable/resizable overlay, starting at `rect`
-// (map coords). Resolves with the final rect, or null if cancelled.
-function placeOverlay(bitmap, rect, msg) {
-  return new Promise(resolve => {
-    placing = { resolve, bitmap };
-    view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w });
-    $('#placement-msg').textContent = msg;
-    $('#placement-bar').classList.remove('hidden');
-    $('#paste-hint').classList.add('hidden');
-  });
-}
-
-function endPlacement(confirmed) {
-  if (!placing) return;
-  const p = view.placement;
-  const rect = confirmed && p
-    ? { x: p.x, y: p.y, w: p.w, h: p.w * (p.img.height / p.img.width) }
-    : null;
-  view.setPlacement(null);
-  $('#placement-bar').classList.add('hidden');
-  $('#paste-hint').classList.remove('hidden');
-  const { resolve } = placing;
-  placing = null;
-  resolve(rect);
-}
-
-$('#btn-place-ok').addEventListener('click', () => endPlacement(true));
-$('#btn-place-cancel').addEventListener('click', () => endPlacement(false));
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && placing) { endPlacement(false); return; }
-  if (e.key === 'Enter' && placing) { endPlacement(true); return; }
-  if (e.key === 'Escape' && !document.querySelector('dialog[open]') && pins?.awaitingId) {
-    skipAwaitingEnv();
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'
+      && !document.querySelector('dialog[open]')) {
+    e.preventDefault();
+    undoLast();
   }
 });
 $('#btn-await-skip').addEventListener('click', () => skipAwaitingEnv());
+$('#dlg-await').addEventListener('cancel', e => { e.preventDefault(); skipAwaitingEnv(); });
 
 // ------------------------------------------------------------- pin editing
 
@@ -184,50 +184,44 @@ async function handleMapScreenshot(blob) {
       f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`));
   } catch (err) {
     console.error(err);
-    toast('Auto-locate failed (' + err.message + ') — place it manually.', 'error');
+    toast('Locating failed: ' + err.message, 'error');
   }
   spinner(false);
 
-  let msg = 'Check the position, then confirm';
-  if (!rect || rect.score < 0.15) {
-    // fallback: drop it in the middle of the current view at a plausible size
-    const c = view.screenToMap(window.innerWidth / 2, window.innerHeight / 2);
-    const w = mapImage.width * 0.25;
-    rect = { x: c.x - w / 2, y: c.y - (w * bitmap.height / bitmap.width) / 2, w };
-    msg = 'Could not auto-locate — drag it into place';
-  } else if (rect.score < 0.3) {
-    msg = 'Not fully sure about this spot — double-check before confirming';
+  if (!confident(rect)) {
+    bitmap.close?.();
+    toast('Couldn\'t find this spot with confidence — nothing was revealed. Try a screenshot showing a bit more of the map.', 'error');
+    return;
   }
-  view.centerOn(rect.x + rect.w / 2, rect.y + (rect.h || rect.w * bitmap.height / bitmap.width) / 2,
-    Math.min(1, (window.innerWidth * 0.6) / rect.w));
 
-  const final = await placeOverlay(bitmap, rect, msg);
-  if (!final) { bitmap.close?.(); return; }
-
-  // reveal only the rooms actually drawn in the screenshot — never a
-  // rectangle or blur that would spoil the surroundings
+  // apply immediately: reveal only the rooms actually drawn in the
+  // screenshot, drop the pin on the player marker (white Hornet icon)
+  snapshotForUndo();
   const mask = computeExploredMask(bitmap);
-  fog.revealMask(mask, final.x, final.y, final.w, final.h);
-
-  // drop the pin on the player marker (white Hornet icon) if we can find it
+  fog.revealMask(mask, rect.x, rect.y, rect.w, rect.h);
   const marker = detectPlayerMarker(bitmap);
   bitmap.close?.();
+
   const data = {
     id: crypto.randomUUID(),
-    x: final.x + (marker ? marker.fx : 0.5) * final.w,
-    y: final.y + (marker ? marker.fy : 0.5) * final.h,
+    x: rect.x + (marker ? marker.fx : 0.5) * rect.w,
+    y: rect.y + (marker ? marker.fy : 0.5) * rect.h,
     cat: 'other', note: '', done: false, img: null,
     created: Date.now(),
   };
+  lastUndo.pinId = data.id;
   pins.add(data, { select: true });
   persistPin(data);
   pins.setAwaiting(data.id);
   newPinPending = data;
-  showAwaitBar('Now screenshot the area itself',
+
+  view.centerOn(data.x, data.y, Math.min(1, (window.innerWidth * 0.6) / rect.w));
+  showAwaitDialog('Step 2 — screenshot the area itself',
     (marker
-      ? 'Pin placed at your position. '
-      : 'Pin added — drag it onto your exact spot. ')
-    + 'Go back to the game, screenshot what\'s actually there, and paste it here with <span class="kbd">Ctrl+V</span>');
+      ? 'Map revealed and pin placed at your position. '
+      : 'Map revealed and pin added — drag it onto your exact spot afterwards. ')
+    + 'Now go back to the game, screenshot what\'s actually there, and paste it with <span class="kbd">Ctrl+V</span>. This dialog waits for your paste. (<span class="kbd">Ctrl+Z</span> afterwards undoes everything.)',
+    'Skip this step');
 }
 
 // a paste while a pin is awaiting its screenshot attaches directly — no dialog
@@ -238,7 +232,7 @@ async function attachToAwaiting(blob) {
   pins.update(entry.data);
   persistPin(entry.data);
   pins.setAwaiting(null);
-  hideAwaitBar();
+  if ($('#dlg-await').open) $('#dlg-await').close();
   if (newPinPending && newPinPending.id === entry.data.id) {
     newPinPending = null;
     const edit = await openPinEditor(entry.data, true);
@@ -258,7 +252,7 @@ async function attachToAwaiting(blob) {
 function skipAwaitingEnv() {
   const wasNew = newPinPending;
   pins.setAwaiting(null);
-  hideAwaitBar();
+  if ($('#dlg-await').open) $('#dlg-await').close();
   if (wasNew) {
     newPinPending = null;
     openPinEditor(wasNew, true).then(edit => {
@@ -294,36 +288,30 @@ async function handleFullMap(blob) {
       f => spinner(true, `Aligning your map… ${Math.round(f * 100)}%`));
   } catch (err) {
     console.error(err);
-    toast('Auto-align failed (' + err.message + ') — place it manually.', 'error');
+    toast('Aligning failed: ' + err.message, 'error');
   }
-  spinner(false);
 
-  let msg = 'Check the alignment, then confirm';
-  if (!rect || rect.score < 0.15) {
-    rect = { x: 0, y: 0, w: mapImage.width };
-    msg = 'Could not auto-align — drag & resize to match the map';
+  if (!confident(rect)) {
+    spinner(false);
+    bitmap.close?.();
+    toast('Couldn\'t align your map with confidence — nothing was changed. Zoom the in-game map out and include all of it in the screenshot.', 'error');
+    return;
   }
-  view.fitToScreen();
-
-  const final = await placeOverlay(bitmap, rect, msg);
-  if (!final) { bitmap.close?.(); return; }
 
   spinner(true, 'Revealing explored rooms…');
   await new Promise(r => setTimeout(r, 30)); // let the spinner paint
+  snapshotForUndo();
   const mask = computeExploredMask(bitmap);
-  fog.revealMask(mask, final.x, final.y, final.w, final.h);
+  fog.revealMask(mask, rect.x, rect.y, rect.w, rect.h);
   spinner(false);
   bitmap.close?.();
-  toast('Map updated with everything you have explored.', 'ok');
+  view.fitToScreen();
+  toast('Map updated with everything you have explored.', 'ok', { label: 'Undo', fn: undoLast });
 }
 
 let currentPaste = null; // { blob, url } while the type chooser is open
 
 function routePaste(blob) {
-  if (placing) {
-    toast('Finish placing the current screenshot first.', 'error');
-    return;
-  }
   // a pin is waiting for its area screenshot → attach without asking
   if (pins.awaitingId) {
     attachToAwaiting(blob);
@@ -471,8 +459,9 @@ async function init() {
     onLightbox: showLightbox,
     onRequestAttach: data => {
       pins.setAwaiting(data.id);
-      showAwaitBar('Paste the screenshot for this pin',
-        'Paste it with <span class="kbd">Ctrl+V</span> — it replaces the pin\'s current picture');
+      showAwaitDialog('Paste the screenshot for this pin',
+        'Paste it with <span class="kbd">Ctrl+V</span> — it replaces the pin\'s current picture. This dialog waits for your paste.',
+        'Cancel');
     },
     onEdit: async data => {
       const edit = await openPinEditor(data, false);
@@ -520,7 +509,7 @@ async function init() {
       : type === 'env' ? handleEnvScreenshot(blob)
       : handleFullMap(blob),
     routePaste,
-    endPlacement,
+    undoLast,
   };
 }
 

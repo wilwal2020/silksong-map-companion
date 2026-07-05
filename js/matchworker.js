@@ -60,27 +60,60 @@ function bitmapToImageData(bmp, w, h) {
   return ctx.getImageData(0, 0, w, h);
 }
 
-// binary "something is drawn here" mask: distance from the dominant
-// (background) color, robust against tint and vignette
-function binaryContentMask(imageData) {
-  const d = imageData.data;
-  const n = imageData.width * imageData.height;
-
-  const hist = new Map();
-  for (let i = 0; i < d.length; i += 16) {
-    const key = (d[i] >> 3 << 10) | (d[i + 1] >> 3 << 5) | (d[i + 2] >> 3);
-    hist.set(key, (hist.get(key) || 0) + 1);
+// fill regions fully enclosed by content (room interiors): flood from the
+// border through non-content; unreached non-content is inside a room
+function fillEnclosed(mask, W, H) {
+  const seen = new Uint8Array(W * H);
+  const q = new Int32Array(W * H);
+  let head = 0, tail = 0;
+  const push = p => { if (!mask[p] && !seen[p]) { seen[p] = 1; q[tail++] = p; } };
+  for (let x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
+  for (let y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
+  while (head < tail) {
+    const p = q[head++];
+    const x = p % W;
+    if (x > 0) push(p - 1);
+    if (x < W - 1) push(p + 1);
+    if (p >= W) push(p - W);
+    if (p < W * (H - 1)) push(p + W);
   }
-  let bgKey = 0, bgCount = -1;
-  for (const [k, v] of hist) if (v > bgCount) { bgCount = v; bgKey = k; }
-  const bg = [(bgKey >> 10 & 31) << 3, (bgKey >> 5 & 31) << 3, (bgKey & 31) << 3];
+  for (let p = 0; p < mask.length; p++) {
+    if (!mask[p] && !seen[p]) mask[p] = 255;
+  }
+  return mask;
+}
 
-  const TH = 42 * 42;
-  const mask = new Uint8Array(n);
-  for (let i = 0, p = 0; p < n; i += 4, p++) {
-    const dr = d[i] - bg[0], dg = d[i + 1] - bg[1], db = d[i + 2] - bg[2];
+// binary "something is drawn here" mask against a LOCAL background estimate
+// (the shot heavily downscaled and stretched back) — robust to the bright,
+// vignetted in-game backgrounds where a single dominant color fails
+function binaryContentMask(cv, shot, W, H) {
+  const id = bitmapToImageData(shot, W, H);
+  const d = id.data;
+
+  const bs = new OffscreenCanvas(Math.max(1, Math.round(W / 20)), Math.max(1, Math.round(H / 20)));
+  bs.getContext('2d').drawImage(shot, 0, 0, bs.width, bs.height);
+  const bc = new OffscreenCanvas(W, H);
+  const bctx = bc.getContext('2d', { willReadFrequently: true });
+  bctx.imageSmoothingEnabled = true;
+  bctx.imageSmoothingQuality = 'high';
+  bctx.drawImage(bs, 0, 0, W, H);
+  const b = bctx.getImageData(0, 0, W, H).data;
+
+  const TH = 1800;
+  const mask = new Uint8Array(W * H);
+  for (let i = 0, p = 0; p < mask.length; i += 4, p++) {
+    const dr = d[i] - b[i], dg = d[i + 1] - b[i + 1], db = d[i + 2] - b[i + 2];
     mask[p] = (dr * dr + dg * dg + db * db > TH) ? 255 : 0;
   }
+
+  // close dashed outlines, then fill room interiors so rooms are solid
+  const m = new cv.Mat(H, W, cv.CV_8UC1);
+  m.data.set(mask);
+  cv.GaussianBlur(m, m, new cv.Size(5, 5), 0);
+  cv.threshold(m, m, 80, 255, cv.THRESH_BINARY);
+  mask.set(m.data);
+  m.delete();
+  fillEnclosed(mask, W, H);
   return mask;
 }
 
@@ -158,8 +191,13 @@ async function locate(shot, mode) {
 
   const baseW = Math.min(1400, shot.width);
   const baseH = Math.round(shot.height * baseW / shot.width);
-  const id = bitmapToImageData(shot, baseW, baseH);
-  const mask = binaryContentMask(id);
+  const mask = binaryContentMask(cv, shot, baseW, baseH);
+
+  // sanity: a map screenshot is structure over background — if nearly the
+  // whole frame is "content", this is not a map screenshot
+  let denseCount = 0;
+  for (let p = 0; p < mask.length; p++) if (mask[p]) denseCount++;
+  if (denseCount / mask.length > 0.85) return null;
 
   // decide which part of the screenshot to match with
   let rect;
@@ -195,10 +233,16 @@ async function locate(shot, mode) {
   const aspect = rect.h / rect.w;
 
   // ---- pass 1: coarse multi-scale search over the whole map ----
-  const [lo, hi] = mode === 'full' ? [0.35, 1.05] : [0.08, 0.55];
-  const steps = mode === 'full' ? 13 : 16;
+  // map mode uses GEOMETRIC spacing: small tightly-cropped snips need tiny
+  // templates, and arithmetic steps are far too coarse at small scales
+  const [lo, hi] = mode === 'full' ? [0.35, 1.05] : [0.05, 0.55];
+  const steps = mode === 'full' ? 13 : 20;
   const widths = [];
-  for (let i = 0; i < steps; i++) widths.push(REF_W * (lo + (i / (steps - 1)) * (hi - lo)));
+  for (let i = 0; i < steps; i++) {
+    widths.push(mode === 'full'
+      ? REF_W * (lo + (i / (steps - 1)) * (hi - lo))
+      : REF_W * lo * Math.pow(hi / lo, i / (steps - 1)));
+  }
 
   let best = null;
   for (let i = 0; i < steps; i++) {
@@ -216,12 +260,35 @@ async function locate(shot, mode) {
   }
   if (!best) { tmplBase.delete(); return null; }
 
+  // ---- distinctiveness: a genuine match has ONE dominant peak; suppress a
+  // window around the best hit and compare against the runner-up. Random or
+  // ambiguous content produces many rival peaks -> ratio near 1.
+  let ratio = 1;
+  {
+    const tmpl = scaledTemplate(cv, tmplBase, best.tw, best.th);
+    const result = new cv.Mat();
+    cv.matchTemplate(refMask1, tmpl, result, cv.TM_CCOEFF_NORMED);
+    const mm = cv.minMaxLoc(result);
+    const sx = Math.max(0, mm.maxLoc.x - Math.round(best.tw * 0.4));
+    const sy = Math.max(0, mm.maxLoc.y - Math.round(best.th * 0.4));
+    const sw = Math.min(result.cols - sx, Math.round(best.tw * 0.8));
+    const sh = Math.min(result.rows - sy, Math.round(best.th * 0.8));
+    if (sw > 0 && sh > 0) {
+      const roi = result.roi(new cv.Rect(sx, sy, sw, sh));
+      roi.setTo(new cv.Scalar(-1));
+      roi.delete();
+    }
+    const mm2 = cv.minMaxLoc(result);
+    ratio = mm.maxVal > 0 ? Math.max(0, mm2.maxVal) / mm.maxVal : 1;
+    tmpl.delete(); result.delete();
+  }
+
   // ---- pass 2: refine scale & position at higher resolution ----
   const up = refScale2 / refScale1;
   const cx2 = (best.mx + best.tw / 2) * up;
   const cy2 = (best.my + best.th / 2) * up;
   let fine = null;
-  const ks = [0.90, 0.935, 0.965, 0.985, 1.0, 1.015, 1.035, 1.065, 1.10];
+  const ks = [0.86, 0.89, 0.92, 0.95, 0.975, 1.0, 1.025, 1.05, 1.08, 1.11, 1.145];
   for (let i = 0; i < ks.length; i++) {
     const tw2 = Math.round(best.tw * up * ks[i]);
     const th2 = Math.round(tw2 * aspect);
@@ -259,6 +326,7 @@ async function locate(shot, mode) {
     w: shot.width * k,
     h: shot.height * k,
     score: pick.score,
+    ratio, // runner-up peak / best peak — lower is more trustworthy
   };
 }
 

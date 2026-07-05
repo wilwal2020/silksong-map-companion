@@ -151,39 +151,14 @@ html, body {
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 6px; padding: 3px 8px; font-weight: 600; color: var(--text);
 }
-#paste-hint.highlight { border-color: var(--accent); color: var(--accent); }
+/* toast action buttons need clicks even though the container ignores them */
+.toast { pointer-events: auto; }
+.toast .btn { margin-left: 10px; padding: 3px 10px; font-size: .78rem; }
 
-/* ---------- placement bar / spinner ---------- */
+/* ---------- spinner / await dialog ---------- */
 
-#placement-bar {
-  position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 12px; z-index: 25;
-  background: var(--panel); border: 1px solid var(--accent);
-  border-radius: var(--radius); padding: 10px 14px; box-shadow: var(--shadow);
-}
-#placement-msg { font-weight: 600; font-size: .9rem; }
-.placement-tip { color: var(--text-dim); font-size: .8rem; }
-
-#await-bar {
-  position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 14px; z-index: 25;
-  max-width: min(560px, 92vw);
-  background: var(--panel); border: 1px solid var(--accent);
-  border-radius: var(--radius); padding: 12px 16px; box-shadow: var(--shadow);
-  animation: await-pulse 2.2s ease-in-out infinite;
-}
-@keyframes await-pulse {
-  0%, 100% { box-shadow: var(--shadow), 0 0 0 0 rgba(224,195,126,.28); }
-  50%      { box-shadow: var(--shadow), 0 0 0 7px rgba(224,195,126,0); }
-}
-.await-step {
-  flex: none; width: 30px; height: 30px; border-radius: 50%;
-  background: var(--accent); color: #241d0c; font-weight: 700;
-  display: flex; align-items: center; justify-content: center;
-}
-.await-text { display: flex; flex-direction: column; gap: 2px; }
-.await-text b { font-size: .92rem; }
-.await-text span { font-size: .8rem; color: var(--text-dim); }
+#dlg-await { border-color: var(--accent); }
+.await-sub { font-size: .88rem; line-height: 1.5; color: var(--text-dim); margin: 0; }
 
 #spinner {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
