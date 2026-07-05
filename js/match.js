@@ -257,45 +257,65 @@ function dilateMask(mask, W, H, px, thr = 30) {
   return out;
 }
 
-// Reveal mask for a placed screenshot. The screenshot's own mask only sees
-// room borders and dashes (interiors look like background in game), which
-// left rooms hollow. Since placement is trusted, use the reference map to
-// complete it: reveal reference content NEAR any detected screenshot
-// content, then fill regions that become enclosed. Borders come out crisp
-// and complete because they are the reference's own geometry.
+// remove small isolated blobs (icon fragments, vignette noise) that would
+// otherwise pull the reveal into empty areas
+function dropSmallComponents(mask, W, H, minArea) {
+  const seen = new Uint8Array(W * H);
+  const stack = new Int32Array(W * H);
+  const member = new Int32Array(W * H);
+  for (let s = 0; s < mask.length; s++) {
+    if (!mask[s] || seen[s]) continue;
+    let top = 0, n = 0;
+    stack[top++] = s; seen[s] = 1;
+    while (top > 0) {
+      const p = stack[--top];
+      member[n++] = p;
+      const x = p % W;
+      if (x > 0 && mask[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack[top++] = p - 1; }
+      if (x < W - 1 && mask[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack[top++] = p + 1; }
+      if (p >= W && mask[p - W] && !seen[p - W]) { seen[p - W] = 1; stack[top++] = p - W; }
+      if (p < W * (H - 1) && mask[p + W] && !seen[p + W]) { seen[p + W] = 1; stack[top++] = p + W; }
+    }
+    if (n < minArea) for (let i = 0; i < n; i++) mask[member[i]] = 0;
+  }
+}
+
+// Reveal mask for a placed screenshot.
+//
+// The screenshot decides WHERE (a coarse "explored zone" around everything
+// it drew); the reference map decides WHAT (its own crisp room shapes, fills
+// and labels within that zone). This avoids both failure modes seen with
+// mask-based reveals: hollow/incomplete rooms (shot masks only see borders)
+// and smudgy over-reveal (revealing shot-mask noise showed the reference's
+// ambient background tint).
 export function computeExploredMask(shot, rect, mapImage) {
   const { mask, W, H } = contentMaskData(shot, Math.min(1200, shot.width), false);
+  dropSmallComponents(mask, W, H, 60);
 
   // reference content/background sampled on the same grid as the mask
+  // (threshold 28: above the soft ambient region glow, below room fills)
   const rc = document.createElement('canvas');
   rc.width = W; rc.height = H;
   const rctx = rc.getContext('2d', { willReadFrequently: true });
   rctx.drawImage(mapImage, rect.x, rect.y, rect.w, rect.h, 0, 0, W, H);
   const rd = rctx.getImageData(0, 0, W, H).data;
   const refContent = new Uint8Array(W * H);
-  for (let i = 0, p = 0; p < refContent.length; i += 4, p++) {
-    refContent[p] = (rd[i] * 0.299 + rd[i + 1] * 0.587 + rd[i + 2] * 0.114) > 14 ? 255 : 0;
-  }
-
-  // reference content within ~12 map px of anything the screenshot drew —
-  // just enough to complete dashed outlines into closed loops (interiors
-  // then come from the fill step). A bigger reach bleeds across shared
-  // walls into neighbouring unexplored rooms.
-  const reachPx = Math.max(4, Math.round(12 * W / rect.w));
-  const near = dilateMask(mask, W, H, reachPx, 12);
-  const combined = new Uint8Array(W * H);
-  for (let p = 0; p < combined.length; p++) {
-    combined[p] = (mask[p] || (near[p] && refContent[p])) ? 255 : 0;
-  }
-
-  // fill interiors that are now enclosed; the frame border only counts as
-  // "open" where the reference is also background there, so rooms cut off
-  // by the screenshot edge get filled instead of staying hollow
   const refBg = new Uint8Array(W * H);
-  for (let p = 0; p < refBg.length; p++) refBg[p] = refContent[p] ? 0 : 1;
-  fillEnclosedRefAware(combined, W, H, refBg);
+  for (let i = 0, p = 0; p < refContent.length; i += 4, p++) {
+    const on = (rd[i] * 0.299 + rd[i + 1] * 0.587 + rd[i + 2] * 0.114) > 28;
+    refContent[p] = on ? 255 : 0;
+    refBg[p] = on ? 0 : 1;
+  }
 
-  // small final dilation so border lines are entirely inside the reveal
-  const final = dilateMask(combined, W, H, 4, 40);
+  // explored zone: generous closing around everything drawn, then fill
+  // enclosed interiors (frame border only counts as open where the
+  // reference is also background, so edge-cut rooms still fill)
+  const zone = dilateMask(mask, W, H, 26, 55);
+  fillEnclosedRefAware(zone, W, H, refBg);
+
+  const final = new Uint8Array(W * H);
+  for (let p = 0; p < final.length; p++) {
+    final[p] = (zone[p] && refContent[p]) ? 255 : 0;
+  }
   return maskToAlphaCanvas(final, W, H);
 }
