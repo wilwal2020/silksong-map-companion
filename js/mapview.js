@@ -118,7 +118,7 @@ export class MapView {
       if (!dragging) return;
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       lastX = e.clientX; lastY = e.clientY;
-      if (this.placement) {
+      if (this.placement && !this.placement.locked) {
         this.placement.x += dx / this.scale;
         this.placement.y += dy / this.scale;
       } else {
@@ -138,7 +138,7 @@ export class MapView {
     c.addEventListener('wheel', e => {
       e.preventDefault();
       const factor = Math.exp(-e.deltaY * 0.0012);
-      if (this.placement) {
+      if (this.placement && !this.placement.locked) {
         // resize the placement around its center
         const p = this.placement;
         const h = p.w * (p.img.height / p.img.width);

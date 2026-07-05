@@ -141,7 +141,9 @@ function prepMask(cv, bin) {
 function scaledTemplate(cv, tmplBase, tw, th) {
   const r = new cv.Mat();
   cv.resize(tmplBase, r, new cv.Size(tw, th), 0, 0, cv.INTER_AREA);
-  cv.threshold(r, r, 50, 255, cv.THRESH_BINARY);
+  // low threshold: thin room outlines average down to faint values when the
+  // template shrinks a lot — a high cutoff made them vanish entirely
+  cv.threshold(r, r, 20, 255, cv.THRESH_BINARY);
   return prepMask(cv, r);
 }
 

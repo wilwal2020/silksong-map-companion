@@ -10,12 +10,16 @@ let view, fog, pins, mapImage;
 let newPinPending = null; // freshly created pin waiting for its area screenshot
 let lastUndo = null;      // { maskCopy, pinId } — one level of paste undo
 
-// auto-placement confidence gates: matches that fail these reveal nothing.
-// `ratio` (runner-up peak / best peak) is the reliable signal — genuine
-// matches measure ~0.65-0.70, non-map or ambiguous images ~0.95.
-const RATIO_GATE = 0.88;
-const SCORE_GATE = 0.2;
-const confident = rect => rect && rect.score >= SCORE_GATE && (rect.ratio ?? 1) <= RATIO_GATE;
+// three-tier confidence: `ratio` = runner-up peak / best peak (lower is
+// better). Certain matches apply instantly; plausible ones get a quick
+// yes/no check; only junk is refused outright.
+const AUTO_RATIO = 0.8;
+const MIN_SCORE = 0.12;
+const certain = rect => rect && rect.score >= MIN_SCORE && (rect.ratio ?? 1) <= AUTO_RATIO;
+const plausible = rect => rect && rect.score >= MIN_SCORE;
+const confStr = rect => rect
+  ? `match ${rect.score.toFixed(2)}, uniqueness ${(1 - (rect.ratio ?? 1)).toFixed(2)}`
+  : 'no match';
 
 // ---------------------------------------------------------------- utilities
 
@@ -120,9 +124,43 @@ function persistPin(data) {
   store.putPin(data);
 }
 
+// ------------------------------------------------- uncertain-match confirm
+
+let confirmActive = null; // resolve fn while the yes/no bar is up
+
+// Show the screenshot pinned at the proposed spot (not movable) and ask
+// yes/no. Resolves true to apply, false to cancel.
+function previewConfirm(bitmap, rect) {
+  return new Promise(resolve => {
+    confirmActive = resolve;
+    view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w, locked: true });
+    view.centerOn(rect.x + rect.w / 2, rect.y + rect.h / 2,
+      Math.min(1, (window.innerWidth * 0.55) / rect.w));
+    $('#confirm-bar').classList.remove('hidden');
+    $('#paste-hint').classList.add('hidden');
+  });
+}
+
+function endConfirm(apply) {
+  if (!confirmActive) return;
+  view.setPlacement(null);
+  $('#confirm-bar').classList.add('hidden');
+  $('#paste-hint').classList.remove('hidden');
+  const resolve = confirmActive;
+  confirmActive = null;
+  resolve(apply);
+}
+
+$('#btn-confirm-ok').addEventListener('click', () => endConfirm(true));
+$('#btn-confirm-cancel').addEventListener('click', () => endConfirm(false));
+
 // ---------------------------------------------------------------- keyboard
 
 document.addEventListener('keydown', e => {
+  if (confirmActive && !document.querySelector('dialog[open]')) {
+    if (e.key === 'Enter') { endConfirm(true); return; }
+    if (e.key === 'Escape') { endConfirm(false); return; }
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'
       && !document.querySelector('dialog[open]')) {
     e.preventDefault();
@@ -175,32 +213,13 @@ function openPinEditor(data, isNew) {
 
 // ------------------------------------------------------------- paste flows
 
-async function handleMapScreenshot(blob) {
-  const bitmap = await createImageBitmap(blob);
-  spinner(true, 'Locating screenshot on the map…');
-  let rect = null;
-  try {
-    rect = await locate(bitmap, mapImage, 'map',
-      f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`));
-  } catch (err) {
-    console.error(err);
-    toast('Locating failed: ' + err.message, 'error');
-  }
-  spinner(false);
-
-  if (!confident(rect)) {
-    bitmap.close?.();
-    toast('Couldn\'t find this spot with confidence — nothing was revealed. Try a screenshot showing a bit more of the map.', 'error');
-    return;
-  }
-
-  // apply immediately: reveal only the rooms actually drawn in the
-  // screenshot, drop the pin on the player marker (white Hornet icon)
+function applyMapPlacement(bitmap, rect) {
+  // reveal only the rooms actually drawn in the screenshot, drop the pin on
+  // the player marker (white Hornet icon)
   snapshotForUndo();
   const mask = computeExploredMask(bitmap);
   fog.revealMask(mask, rect.x, rect.y, rect.w, rect.h);
   const marker = detectPlayerMarker(bitmap);
-  bitmap.close?.();
 
   const data = {
     id: crypto.randomUUID(),
@@ -222,6 +241,40 @@ async function handleMapScreenshot(blob) {
       : 'Map revealed and pin added — drag it onto your exact spot afterwards. ')
     + 'Now go back to the game, screenshot what\'s actually there, and paste it with <span class="kbd">Ctrl+V</span>. This dialog waits for your paste. (<span class="kbd">Ctrl+Z</span> afterwards undoes everything.)',
     'Skip this step');
+}
+
+async function handleMapScreenshot(blob) {
+  const bitmap = await createImageBitmap(blob);
+  spinner(true, 'Locating screenshot on the map…');
+  let rect = null;
+  try {
+    rect = await locate(bitmap, mapImage, 'map',
+      f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`));
+  } catch (err) {
+    console.error(err);
+    toast('Locating failed: ' + err.message, 'error');
+  }
+  spinner(false);
+  console.log('[silksong-map] map locate:', rect);
+
+  if (!plausible(rect)) {
+    bitmap.close?.();
+    toast(`Couldn't find this spot (${confStr(rect)}) — nothing was revealed. Try a screenshot showing a bit more of the map.`, 'error');
+    return;
+  }
+
+  if (!certain(rect)) {
+    $('#confirm-msg').textContent = 'Not fully sure about this spot — does it look right?';
+    const apply = await previewConfirm(bitmap, rect);
+    if (!apply) {
+      bitmap.close?.();
+      toast('Cancelled — nothing was revealed.');
+      return;
+    }
+  }
+
+  applyMapPlacement(bitmap, rect);
+  bitmap.close?.();
 }
 
 // a paste while a pin is awaiting its screenshot attaches directly — no dialog
@@ -291,11 +344,23 @@ async function handleFullMap(blob) {
     toast('Aligning failed: ' + err.message, 'error');
   }
 
-  if (!confident(rect)) {
-    spinner(false);
+  spinner(false);
+  console.log('[silksong-map] full locate:', rect);
+
+  if (!plausible(rect)) {
     bitmap.close?.();
-    toast('Couldn\'t align your map with confidence — nothing was changed. Zoom the in-game map out and include all of it in the screenshot.', 'error');
+    toast(`Couldn't align your map (${confStr(rect)}) — nothing was changed. Zoom the in-game map out and include all of it in the screenshot.`, 'error');
     return;
+  }
+
+  if (!certain(rect)) {
+    $('#confirm-msg').textContent = 'Not fully sure about this alignment — does it look right?';
+    const apply = await previewConfirm(bitmap, rect);
+    if (!apply) {
+      bitmap.close?.();
+      toast('Cancelled — nothing was changed.');
+      return;
+    }
   }
 
   spinner(true, 'Revealing explored rooms…');
@@ -312,6 +377,10 @@ async function handleFullMap(blob) {
 let currentPaste = null; // { blob, url } while the type chooser is open
 
 function routePaste(blob) {
+  if (confirmActive) {
+    toast('Answer the yes/no check first.', 'error');
+    return;
+  }
   // a pin is waiting for its area screenshot → attach without asking
   if (pins.awaitingId) {
     attachToAwaiting(blob);
