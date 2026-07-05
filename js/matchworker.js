@@ -142,7 +142,9 @@ function componentsOf(mask, W, H, minH, maxH, minArea) {
       if (p < W * (H - 1) && mask[p + W] && !seen[p + W]) { seen[p + W] = 1; stack[top++] = p + W; }
     }
     const w = maxX - minX + 1, h = maxY - minY + 1;
-    if (h >= minH && h <= maxH && w <= maxH * 2.5 && area >= minArea) {
+    // letters sometimes merge into wide blobs (serif fonts, anti-aliasing) —
+    // keep runs up to ~6 letter-heights wide and weight them accordingly
+    if (h >= minH && h <= maxH && w <= maxH * 6 && area >= minArea) {
       out.push({ x: minX, y: minY, w, h, cx: sx / area, cy: sy / area, area });
     }
   }
@@ -173,19 +175,21 @@ function textBoxesFrom(mask, W, H, minLh, maxLh) {
   }
   const boxes = [];
   for (const ch of chains) {
-    if (ch.comps.length < 4) continue;
     let minX = 1e9, maxX = 0, minY = 1e9, maxY = 0;
     const hs = [];
+    let weight = 0; // merged multi-letter blobs count as several letters
     for (const c of ch.comps) {
       minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x + c.w);
       minY = Math.min(minY, c.y); maxY = Math.max(maxY, c.y + c.h);
       hs.push(c.h);
+      weight += Math.min(8, Math.max(1, Math.round(c.w / (0.75 * c.h))));
     }
+    if (weight < 4) continue;
     hs.sort((a, b) => a - b);
     const lh = hs[hs.length >> 1];
     const w = maxX - minX, h = maxY - minY;
     if (w < lh * 2.5 || h > lh * 2.2) continue;
-    boxes.push({ x: minX, y: minY, w, h, lh, n: ch.comps.length });
+    boxes.push({ x: minX, y: minY, w, h, lh, n: weight });
   }
   return boxes.sort((a, b) => (b.n * b.lh) - (a.n * a.lh));
 }

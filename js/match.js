@@ -277,9 +277,12 @@ export function computeExploredMask(shot, rect, mapImage) {
     refContent[p] = (rd[i] * 0.299 + rd[i + 1] * 0.587 + rd[i + 2] * 0.114) > 14 ? 255 : 0;
   }
 
-  // reference content within ~45 map px of anything the screenshot drew
-  const reachPx = Math.max(6, Math.round(45 * W / rect.w));
-  const near = dilateMask(mask, W, H, reachPx, 8);
+  // reference content within ~12 map px of anything the screenshot drew —
+  // just enough to complete dashed outlines into closed loops (interiors
+  // then come from the fill step). A bigger reach bleeds across shared
+  // walls into neighbouring unexplored rooms.
+  const reachPx = Math.max(4, Math.round(12 * W / rect.w));
+  const near = dilateMask(mask, W, H, reachPx, 12);
   const combined = new Uint8Array(W * H);
   for (let p = 0; p < combined.length; p++) {
     combined[p] = (mask[p] || (near[p] && refContent[p])) ? 255 : 0;

@@ -223,9 +223,14 @@ function applyMapPlacement(bitmap, rect, marker) {
   const mask = computeExploredMask(bitmap, rect, mapImage);
   fog.revealMask(mask, rect.x, rect.y, rect.w, rect.h);
 
-  // remember this screenshot scale — it anchors future marker-less pastes
-  learnedScale = rect.w / bitmap.width;
-  store.putMeta('scale', learnedScale);
+  // remember this screenshot scale for future marker-less pastes — but only
+  // from measurement-grade matches (label/marker identified, or a very
+  // dominant peak). Learning from a shaky match once poisoned every
+  // subsequent paste with a wrong tight scale band.
+  if (rect.via === 'label' || marker || (rect.ratio ?? 1) <= 0.7) {
+    learnedScale = rect.w / bitmap.width;
+    store.putMeta('scale', learnedScale);
+  }
 
   const data = {
     id: crypto.randomUUID(),
@@ -265,11 +270,12 @@ async function handleMapScreenshot(blob) {
   try {
     const prog = f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`);
     rect = await locate(bitmap, mapImage, 'map', prog, hint);
-    if (!plausible(rect) && hint) {
-      // hint may be stale (changed in-game zoom) — retry unconstrained
-      spinner(true, 'Not found at the expected zoom — searching all scales…');
+    // hint may be stale or wrong — whenever the hinted result isn't
+    // rock-solid, also search unconstrained and keep the better answer
+    if (hint && !(certain(rect) || rect?.via === 'label')) {
+      spinner(true, 'Double-checking across all scales…');
       const wide = await locate(bitmap, mapImage, 'map', prog, null);
-      if (wide && (!rect || wide.ratio < rect.ratio)) rect = wide;
+      if (wide && (!rect || wide.via === 'label' || wide.ratio < rect.ratio)) rect = wide;
     }
   } catch (err) {
     console.error(err);
