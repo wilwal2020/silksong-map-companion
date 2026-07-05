@@ -282,40 +282,74 @@ function dropSmallComponents(mask, W, H, minArea) {
 
 // Reveal mask for a placed screenshot.
 //
-// The screenshot decides WHERE (a coarse "explored zone" around everything
-// it drew); the reference map decides WHAT (its own crisp room shapes, fills
-// and labels within that zone). This avoids both failure modes seen with
-// mask-based reveals: hollow/incomplete rooms (shot masks only see borders)
-// and smudgy over-reveal (revealing shot-mask noise showed the reference's
-// ambient background tint).
+// The screenshot decides WHERE, the reference decides WHAT (its own crisp
+// room shapes, fills and labels). Room interiors look like background to
+// local analysis, so they are detected directly instead: a pixel counts as
+// explored fill when it differs from the screenshot's GLOBAL background
+// color AND the reference has a room there. With interiors detected
+// directly, only a small halo is needed around borders (to close dashed
+// outlines), which also keeps the reveal from bleeding through doorways.
 export function computeExploredMask(shot, rect, mapImage) {
-  const { mask, W, H } = contentMaskData(shot, Math.min(1200, shot.width), false);
+  const baseW = Math.min(1200, shot.width);
+  const { mask, W, H } = contentMaskData(shot, baseW, false);
   dropSmallComponents(mask, W, H, 60);
 
-  // reference content/background sampled on the same grid as the mask
-  // (threshold 28: above the soft ambient region glow, below room fills)
+  // --- reference, sampled on an EXPANDED crop so rooms cut by the
+  // screenshot edge are still closed shapes, then cut back to the grid ---
+  const padX = Math.round(W * 0.15), padY = Math.round(H * 0.15);
+  const eW = W + 2 * padX, eH = H + 2 * padY;
+  const mppx = rect.w / W; // map px per mask px
   const rc = document.createElement('canvas');
-  rc.width = W; rc.height = H;
+  rc.width = eW; rc.height = eH;
   const rctx = rc.getContext('2d', { willReadFrequently: true });
-  rctx.drawImage(mapImage, rect.x, rect.y, rect.w, rect.h, 0, 0, W, H);
-  const rd = rctx.getImageData(0, 0, W, H).data;
-  const refContent = new Uint8Array(W * H);
+  rctx.drawImage(mapImage,
+    rect.x - padX * mppx, rect.y - padY * mppx,
+    rect.w + 2 * padX * mppx, rect.h + 2 * padY * mppx,
+    0, 0, eW, eH);
+  const rd = rctx.getImageData(0, 0, eW, eH).data;
+  const refFilledE = new Uint8Array(eW * eH);
+  for (let i = 0, p = 0; p < refFilledE.length; i += 4, p++) {
+    refFilledE[p] = (rd[i] * 0.299 + rd[i + 1] * 0.587 + rd[i + 2] * 0.114) > 26 ? 255 : 0;
+  }
+  fillEnclosed(refFilledE, eW, eH); // room interiors become part of the rooms
+  const refFilled = new Uint8Array(W * H);
   const refBg = new Uint8Array(W * H);
-  for (let i = 0, p = 0; p < refContent.length; i += 4, p++) {
-    const on = (rd[i] * 0.299 + rd[i + 1] * 0.587 + rd[i + 2] * 0.114) > 28;
-    refContent[p] = on ? 255 : 0;
-    refBg[p] = on ? 0 : 1;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const v = refFilledE[(y + padY) * eW + (x + padX)];
+      refFilled[y * W + x] = v;
+      refBg[y * W + x] = v ? 0 : 1;
+    }
   }
 
-  // explored zone: generous closing around everything drawn, then fill
-  // enclosed interiors (frame border only counts as open where the
-  // reference is also background, so edge-cut rooms still fill)
-  const zone = dilateMask(mask, W, H, 26, 55);
-  fillEnclosedRefAware(zone, W, H, refBg);
+  // --- direct interior detection: differs from the shot's global
+  // background AND inside a reference room ---
+  const sc = document.createElement('canvas');
+  sc.width = W; sc.height = H;
+  const sctx = sc.getContext('2d', { willReadFrequently: true });
+  sctx.drawImage(shot, 0, 0, W, H);
+  const sd = sctx.getImageData(0, 0, W, H).data;
+  const hist = new Map();
+  for (let i = 0; i < sd.length; i += 16) {
+    const key = (sd[i] >> 3 << 10) | (sd[i + 1] >> 3 << 5) | (sd[i + 2] >> 3);
+    hist.set(key, (hist.get(key) || 0) + 1);
+  }
+  let bgKey = 0, bgCount = -1;
+  for (const [k, v] of hist) if (v > bgCount) { bgCount = v; bgKey = k; }
+  const gb = [(bgKey >> 10 & 31) << 3, (bgKey >> 5 & 31) << 3, (bgKey & 31) << 3];
+  for (let i = 0, p = 0; p < W * H; i += 4, p++) {
+    if (mask[p] || !refFilled[p]) continue;
+    const dr = sd[i] - gb[0], dg = sd[i + 1] - gb[1], db = sd[i + 2] - gb[2];
+    if (dr * dr + dg * dg + db * db > 1600) mask[p] = 255;
+  }
 
+  // --- small halo (closes dashed outlines without doorway bleed), fill
+  // what becomes enclosed, then reveal = zone ∩ reference rooms ---
+  const zone = dilateMask(mask, W, H, 11, 55);
+  fillEnclosedRefAware(zone, W, H, refBg);
   const final = new Uint8Array(W * H);
   for (let p = 0; p < final.length; p++) {
-    final[p] = (zone[p] && refContent[p]) ? 255 : 0;
+    final[p] = (zone[p] && refFilled[p]) ? 255 : 0;
   }
   return maskToAlphaCanvas(final, W, H);
 }
