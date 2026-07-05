@@ -211,6 +211,8 @@ function openPinEditor(data, isNew) {
 // ------------------------------------------------------------- paste flows
 
 function applyMapPlacement(bitmap, rect, marker) {
+  // snap to already-explored content so overlapping pastes line up
+  rect = explored.refineAlignment(bitmap, rect);
   // composite the actual screenshot at its matched spot, drop the pin on the
   // player marker (white Hornet icon)
   snapshotForUndo();
@@ -391,6 +393,7 @@ async function handleFullMap(blob) {
 
   spinner(true, 'Compositing your map…');
   await new Promise(r => setTimeout(r, 30)); // let the spinner paint
+  rect = explored.refineAlignment(bitmap, rect);
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
   spinner(false);

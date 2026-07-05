@@ -72,6 +72,66 @@ export class Explored {
     this._changed();
   }
 
+  // Stitch alignment: the matcher places each screenshot independently
+  // against the reference, so two overlapping pastes can be a few pixels
+  // apart. When a new paste's rect overlaps already-composited content,
+  // brute-force a small translation that best lines the new screenshot's
+  // content up with what is already there, and return the nudged rect.
+  refineAlignment(bitmap, rect) {
+    const s = this.scale;
+    const rxE = rect.x * s, ryE = rect.y * s, rwE = rect.w * s, rhE = rect.h * s;
+    const DW = 220;
+    const f = DW / rwE;                 // reduced px per explored px
+    const DH = Math.max(1, Math.round(rhE * f));
+    if (DH < 12) return rect;
+
+    const toContent = (drawFn) => {
+      const c = document.createElement('canvas');
+      c.width = DW; c.height = DH;
+      const cx = c.getContext('2d', { willReadFrequently: true });
+      cx.imageSmoothingEnabled = true;
+      drawFn(cx);
+      const dd = cx.getImageData(0, 0, DW, DH).data;
+      const m = new Uint8Array(DW * DH);
+      let n = 0;
+      for (let p = 0; p < m.length; p++) if (dd[p * 4 + 3] > 50) { m[p] = 1; n++; }
+      return { m, n };
+    };
+
+    // existing composite content over the rect region
+    const E = toContent(cx => cx.drawImage(this.canvas, rxE, ryE, rwE, rhE, 0, 0, DW, DH));
+    if (E.n < DW * DH * 0.04) return rect; // negligible overlap — trust matcher
+
+    // new screenshot content (keyed)
+    const keyed = keyScreenshot(bitmap);
+    const N = toContent(cx => cx.drawImage(keyed, 0, 0, DW, DH));
+    if (N.n < DW * DH * 0.04) return rect;
+
+    const R = Math.min(14, Math.max(3, Math.round(45 * s * f))); // ±~45 map px
+    let best = { score: -1, dx: 0, dy: 0 };
+    for (let dy = -R; dy <= R; dy++) {
+      for (let dx = -R; dx <= R; dx++) {
+        let inter = 0;
+        for (let y = 0; y < DH; y++) {
+          const ey = y + dy;
+          if (ey < 0 || ey >= DH) continue;
+          const nrow = y * DW, erow = ey * DW;
+          for (let x = 0; x < DW; x++) {
+            if (!N.m[nrow + x]) continue;
+            const ex = x + dx;
+            if (ex < 0 || ex >= DW) continue;
+            if (E.m[erow + ex]) inter++;
+          }
+        }
+        // prefer the smallest shift among near-equal scores (stability)
+        if (inter > best.score || (inter === best.score && Math.hypot(dx, dy) < Math.hypot(best.dx, best.dy))) {
+          best = { score: inter, dx, dy };
+        }
+      }
+    }
+    return { ...rect, x: rect.x + best.dx / (f * s), y: rect.y + best.dy / (f * s) };
+  }
+
   clear() {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this._changed();
