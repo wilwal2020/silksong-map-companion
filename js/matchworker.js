@@ -480,7 +480,9 @@ async function locate(shot, mode, hint) {
   const pad2 = Math.round(Math.min(REF_W2, refBitmap.width) * PAD_FRAC);
 
   // ---- pass 0: area-name labels — identity + position + scale in one ----
-  if (mode === 'map') {
+  // (also the workhorse for full-map screenshots: zoomed-out room outlines
+  // are too thin for the mask matcher, but the labels stay readable)
+  {
     const lbl = tryLabelMatch(cv, shot, baseW, baseH);
     self.postMessage({ type: 'progress', f: 0.2 });
     if (lbl) {
@@ -493,8 +495,9 @@ async function locate(shot, mode, hint) {
       const fineL = refinePass(cv, tmplBase, aspect, cxp, cyp, twp,
         [0.955, 0.98, 1.0, 1.02, 1.045], 0.2);
       // correct label hits verify at 0.25-0.40 on real screenshots; a wrong
-      // one measured 0.14 — require solid room agreement
-      if (fineL && fineL.score >= 0.18) {
+      // one measured 0.14 — require solid room agreement (zoomed-out full
+      // maps have thin outlines, so their verification runs weaker)
+      if (fineL && fineL.score >= (mode === 'full' ? 0.12 : 0.18)) {
         tmplBase.delete();
         const cl = rect.x / baseW, ct = rect.y / baseH, cwf = rect.w / baseW;
         const tt = fineL.tw / (shot.width * cwf);
@@ -522,7 +525,7 @@ async function locate(shot, mode, hint) {
   let coarseScale = refScale1;
   const widths = [];
   let steps;
-  if (hint && mode === 'map') {
+  if (hint) {
     const croppedMapW = (rect.w / baseW) * shot.width * hint.k; // map px
     let tw2pred = croppedMapW * refScale2;
     if (tw2pred <= 480) { coarseRef = refMask2; coarseScale = refScale2; }
@@ -589,7 +592,7 @@ async function locate(shot, mode, hint) {
   const cy2 = (best.my + best.th / 2) * up;
   // with a trusted scale hint the coarse scale is already near-exact — keep
   // the refinement from drifting away from it
-  const ks = (hint && hint.tight && mode === 'map')
+  const ks = (hint && hint.tight)
     ? [0.95, 0.975, 1.0, 1.025, 1.05]
     : [0.86, 0.89, 0.92, 0.95, 0.975, 1.0, 1.025, 1.05, 1.08, 1.11, 1.145];
   const fine = refinePass(cv, tmplBase, aspect, cx2, cy2, best.tw * up, ks, 0.7);

@@ -220,7 +220,7 @@ function applyMapPlacement(bitmap, rect, marker) {
   // reveal only the rooms actually drawn in the screenshot, drop the pin on
   // the player marker (white Hornet icon)
   snapshotForUndo();
-  const mask = computeExploredMask(bitmap);
+  const mask = computeExploredMask(bitmap, rect, mapImage);
   fog.revealMask(mask, rect.x, rect.y, rect.w, rect.h);
 
   // remember this screenshot scale — it anchors future marker-less pastes
@@ -254,16 +254,23 @@ async function handleMapScreenshot(blob) {
   spinner(true, 'Locating screenshot on the map…');
 
   // the player marker's size reveals the screenshot's scale exactly;
-  // otherwise fall back to the scale learned from previous matches
+  // otherwise trust the scale learned from previous matches (the screen
+  // doesn't change between screenshots) — with a wide retry as safety net
   const marker = detectPlayerMarker(bitmap);
   const hint = marker
     ? { k: MARKER_MAP_HEIGHT / marker.h, tight: true }
-    : (learnedScale ? { k: learnedScale, tight: false } : null);
+    : (learnedScale ? { k: learnedScale, tight: true } : null);
 
   let rect = null;
   try {
-    rect = await locate(bitmap, mapImage, 'map',
-      f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`), hint);
+    const prog = f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`);
+    rect = await locate(bitmap, mapImage, 'map', prog, hint);
+    if (!plausible(rect) && hint) {
+      // hint may be stale (changed in-game zoom) — retry unconstrained
+      spinner(true, 'Not found at the expected zoom — searching all scales…');
+      const wide = await locate(bitmap, mapImage, 'map', prog, null);
+      if (wide && (!rect || wide.ratio < rect.ratio)) rect = wide;
+    }
   } catch (err) {
     console.error(err);
     toast('Locating failed: ' + err.message, 'error');
@@ -349,10 +356,16 @@ async function handleEnvScreenshot(blob) {
 async function handleFullMap(blob) {
   const bitmap = await createImageBitmap(blob);
   spinner(true, 'Aligning your map…');
+  const marker = detectPlayerMarker(bitmap);
+  const hint = marker ? { k: MARKER_MAP_HEIGHT / marker.h, tight: true } : null;
   let rect = null;
   try {
-    rect = await locate(bitmap, mapImage, 'full',
-      f => spinner(true, `Aligning your map… ${Math.round(f * 100)}%`));
+    const prog = f => spinner(true, `Aligning your map… ${Math.round(f * 100)}%`);
+    rect = await locate(bitmap, mapImage, 'full', prog, hint);
+    if (!plausible(rect) && hint) {
+      const wide = await locate(bitmap, mapImage, 'full', prog, null);
+      if (wide && (!rect || wide.ratio < rect.ratio)) rect = wide;
+    }
   } catch (err) {
     console.error(err);
     toast('Aligning failed: ' + err.message, 'error');
@@ -380,7 +393,7 @@ async function handleFullMap(blob) {
   spinner(true, 'Revealing explored rooms…');
   await new Promise(r => setTimeout(r, 30)); // let the spinner paint
   snapshotForUndo();
-  const mask = computeExploredMask(bitmap);
+  const mask = computeExploredMask(bitmap, rect, mapImage);
   fog.revealMask(mask, rect.x, rect.y, rect.w, rect.h);
   spinner(false);
   bitmap.close?.();

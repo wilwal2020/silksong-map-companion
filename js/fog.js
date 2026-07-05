@@ -30,7 +30,7 @@ export class Fog {
     const s = this.maskScale;
     const ctx = this.maskCtx;
     ctx.save();
-    ctx.filter = 'blur(2px)';
+    ctx.filter = 'blur(1px)'; // barely feathered — keep border lines crisp
     ctx.drawImage(maskCanvas, x * s, y * s, w * s, h * s);
     ctx.restore();
     this.rebuild();

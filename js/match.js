@@ -147,11 +147,37 @@ export function fillEnclosed(mask, W, H) {
   return mask;
 }
 
+// Fill enclosed interiors, but treat the frame border as open ONLY where the
+// reference map also has background there. Rooms cut off by the screenshot
+// edge stay "closed" (their interior maps onto reference room content), so
+// they get filled instead of staying hollow.
+function fillEnclosedRefAware(mask, W, H, refBg) {
+  const seen = new Uint8Array(W * H);
+  const q = new Int32Array(W * H);
+  let head = 0, tail = 0;
+  const push = p => { if (!mask[p] && !seen[p]) { seen[p] = 1; q[tail++] = p; } };
+  const seed = p => { if (!mask[p] && refBg[p]) push(p); };
+  for (let x = 0; x < W; x++) { seed(x); seed((H - 1) * W + x); }
+  for (let y = 0; y < H; y++) { seed(y * W); seed(y * W + W - 1); }
+  while (head < tail) {
+    const p = q[head++];
+    const x = p % W;
+    if (x > 0) push(p - 1);
+    if (x < W - 1) push(p + 1);
+    if (p >= W) push(p - W);
+    if (p < W * (H - 1)) push(p + W);
+  }
+  for (let p = 0; p < mask.length; p++) {
+    if (!mask[p] && !seen[p]) mask[p] = 255;
+  }
+  return mask;
+}
+
 // Binary "something is drawn here" mask against a LOCAL background estimate
 // (the screenshot heavily downscaled and stretched back). A single dominant
 // color fails on the in-game map's bright, vignetted backgrounds; comparing
 // each pixel to its local surroundings is robust to gradients and lighting.
-export function contentMaskData(shot, W) {
+export function contentMaskData(shot, W, fill = true) {
   const H = Math.round(shot.height * W / shot.width);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -195,16 +221,18 @@ export function contentMaskData(shot, W) {
   const d2 = ctx2.getImageData(0, 0, W, H).data;
   for (let p = 0; p < mask.length; p++) mask[p] = d2[p * 4 + 3] > 80 ? 255 : 0;
 
-  fillEnclosed(mask, W, H);
+  if (fill) fillEnclosed(mask, W, H);
   return { mask, W, H };
 }
 
-export function computeExploredMask(shot) {
-  // high enough resolution that thin text strokes and room corners survive
-  const { mask, W, H } = contentMaskData(shot, Math.min(1200, shot.width));
-  const out = document.createElement('canvas');
-  out.width = W; out.height = H;
-  const ctx = out.getContext('2d');
+// Reveal mask for a placed screenshot: content mask with room interiors
+// filled using the reference map as the arbiter of what's really background
+// (fixes hollow rooms cut off at the screenshot edge), then slightly dilated
+// so room border lines are fully, crisply included.
+function maskToAlphaCanvas(mask, W, H) {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
   const id = ctx.createImageData(W, H);
   for (let p = 0; p < mask.length; p++) {
     const o = p * 4;
@@ -212,5 +240,59 @@ export function computeExploredMask(shot) {
     id.data[o + 3] = mask[p];
   }
   ctx.putImageData(id, 0, 0);
+  return c;
+}
+
+// dilate a binary mask by roughly `px` using canvas blur + low threshold
+function dilateMask(mask, W, H, px, thr = 30) {
+  const c1 = maskToAlphaCanvas(mask, W, H);
+  const c2 = document.createElement('canvas');
+  c2.width = W; c2.height = H;
+  const ctx2 = c2.getContext('2d', { willReadFrequently: true });
+  ctx2.filter = `blur(${Math.max(1, Math.round(px * 0.7))}px)`;
+  ctx2.drawImage(c1, 0, 0);
+  const d = ctx2.getImageData(0, 0, W, H).data;
+  const out = new Uint8Array(W * H);
+  for (let p = 0; p < out.length; p++) out[p] = d[p * 4 + 3] > thr ? 255 : 0;
   return out;
+}
+
+// Reveal mask for a placed screenshot. The screenshot's own mask only sees
+// room borders and dashes (interiors look like background in game), which
+// left rooms hollow. Since placement is trusted, use the reference map to
+// complete it: reveal reference content NEAR any detected screenshot
+// content, then fill regions that become enclosed. Borders come out crisp
+// and complete because they are the reference's own geometry.
+export function computeExploredMask(shot, rect, mapImage) {
+  const { mask, W, H } = contentMaskData(shot, Math.min(1200, shot.width), false);
+
+  // reference content/background sampled on the same grid as the mask
+  const rc = document.createElement('canvas');
+  rc.width = W; rc.height = H;
+  const rctx = rc.getContext('2d', { willReadFrequently: true });
+  rctx.drawImage(mapImage, rect.x, rect.y, rect.w, rect.h, 0, 0, W, H);
+  const rd = rctx.getImageData(0, 0, W, H).data;
+  const refContent = new Uint8Array(W * H);
+  for (let i = 0, p = 0; p < refContent.length; i += 4, p++) {
+    refContent[p] = (rd[i] * 0.299 + rd[i + 1] * 0.587 + rd[i + 2] * 0.114) > 14 ? 255 : 0;
+  }
+
+  // reference content within ~45 map px of anything the screenshot drew
+  const reachPx = Math.max(6, Math.round(45 * W / rect.w));
+  const near = dilateMask(mask, W, H, reachPx, 8);
+  const combined = new Uint8Array(W * H);
+  for (let p = 0; p < combined.length; p++) {
+    combined[p] = (mask[p] || (near[p] && refContent[p])) ? 255 : 0;
+  }
+
+  // fill interiors that are now enclosed; the frame border only counts as
+  // "open" where the reference is also background there, so rooms cut off
+  // by the screenshot edge get filled instead of staying hollow
+  const refBg = new Uint8Array(W * H);
+  for (let p = 0; p < refBg.length; p++) refBg[p] = refContent[p] ? 0 : 1;
+  fillEnclosedRefAware(combined, W, H, refBg);
+
+  // small final dilation so border lines are entirely inside the reveal
+  const final = dilateMask(combined, W, H, 4, 40);
+  return maskToAlphaCanvas(final, W, H);
 }
