@@ -85,7 +85,9 @@ function fillEnclosed(mask, W, H) {
 
 // binary "something is drawn here" mask against a LOCAL background estimate
 // (the shot heavily downscaled and stretched back) — robust to the bright,
-// vignetted in-game backgrounds where a single dominant color fails
+// vignetted in-game backgrounds where a single dominant color fails.
+// Returns both the cleaned mask (closed + room interiors filled) and the raw
+// threshold mask (individual letters survive there — used for text search).
 function binaryContentMask(cv, shot, W, H) {
   const id = bitmapToImageData(shot, W, H);
   const d = id.data;
@@ -100,13 +102,14 @@ function binaryContentMask(cv, shot, W, H) {
   const b = bctx.getImageData(0, 0, W, H).data;
 
   const TH = 1800;
-  const mask = new Uint8Array(W * H);
-  for (let i = 0, p = 0; p < mask.length; i += 4, p++) {
+  const raw = new Uint8Array(W * H);
+  for (let i = 0, p = 0; p < raw.length; i += 4, p++) {
     const dr = d[i] - b[i], dg = d[i + 1] - b[i + 1], db = d[i + 2] - b[i + 2];
-    mask[p] = (dr * dr + dg * dg + db * db > TH) ? 255 : 0;
+    raw[p] = (dr * dr + dg * dg + db * db > TH) ? 255 : 0;
   }
 
   // close dashed outlines, then fill room interiors so rooms are solid
+  const mask = new Uint8Array(raw);
   const m = new cv.Mat(H, W, cv.CV_8UC1);
   m.data.set(mask);
   cv.GaussianBlur(m, m, new cv.Size(5, 5), 0);
@@ -114,7 +117,77 @@ function binaryContentMask(cv, shot, W, H) {
   mask.set(m.data);
   m.delete();
   fillEnclosed(mask, W, H);
-  return mask;
+  return { mask, raw };
+}
+
+// connected components of a binary mask, with size filters
+function componentsOf(mask, W, H, minH, maxH, minArea) {
+  const seen = new Uint8Array(W * H);
+  const stack = new Int32Array(W * H);
+  const out = [];
+  for (let s = 0; s < mask.length; s++) {
+    if (!mask[s] || seen[s]) continue;
+    let top = 0, area = 0, sx = 0, sy = 0;
+    let minX = W, maxX = 0, minY = H, maxY = 0;
+    stack[top++] = s; seen[s] = 1;
+    while (top > 0) {
+      const p = stack[--top];
+      const x = p % W, y = (p / W) | 0;
+      area++; sx += x; sy += y;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (x > 0 && mask[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack[top++] = p - 1; }
+      if (x < W - 1 && mask[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack[top++] = p + 1; }
+      if (p >= W && mask[p - W] && !seen[p - W]) { seen[p - W] = 1; stack[top++] = p - W; }
+      if (p < W * (H - 1) && mask[p + W] && !seen[p + W]) { seen[p + W] = 1; stack[top++] = p + W; }
+    }
+    const w = maxX - minX + 1, h = maxY - minY + 1;
+    if (h >= minH && h <= maxH && w <= maxH * 2.5 && area >= minArea) {
+      out.push({ x: minX, y: minY, w, h, cx: sx / area, cy: sy / area, area });
+    }
+  }
+  return out;
+}
+
+// group letter-sized components into horizontal text lines (area names)
+function textBoxesFrom(mask, W, H, minLh, maxLh) {
+  const comps = componentsOf(mask, W, H, minLh, maxLh, Math.max(8, minLh))
+    .sort((a, b) => a.cx - b.cx);
+  const chains = [];
+  for (const c of comps) {
+    let bestChain = null;
+    for (const ch of chains) {
+      const lh = ch.lh;
+      if (Math.abs(c.cy - ch.cy) <= lh * 0.6 && c.x - ch.right <= lh * 2.0 && c.x - ch.right > -lh) {
+        if (!bestChain || ch.right > bestChain.right) bestChain = ch;
+      }
+    }
+    if (bestChain) {
+      bestChain.comps.push(c);
+      bestChain.right = Math.max(bestChain.right, c.x + c.w);
+      bestChain.cy = bestChain.cy * 0.7 + c.cy * 0.3;
+      bestChain.lh = bestChain.lh * 0.7 + c.h * 0.3;
+    } else {
+      chains.push({ comps: [c], right: c.x + c.w, cy: c.cy, lh: c.h });
+    }
+  }
+  const boxes = [];
+  for (const ch of chains) {
+    if (ch.comps.length < 4) continue;
+    let minX = 1e9, maxX = 0, minY = 1e9, maxY = 0;
+    const hs = [];
+    for (const c of ch.comps) {
+      minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x + c.w);
+      minY = Math.min(minY, c.y); maxY = Math.max(maxY, c.y + c.h);
+      hs.push(c.h);
+    }
+    hs.sort((a, b) => a - b);
+    const lh = hs[hs.length >> 1];
+    const w = maxX - minX, h = maxY - minY;
+    if (w < lh * 2.5 || h > lh * 2.2) continue;
+    boxes.push({ x: minX, y: minY, w, h, lh, n: ch.comps.length });
+  }
+  return boxes.sort((a, b) => (b.n * b.lh) - (a.n * a.lh));
 }
 
 // crop a region of a Uint8Array mask into a cv 8UC1 Mat
@@ -179,9 +252,172 @@ function ensureRefs(cv) {
   }
 }
 
+// ---- area-name labels, auto-extracted from the reference map ----
+// Each label is text drawn at a fixed map position and size; matching one in
+// a screenshot yields identity + position + scale in a single step.
+let refTexts = null; // [{ x, y, w, h, lh, mat }] in map px, mat = gray crop
+
+function ensureRefTexts(cv) {
+  if (refTexts) return refTexts;
+  const W = refBitmap.width, H = refBitmap.height;
+  const id = bitmapToImageData(refBitmap, W, H);
+  const d = id.data;
+  const bin = new Uint8Array(W * H);
+  for (let i = 0, p = 0; p < bin.length; i += 4, p++) {
+    bin[p] = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) > 55 ? 255 : 0;
+  }
+  const boxes = textBoxesFrom(bin, W, H, 12, 55);
+  const srcFull = cv.matFromImageData(id);
+  const grayFull = new cv.Mat();
+  cv.cvtColor(srcFull, grayFull, cv.COLOR_RGBA2GRAY);
+  srcFull.delete();
+  refTexts = boxes.slice(0, 60).map(b => {
+    const pad = Math.round(b.lh * 0.25);
+    const x0 = Math.max(0, b.x - pad), y0 = Math.max(0, b.y - pad);
+    const x1 = Math.min(W, b.x + b.w + pad), y1 = Math.min(H, b.y + b.h + pad);
+    const roi = grayFull.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0));
+    const mat = roi.clone();
+    roi.delete();
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, lh: b.lh, mat };
+  });
+  grayFull.delete();
+  return refTexts;
+}
+
+// text-specific mask: pixels clearly BRIGHTER than their fine-grained local
+// neighbourhood. Thin letter strokes pop out of an ~8px local mean even when
+// the label sits right next to bright room shapes (where the coarse
+// background model absorbs them); solid room fills don't.
+function textMask(shot, W, H) {
+  const c = new OffscreenCanvas(W, H);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(shot, 0, 0, W, H);
+  const d = ctx.getImageData(0, 0, W, H).data;
+
+  const bs = new OffscreenCanvas(Math.max(1, Math.round(W / 8)), Math.max(1, Math.round(H / 8)));
+  bs.getContext('2d').drawImage(shot, 0, 0, bs.width, bs.height);
+  const bc = new OffscreenCanvas(W, H);
+  const bctx = bc.getContext('2d', { willReadFrequently: true });
+  bctx.imageSmoothingEnabled = true;
+  bctx.imageSmoothingQuality = 'high';
+  bctx.drawImage(bs, 0, 0, W, H);
+  const b = bctx.getImageData(0, 0, W, H).data;
+
+  const mask = new Uint8Array(W * H);
+  for (let i = 0, p = 0; p < mask.length; i += 4, p++) {
+    const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    const blum = b[i] * 0.299 + b[i + 1] * 0.587 + b[i + 2] * 0.114;
+    mask[p] = (lum - blum > 18) ? 255 : 0;
+  }
+  return mask;
+}
+
+// try to identify an area-name label in the screenshot; returns
+// { k, mapX, mapY, shotBX, shotBY, score } — a shot-base-px point that
+// corresponds to a map point, plus the implied scale — or null
+function tryLabelMatch(cv, shot, baseW, baseH) {
+  const texts = ensureRefTexts(cv);
+  if (!texts.length) return null;
+  const cands = textBoxesFrom(textMask(shot, baseW, baseH), baseW, baseH, 8, 70).slice(0, 5);
+  if (!cands.length) return null;
+
+  const id = bitmapToImageData(shot, baseW, baseH);
+  const src = cv.matFromImageData(id);
+  const shotGray = new cv.Mat();
+  cv.cvtColor(src, shotGray, cv.COLOR_RGBA2GRAY);
+  src.delete();
+
+  const H0 = 26; // normalized letter height for comparison
+  let best = null;
+
+  for (const c of cands) {
+    const sc = H0 / c.lh;
+    const padC = Math.round(c.lh * 0.6);
+    const cx0 = Math.max(0, c.x - padC), cy0 = Math.max(0, c.y - padC);
+    const cx1 = Math.min(baseW, c.x + c.w + padC), cy1 = Math.min(baseH, c.y + c.h + padC);
+    const cRoi = shotGray.roi(new cv.Rect(cx0, cy0, cx1 - cx0, cy1 - cy0));
+    const candN = new cv.Mat();
+    cv.resize(cRoi, candN, new cv.Size(
+      Math.max(8, Math.round((cx1 - cx0) * sc)),
+      Math.max(8, Math.round((cy1 - cy0) * sc))), 0, 0, cv.INTER_AREA);
+    cRoi.delete();
+
+    for (const t of texts) {
+      const kImplied = t.lh / c.lh; // NB: in map px per shot-BASE px
+      if (kImplied < 0.3 || kImplied > 1.8) continue;
+      const st = H0 / t.lh;
+      const refN = new cv.Mat();
+      cv.resize(t.mat, refN, new cv.Size(
+        Math.max(8, Math.round(t.w * st)),
+        Math.max(8, Math.round(t.h * st))), 0, 0, cv.INTER_AREA);
+
+      let m = null, mode = null;
+      if (refN.cols <= candN.cols && refN.rows <= candN.rows) {
+        m = matchAt(cv, candN, refN); mode = 'refInCand';
+      } else if (candN.cols <= refN.cols && candN.rows <= refN.rows) {
+        m = matchAt(cv, refN, candN); mode = 'candInRef';
+      }
+      if (m && (!best || m.score > best.score)) {
+        best = { score: m.score, mode, loc: { x: m.x, y: m.y }, c, t, sc, st, cx0, cy0 };
+      }
+      refN.delete();
+    }
+    candN.delete();
+  }
+  shotGray.delete();
+
+  // 0.5-0.6 produced false identifications on real screenshots — require a
+  // solid match, the room-structure verification confirms it afterwards
+  if (!best || best.score < 0.62) return null;
+
+  // reconstruct the correspondence between a shot-base point and a map point
+  const { mode, loc, c, t, sc, st, cx0, cy0 } = best;
+  let shotBX, shotBY, mapX, mapY;
+  if (mode === 'refInCand') {
+    // ref label (origin t.x,t.y in map px) found inside the candidate crop
+    shotBX = cx0 + loc.x / sc; shotBY = cy0 + loc.y / sc;
+    mapX = t.x; mapY = t.y;
+  } else {
+    // candidate crop found inside the ref label
+    shotBX = cx0; shotBY = cy0;
+    mapX = t.x + loc.x / st; mapY = t.y + loc.y / st;
+  }
+  return { k: sc / st, mapX, mapY, shotBX, shotBY, score: best.score };
+}
+
 // peak + the correlation map's own statistics: z = (max - mean) / std is
 // comparable ACROSS template scales, unlike raw NCC (small templates peak
 // high by chance, large ones accumulate weight — both misrank)
+// refine scale & position around a predicted spot in refMask2 (padded)
+// coordinates: cx2/cy2 = predicted center, twCenter = predicted template
+// width, ks = scale multipliers to try. Returns { score, mx, my, tw } or null.
+function refinePass(cv, tmplBase, aspect, cx2, cy2, twCenter, ks, progressFrom) {
+  let fine = null;
+  for (let i = 0; i < ks.length; i++) {
+    const tw2 = Math.round(twCenter * ks[i]);
+    const th2 = Math.round(tw2 * aspect);
+    const padX = Math.round(tw2 * 0.35), padY = Math.round(th2 * 0.35);
+    const x0 = Math.max(0, Math.round(cx2 - tw2 / 2 - padX));
+    const y0 = Math.max(0, Math.round(cy2 - th2 / 2 - padY));
+    const x1 = Math.min(refMask2.cols, Math.round(cx2 + tw2 / 2 + padX));
+    const y1 = Math.min(refMask2.rows, Math.round(cy2 + th2 / 2 + padY));
+    if (tw2 < 24 || th2 < 24 || tw2 > x1 - x0 || th2 > y1 - y0) {
+      self.postMessage({ type: 'progress', f: progressFrom + (1 - progressFrom) * (i + 1) / ks.length });
+      continue;
+    }
+    const roi = refMask2.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0));
+    const tmpl = scaledTemplate(cv, tmplBase, tw2, th2);
+    const m = matchAt(cv, roi, tmpl);
+    roi.delete(); tmpl.delete();
+    // within the refine window scales are near-identical — raw score is fair
+    if (!fine || m.score > fine.score) {
+      fine = { score: m.score, mx: x0 + m.x, my: y0 + m.y, tw: tw2 };
+    }
+    self.postMessage({ type: 'progress', f: progressFrom + (1 - progressFrom) * (i + 1) / ks.length });
+  }
+  return fine;
+}
+
 function matchAt(cv, ref, tmpl) {
   const result = new cv.Mat();
   cv.matchTemplate(ref, tmpl, result, cv.TM_CCOEFF_NORMED);
@@ -201,7 +437,7 @@ async function locate(shot, mode, hint) {
 
   const baseW = Math.min(1400, shot.width);
   const baseH = Math.round(shot.height * baseW / shot.width);
-  const mask = binaryContentMask(cv, shot, baseW, baseH);
+  const { mask, raw } = binaryContentMask(cv, shot, baseW, baseH);
 
   // sanity: a map screenshot is structure over background — if nearly the
   // whole frame is "content", this is not a map screenshot
@@ -241,6 +477,42 @@ async function locate(shot, mode, hint) {
 
   const tmplBase = maskToMat(cv, mask, baseW, rect);
   const aspect = rect.h / rect.w;
+  const pad2 = Math.round(Math.min(REF_W2, refBitmap.width) * PAD_FRAC);
+
+  // ---- pass 0: area-name labels — identity + position + scale in one ----
+  if (mode === 'map') {
+    const lbl = tryLabelMatch(cv, shot, baseW, baseH);
+    self.postMessage({ type: 'progress', f: 0.2 });
+    if (lbl) {
+      const kB = lbl.k; // map px per shot-BASE px
+      const x0map = lbl.mapX - lbl.shotBX * kB;
+      const y0map = lbl.mapY - lbl.shotBY * kB;
+      const twp = rect.w * kB * refScale2;
+      const cxp = (x0map + (rect.x + rect.w / 2) * kB) * refScale2 + pad2;
+      const cyp = (y0map + (rect.y + rect.h / 2) * kB) * refScale2 + pad2;
+      const fineL = refinePass(cv, tmplBase, aspect, cxp, cyp, twp,
+        [0.955, 0.98, 1.0, 1.02, 1.045], 0.2);
+      // correct label hits verify at 0.25-0.40 on real screenshots; a wrong
+      // one measured 0.14 — require solid room agreement
+      if (fineL && fineL.score >= 0.18) {
+        tmplBase.delete();
+        const cl = rect.x / baseW, ct = rect.y / baseH, cwf = rect.w / baseW;
+        const tt = fineL.tw / (shot.width * cwf);
+        const kk = tt / refScale2;
+        return {
+          x: (fineL.mx - pad2) / refScale2 - shot.width * cl * kk,
+          y: (fineL.my - pad2) / refScale2 - shot.height * ct * kk,
+          w: shot.width * kk,
+          h: shot.height * kk,
+          score: fineL.score,
+          z: 99,
+          ratio: 0.4, // a verified label identification is near-certain
+          via: 'label',
+          labelScore: lbl.score,
+        };
+      }
+    }
+  }
 
   // ---- pass 1: coarse multi-scale search over the whole map ----
   // with a scale hint the band is narrow (position search, basically) and
@@ -315,40 +587,17 @@ async function locate(shot, mode, hint) {
   const up = refScale2 / coarseScale;
   const cx2 = (best.mx + best.tw / 2) * up;
   const cy2 = (best.my + best.th / 2) * up;
-  let fine = null;
   // with a trusted scale hint the coarse scale is already near-exact — keep
   // the refinement from drifting away from it
   const ks = (hint && hint.tight && mode === 'map')
     ? [0.95, 0.975, 1.0, 1.025, 1.05]
     : [0.86, 0.89, 0.92, 0.95, 0.975, 1.0, 1.025, 1.05, 1.08, 1.11, 1.145];
-  for (let i = 0; i < ks.length; i++) {
-    const tw2 = Math.round(best.tw * up * ks[i]);
-    const th2 = Math.round(tw2 * aspect);
-    const padX = Math.round(tw2 * 0.35), padY = Math.round(th2 * 0.35);
-    const x0 = Math.max(0, Math.round(cx2 - tw2 / 2 - padX));
-    const y0 = Math.max(0, Math.round(cy2 - th2 / 2 - padY));
-    const x1 = Math.min(refMask2.cols, Math.round(cx2 + tw2 / 2 + padX));
-    const y1 = Math.min(refMask2.rows, Math.round(cy2 + th2 / 2 + padY));
-    if (tw2 < 24 || th2 < 24 || tw2 > x1 - x0 || th2 > y1 - y0) {
-      self.postMessage({ type: 'progress', f: 0.7 + 0.3 * (i + 1) / ks.length });
-      continue;
-    }
-    const roi = refMask2.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0));
-    const tmpl = scaledTemplate(cv, tmplBase, tw2, th2);
-    const m = matchAt(cv, roi, tmpl);
-    roi.delete(); tmpl.delete();
-    // within the refine window scales are near-identical — raw score is fair
-    if (!fine || m.score > fine.score) {
-      fine = { score: m.score, mx: x0 + m.x, my: y0 + m.y, tw: tw2 };
-    }
-    self.postMessage({ type: 'progress', f: 0.7 + 0.3 * (i + 1) / ks.length });
-  }
+  const fine = refinePass(cv, tmplBase, aspect, cx2, cy2, best.tw * up, ks, 0.7);
   tmplBase.delete();
 
   // map back to full map coordinates for the complete (uncropped) screenshot
   // (match coordinates are in the PADDED reference frame — subtract the pad;
   // PAD2 = PAD1 * up exactly, so coarse->fine coordinate scaling stays valid)
-  const pad2 = Math.round(Math.min(REF_W2, refBitmap.width) * PAD_FRAC);
   const pick = fine || { score: best.score, mx: best.mx * up, my: best.my * up, tw: best.tw * up };
   const cl = rect.x / baseW, ct = rect.y / baseH, cwf = rect.w / baseW;
   const t = pick.tw / (shot.width * cwf); // shot px -> ref2 px

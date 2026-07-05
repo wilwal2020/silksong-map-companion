@@ -43,12 +43,22 @@ use — everything works offline.
 
 ## How the matching works
 
-The reference map and your pasted screenshot are both reduced to edge maps
-(Canny), which makes the room outlines comparable even though the in-game map
-and the reference render differently. The screenshot's edge map is then slid
-across the reference at a range of scales (template matching, normalized
-cross-correlation) and the best-scoring position wins. You always get a
-confirm step with drag-to-adjust, so a bad match can't corrupt anything.
+Three cooperating signals, tried in order:
+
+1. **Area-name labels** — region names ("Bone Bottom", "THE MARROW"…) are
+   drawn at fixed positions and sizes on the map. Text lines are detected in
+   your screenshot and matched against labels auto-extracted from the
+   reference map: one label gives identity, position and scale in a single
+   step (even partially cut-off labels work).
+2. **The player marker** — the white Hornet icon is drawn on the map, so its
+   pixel height reveals the screenshot's scale exactly (~43.8 map px).
+3. **Room shapes** — both images are reduced to content masks
+   (drawn-vs-background, interiors flood-filled) whose boundaries are
+   template-matched multi-scale, coarse-to-fine.
+
+Every result is verified against the room structure and classified into
+three confidence tiers: apply instantly, ask yes/no with a preview, or
+refuse. Ctrl+Z undoes the last paste.
 
 ## Credits
 
