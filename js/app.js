@@ -1,14 +1,14 @@
-import { Fog } from './fog.js';
+import { Explored } from './explored.js';
 import { MapView } from './mapview.js';
 import { store } from './store.js';
-import { locate, computeExploredMask, detectPlayerMarker, MARKER_MAP_HEIGHT } from './match.js';
+import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT } from './match.js';
 import { PinManager, CATEGORIES, catById } from './pins.js';
 
 const $ = s => document.querySelector(s);
 
-let view, fog, pins, mapImage;
+let view, explored, pins, mapImage;
 let newPinPending = null; // freshly created pin waiting for its area screenshot
-let lastUndo = null;      // { maskCopy, pinId } — one level of paste undo
+let lastUndo = null;      // { snap, pinId } — one level of paste undo
 let learnedScale = null;  // map-px per screenshot-px from past successes
 
 // three-tier confidence, calibrated on 25 real screenshots: correct matches
@@ -53,20 +53,14 @@ function showAwaitDialog(title, sub, skipLabel) {
   $('#dlg-await').showModal();
 }
 
-// one-level undo of the last paste (fog reveal + created pin)
+// one-level undo of the last paste (explored composite + created pin)
 function snapshotForUndo(pinId = null) {
-  const copy = document.createElement('canvas');
-  copy.width = fog.mask.width;
-  copy.height = fog.mask.height;
-  copy.getContext('2d').drawImage(fog.mask, 0, 0);
-  lastUndo = { maskCopy: copy, pinId };
+  lastUndo = { snap: explored.snapshot(), pinId };
 }
 
 function undoLast() {
   if (!lastUndo) { toast('Nothing to undo.'); return; }
-  fog.maskCtx.clearRect(0, 0, fog.mask.width, fog.mask.height);
-  fog.maskCtx.drawImage(lastUndo.maskCopy, 0, 0);
-  fog.rebuild();
+  explored.restore(lastUndo.snap);
   if (lastUndo.pinId) {
     pins.remove(lastUndo.pinId);
     store.deletePin(lastUndo.pinId);
@@ -116,7 +110,7 @@ function showLightbox(url) {
 // ------------------------------------------------------------- persistence
 
 const saveFog = debounce(async () => {
-  store.putMeta('fog', await fog.toBlob());
+  store.putMeta('fog', await explored.toBlob());
 }, 1500);
 
 const saveView = debounce(() => {
@@ -217,11 +211,10 @@ function openPinEditor(data, isNew) {
 // ------------------------------------------------------------- paste flows
 
 function applyMapPlacement(bitmap, rect, marker) {
-  // reveal only the rooms actually drawn in the screenshot, drop the pin on
-  // the player marker (white Hornet icon)
+  // composite the actual screenshot at its matched spot, drop the pin on the
+  // player marker (white Hornet icon)
   snapshotForUndo();
-  const mask = computeExploredMask(bitmap, rect, mapImage);
-  fog.revealMask(mask, rect.x, rect.y, rect.w, rect.h);
+  explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
 
   // remember this screenshot scale for future marker-less pastes — but only
   // from measurement-grade matches (label/marker identified, or a very
@@ -396,11 +389,10 @@ async function handleFullMap(blob) {
     }
   }
 
-  spinner(true, 'Revealing explored rooms…');
+  spinner(true, 'Compositing your map…');
   await new Promise(r => setTimeout(r, 30)); // let the spinner paint
   snapshotForUndo();
-  const mask = computeExploredMask(bitmap, rect, mapImage);
-  fog.revealMask(mask, rect.x, rect.y, rect.w, rect.h);
+  explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
   spinner(false);
   bitmap.close?.();
   view.fitToScreen();
@@ -467,7 +459,7 @@ async function exportAll() {
     app: 'silksong-map-companion',
     version: 1,
     exported: new Date().toISOString(),
-    fog: await blobToDataURL(await fog.toBlob()),
+    fog: await blobToDataURL(await explored.toBlob()),
     pins: await Promise.all(allPins.map(async p => ({
       ...p,
       img: p.img ? await blobToDataURL(p.img) : null,
@@ -495,8 +487,8 @@ async function importAll(file) {
 
   await store.clearPins();
   pins.removeAll();
-  fog.clear();
-  if (data.fog) await fog.loadFromBlob(await dataURLToBlob(data.fog));
+  explored.clear();
+  if (data.fog) await explored.loadFromBlob(await dataURLToBlob(data.fog));
   for (const p of data.pins || []) {
     const pin = { ...p, img: p.img ? await dataURLToBlob(p.img) : null };
     await store.putPin(pin);
@@ -544,7 +536,7 @@ function buildToolbar() {
     await store.clearPins();
     await store.clearMeta();
     pins.removeAll();
-    fog.clear();
+    explored.clear();
     toast('Everything reset.');
   });
 }
@@ -553,8 +545,8 @@ function buildToolbar() {
 
 async function init() {
   mapImage = await loadImage('assets/map.png');
-  fog = new Fog(mapImage.width, mapImage.height);
-  view = new MapView($('#map-canvas'), mapImage, fog);
+  explored = new Explored(mapImage.width, mapImage.height);
+  view = new MapView($('#map-canvas'), mapImage, explored);
 
   pins = new PinManager($('#pin-layer'), view, {
     onChange: persistPin,
@@ -580,13 +572,13 @@ async function init() {
     },
   });
 
-  fog.onChange = () => { view.requestRender(); saveFog(); };
+  explored.onChange = () => { view.requestRender(); saveFog(); };
   view.onViewChanged = () => { pins.syncPositions(); saveView(); };
 
   // restore saved state
   learnedScale = (await store.getMeta('scale')) || null;
   const savedFog = await store.getMeta('fog');
-  if (savedFog) await fog.loadFromBlob(savedFog);
+  if (savedFog) await explored.loadFromBlob(savedFog);
   const savedView = await store.getMeta('view');
   if (savedView) {
     view.scale = savedView.scale;
@@ -606,7 +598,7 @@ async function init() {
 
   // debug / testing hooks
   window.__ssmc = {
-    view, fog, get pins() { return pins; }, mapImage,
+    view, explored, get pins() { return pins; }, mapImage,
     handleImageBlob: (blob, type) =>
       type === 'map' ? handleMapScreenshot(blob)
       : type === 'env' ? handleEnvScreenshot(blob)

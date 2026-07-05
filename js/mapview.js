@@ -1,12 +1,13 @@
-// Pan/zoom canvas viewer. Draws: map image -> fog darkness -> (optional)
-// placement overlay for a pasted screenshot being positioned.
+// Pan/zoom canvas viewer. Draws: black fog -> explored screenshots ->
+// (optional) placement overlay for a screenshot being positioned. `mapImage`
+// is used only for its dimensions (the reference map is never displayed).
 
 export class MapView {
-  constructor(canvas, mapImage, fog) {
+  constructor(canvas, mapImage, explored) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.map = mapImage;
-    this.fog = fog;
+    this.explored = explored;
 
     this.scale = 0.2;
     this.ox = 0;
@@ -73,11 +74,11 @@ export class MapView {
 
     ctx.setTransform(dpr * this.scale, 0, 0, dpr * this.scale, dpr * this.ox, dpr * this.oy);
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(this.map, 0, 0);
 
-    // fog darkness (mask is half-res; stretch to map size). Fully opaque:
-    // unexplored map must not be visible at all — no spoilers.
-    ctx.drawImage(this.fog.dark, 0, 0, this.map.width, this.map.height);
+    // the explored map: your pasted screenshots composited at their matched
+    // positions, over the black fog. The reference map is never drawn (it is
+    // only used to work out where a screenshot goes) — no spoilers.
+    ctx.drawImage(this.explored.canvas, 0, 0, this.map.width, this.map.height);
 
     // subtle bounds so you can tell where the world map area is
     ctx.strokeStyle = 'rgba(216, 220, 237, 0.08)';
