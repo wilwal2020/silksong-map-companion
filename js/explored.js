@@ -1,54 +1,64 @@
 // The explored map: a full-map-resolution canvas that accumulates the actual
 // pasted screenshots at their matched positions. Nothing is drawn from the
-// reference map — you see exactly what you screenshotted, so the reveal can
-// never show more (or less) than what was really on your in-game map.
+// reference map — you see exactly what you screenshotted, so it can never show
+// more (or less) than what was really on your in-game map.
 //
-// Each screenshot is soft-keyed against its own background before compositing,
-// so the dark cloth background around the rooms fades into the black fog
-// instead of tiling as visible rectangles. Edges are feathered so successive
-// overlapping pastes blend rather than leaving hard seams.
+// Each new screenshot is composited OPAQUELY on top of the previous ones, with
+// only its outer rim feathered. Opaque means overlapping pastes never let the
+// layers beneath show through, so slightly-misaligned overlaps can't
+// accumulate doubled/ghosted outlines; the newest (best-aligned) paste always
+// wins the overlap, and the feathered rim keeps the seam soft.
 
-// Turn a screenshot into an RGBA canvas whose alpha keys out the background:
-// transparent where it matches the screenshot's dominant (background) colour,
-// opaque over the drawn rooms/text/markers, with a feathered outer edge.
-export function keyScreenshot(bitmap) {
+// Prepare a screenshot for compositing: full opacity in the interior, alpha
+// ramped to zero over a rim margin so the rectangle edge blends into whatever
+// is behind it (fog or an earlier paste).
+function prepPaste(bitmap) {
   const W = bitmap.width, H = bitmap.height;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(bitmap, 0, 0);
-  const img = ctx.getImageData(0, 0, W, H);
-  const d = img.data;
-
-  // dominant (background) colour via coarse quantization
-  const hist = new Map();
-  for (let i = 0; i < d.length; i += 16) {
-    const key = (d[i] >> 3 << 10) | (d[i + 1] >> 3 << 5) | (d[i + 2] >> 3);
-    hist.set(key, (hist.get(key) || 0) + 1);
-  }
-  let bgKey = 0, bgCount = -1;
-  for (const [k, v] of hist) if (v > bgCount) { bgCount = v; bgKey = k; }
-  const bg = [(bgKey >> 10 & 31) << 3, (bgKey >> 5 & 31) << 3, (bgKey & 31) << 3];
-
-  // colour-distance key: fully transparent at/under D0, opaque over D1
-  const D0 = 16, D1 = 42;
-  const edge = Math.round(Math.min(W, H) * 0.05); // feather margin at the rim
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const p = y * W + x, i = p * 4;
-      const dr = d[i] - bg[0], dg = d[i + 1] - bg[1], db = d[i + 2] - bg[2];
-      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-      let a = dist <= D0 ? 0 : dist >= D1 ? 1 : (dist - D0) / (D1 - D0);
-      // feather the rectangle rim
-      if (edge > 0) {
+  const edge = Math.round(Math.min(W, H) * 0.06);
+  if (edge > 0) {
+    const img = ctx.getImageData(0, 0, W, H);
+    const d = img.data;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
         const m = Math.min(x, y, W - 1 - x, H - 1 - y);
-        if (m < edge) a *= m / edge;
+        if (m < edge) d[(y * W + x) * 4 + 3] = Math.round(255 * m / edge);
       }
-      d[i + 3] = Math.round(a * 255);
     }
+    ctx.putImageData(img, 0, 0);
   }
-  ctx.putImageData(img, 0, 0);
   return c;
+}
+
+// Binary "content" mask (room outlines / text / markers) of a canvas, from
+// local contrast — a pixel notably brighter than its coarse local mean. Works
+// on the opaque composite and on a raw screenshot alike, so the two can be
+// aligned to each other. Returns { m: Uint8Array, n: count }.
+function contrastMask(cnv) {
+  const W = cnv.width, H = cnv.height;
+  const d = cnv.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+  const bw = Math.max(1, W >> 3), bh = Math.max(1, H >> 3);
+  const bc = document.createElement('canvas');
+  bc.width = bw; bc.height = bh;
+  bc.getContext('2d').drawImage(cnv, 0, 0, bw, bh);
+  const uc = document.createElement('canvas');
+  uc.width = W; uc.height = H;
+  const ux = uc.getContext('2d', { willReadFrequently: true });
+  ux.imageSmoothingEnabled = true;
+  ux.drawImage(bc, 0, 0, W, H);
+  const bd = ux.getImageData(0, 0, W, H).data;
+  const m = new Uint8Array(W * H);
+  let n = 0;
+  for (let p = 0; p < m.length; p++) {
+    const i = p * 4;
+    const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    const blum = bd[i] * 0.299 + bd[i + 1] * 0.587 + bd[i + 2] * 0.114;
+    if (lum - blum > 10 || lum > 95) { m[p] = 1; n++; }
+  }
+  return { m, n };
 }
 
 export class Explored {
@@ -64,27 +74,20 @@ export class Explored {
     this.onChange = null; // set by app for persistence / rerender
   }
 
-  // composite a keyed screenshot at map-rect (x, y, w, h) in map coords.
-  // Drawn BEHIND existing content ('destination-over'): once a pixel has been
-  // revealed by one screenshot it is never overdrawn, so overlapping pastes
-  // can't accumulate ghosted/doubled outlines — a new paste only fills areas
-  // that are still fog.
+  // composite a screenshot at map-rect (x, y, w, h), opaque, newest on top
   paste(bitmap, x, y, w, h) {
-    const keyed = keyScreenshot(bitmap);
+    const p = prepPaste(bitmap);
     const s = this.scale;
-    const prev = this.ctx.globalCompositeOperation;
-    this.ctx.globalCompositeOperation = 'destination-over';
-    this.ctx.drawImage(keyed, x * s, y * s, w * s, h * s);
-    this.ctx.globalCompositeOperation = prev;
+    this.ctx.drawImage(p, x * s, y * s, w * s, h * s);
     this._changed();
   }
 
   // Stitch alignment: the matcher places each screenshot independently
-  // against the reference, so two overlapping pastes can be slightly off in
-  // both position AND scale. When a new paste's rect overlaps already-
-  // composited content, brute-force the small scale + translation that best
-  // lines the new screenshot's content up with what is already there, and
-  // return the corrected rect.
+  // against the reference, so an overlapping paste can be slightly off in both
+  // position and scale. When the new rect overlaps existing content,
+  // brute-force the small scale + translation that best lines the new
+  // screenshot's outlines up with the composite, and return the corrected
+  // rect so the seam is continuous.
   refineAlignment(bitmap, rect) {
     const s = this.scale;
     const rxE = rect.x * s, ryE = rect.y * s, rwE = rect.w * s, rhE = rect.h * s;
@@ -93,19 +96,19 @@ export class Explored {
     const DH = Math.max(1, Math.round(rhE * f));
     if (DH < 16) return rect;
 
-    // existing composite content over the rect region -> binary mask
+    // existing composite content over the rect region
     const ecan = document.createElement('canvas');
     ecan.width = DW; ecan.height = DH;
     const ectx = ecan.getContext('2d', { willReadFrequently: true });
     ectx.imageSmoothingEnabled = true;
     ectx.drawImage(this.canvas, rxE, ryE, rwE, rhE, 0, 0, DW, DH);
-    const ed = ectx.getImageData(0, 0, DW, DH).data;
-    const E = new Uint8Array(DW * DH);
-    let eN = 0;
-    for (let p = 0; p < E.length; p++) if (ed[p * 4 + 3] > 50) { E[p] = 1; eN++; }
-    if (eN < DW * DH * 0.03) return rect; // negligible overlap — trust matcher
+    const E = contrastMask(ecan);
+    if (E.n < DW * DH * 0.02) return rect; // negligible overlap — trust matcher
 
-    const keyed = keyScreenshot(bitmap);
+    const bmpCanvas = document.createElement('canvas');
+    bmpCanvas.width = bitmap.width; bmpCanvas.height = bitmap.height;
+    bmpCanvas.getContext('2d').drawImage(bitmap, 0, 0);
+
     const ncan = document.createElement('canvas');
     ncan.width = DW; ncan.height = DH;
     const nctx = ncan.getContext('2d', { willReadFrequently: true });
@@ -117,27 +120,22 @@ export class Explored {
     let best = { score: -1, m: 1, dx: 0, dy: 0 };
 
     for (const m of scales) {
-      // render the new content scaled by m about the grid centre
       nctx.clearRect(0, 0, DW, DH);
       const w2 = DW * m, h2 = DH * m;
-      nctx.drawImage(keyed, cx0 - w2 / 2, cy0 - h2 / 2, w2, h2);
-      const nd = nctx.getImageData(0, 0, DW, DH).data;
+      nctx.drawImage(bmpCanvas, cx0 - w2 / 2, cy0 - h2 / 2, w2, h2);
+      const N = contrastMask(ncan);
+      if (N.n < DW * DH * 0.02) continue;
       // pack content pixel coords for a tight inner loop
       const ix = [], iy = [];
-      for (let y = 0; y < DH; y++) {
-        const row = y * DW;
-        for (let x = 0; x < DW; x++) if (nd[(row + x) * 4 + 3] > 50) { ix.push(x); iy.push(y); }
-      }
-      if (ix.length < DW * DH * 0.03) continue;
+      for (let p = 0; p < N.m.length; p++) if (N.m[p]) { ix.push(p % DW); iy.push((p / DW) | 0); }
       for (let dy = -R; dy <= R; dy++) {
         for (let dx = -R; dx <= R; dx++) {
           let inter = 0;
           for (let k = 0; k < ix.length; k++) {
             const ex = ix[k] + dx, ey = iy[k] + dy;
             if (ex < 0 || ex >= DW || ey < 0 || ey >= DH) continue;
-            if (E[ey * DW + ex]) inter++;
+            if (E.m[ey * DW + ex]) inter++;
           }
-          // tie-break toward no change (m=1, zero shift) for stability
           const cost = Math.abs(m - 1) * 60 + Math.hypot(dx, dy);
           if (inter > best.score ||
               (inter === best.score && cost < (Math.abs(best.m - 1) * 60 + Math.hypot(best.dx, best.dy)))) {
