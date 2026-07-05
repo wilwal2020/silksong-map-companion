@@ -82,12 +82,11 @@ export class Explored {
     this._changed();
   }
 
-  // Stitch alignment: the matcher places each screenshot independently
-  // against the reference, so an overlapping paste can be slightly off in both
-  // position and scale. When the new rect overlaps existing content,
-  // brute-force the small scale + translation that best lines the new
-  // screenshot's outlines up with the composite, and return the corrected
-  // rect so the seam is continuous.
+  // Stitch alignment: all screenshots share one in-game zoom and are locked
+  // to a single scale, so overlapping pastes differ only by translation.
+  // When the new rect overlaps existing content, brute-force the small shift
+  // that best lines the new screenshot's outlines up with the composite, and
+  // return the corrected rect so the seam is continuous.
   refineAlignment(bitmap, rect) {
     const s = this.scale;
     const rxE = rect.x * s, ryE = rect.y * s, rwE = rect.w * s, rhE = rect.h * s;
@@ -114,41 +113,31 @@ export class Explored {
     const nctx = ncan.getContext('2d', { willReadFrequently: true });
     nctx.imageSmoothingEnabled = true;
 
-    const cx0 = DW / 2, cy0 = DH / 2;
-    const scales = [0.965, 0.98, 0.99, 1.0, 1.01, 1.02, 1.035];
-    const R = Math.min(16, Math.max(4, Math.round(40 * s * f))); // ±~40 map px
-    let best = { score: -1, m: 1, dx: 0, dy: 0 };
+    // translation-only search — scale is locked, so pure shift lines them up
+    nctx.clearRect(0, 0, DW, DH);
+    nctx.drawImage(bmpCanvas, 0, 0, DW, DH);
+    const N = contrastMask(ncan);
+    if (N.n < DW * DH * 0.02) return rect;
+    const ix = [], iy = [];
+    for (let p = 0; p < N.m.length; p++) if (N.m[p]) { ix.push(p % DW); iy.push((p / DW) | 0); }
 
-    for (const m of scales) {
-      nctx.clearRect(0, 0, DW, DH);
-      const w2 = DW * m, h2 = DH * m;
-      nctx.drawImage(bmpCanvas, cx0 - w2 / 2, cy0 - h2 / 2, w2, h2);
-      const N = contrastMask(ncan);
-      if (N.n < DW * DH * 0.02) continue;
-      // pack content pixel coords for a tight inner loop
-      const ix = [], iy = [];
-      for (let p = 0; p < N.m.length; p++) if (N.m[p]) { ix.push(p % DW); iy.push((p / DW) | 0); }
-      for (let dy = -R; dy <= R; dy++) {
-        for (let dx = -R; dx <= R; dx++) {
-          let inter = 0;
-          for (let k = 0; k < ix.length; k++) {
-            const ex = ix[k] + dx, ey = iy[k] + dy;
-            if (ex < 0 || ex >= DW || ey < 0 || ey >= DH) continue;
-            if (E.m[ey * DW + ex]) inter++;
-          }
-          const cost = Math.abs(m - 1) * 60 + Math.hypot(dx, dy);
-          if (inter > best.score ||
-              (inter === best.score && cost < (Math.abs(best.m - 1) * 60 + Math.hypot(best.dx, best.dy)))) {
-            best = { score: inter, m, dx, dy };
-          }
+    const R = Math.min(20, Math.max(4, Math.round(45 * s * f))); // ±~45 map px
+    let best = { score: -1, dx: 0, dy: 0 };
+    for (let dy = -R; dy <= R; dy++) {
+      for (let dx = -R; dx <= R; dx++) {
+        let inter = 0;
+        for (let k = 0; k < ix.length; k++) {
+          const ex = ix[k] + dx, ey = iy[k] + dy;
+          if (ex < 0 || ex >= DW || ey < 0 || ey >= DH) continue;
+          if (E.m[ey * DW + ex]) inter++;
+        }
+        if (inter > best.score || (inter === best.score && Math.hypot(dx, dy) < Math.hypot(best.dx, best.dy))) {
+          best = { score: inter, dx, dy };
         }
       }
     }
 
-    const dxMap = best.dx / (f * s), dyMap = best.dy / (f * s);
-    const ccx = rect.x + rect.w / 2, ccy = rect.y + rect.h / 2;
-    const nw = rect.w * best.m, nh = rect.h * best.m;
-    return { ...rect, w: nw, h: nh, x: ccx - nw / 2 + dxMap, y: ccy - nh / 2 + dyMap };
+    return { ...rect, x: rect.x + best.dx / (f * s), y: rect.y + best.dy / (f * s) };
   }
 
   clear() {

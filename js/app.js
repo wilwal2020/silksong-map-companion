@@ -211,18 +211,23 @@ function openPinEditor(data, isNew) {
 // ------------------------------------------------------------- paste flows
 
 function applyMapPlacement(bitmap, rect, marker) {
-  // snap to already-explored content so overlapping pastes line up
+  // Lock scale to the first paste: force this screenshot to the exact same
+  // map-px-per-screenshot-px as everything before it (keeping the matched
+  // centre), so overlapping pastes differ only by translation and line up
+  // cleanly. Per-image scale wobble from reference matching was the cause of
+  // the misalignment.
+  if (learnedScale) {
+    const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
+    const nw = bitmap.width * learnedScale, nh = bitmap.height * learnedScale;
+    rect = { ...rect, x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
+  }
+  // fine-tune position against already-explored content (translation only)
   rect = explored.refineAlignment(bitmap, rect);
-  // composite the actual screenshot at its matched spot, drop the pin on the
-  // player marker (white Hornet icon)
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
 
-  // remember this screenshot scale for future marker-less pastes — but only
-  // from measurement-grade matches (label/marker identified, or a very
-  // dominant peak). Learning from a shaky match once poisoned every
-  // subsequent paste with a wrong tight scale band.
-  if (rect.via === 'label' || marker || (rect.ratio ?? 1) <= 0.7) {
+  // the first paste defines the locked scale for every following paste
+  if (!learnedScale) {
     learnedScale = rect.w / bitmap.width;
     store.putMeta('scale', learnedScale);
   }
@@ -253,13 +258,14 @@ async function handleMapScreenshot(blob) {
   const bitmap = await createImageBitmap(blob);
   spinner(true, 'Locating screenshot on the map…');
 
-  // the player marker's size reveals the screenshot's scale exactly;
-  // otherwise trust the scale learned from previous matches (the screen
-  // doesn't change between screenshots) — with a wide retry as safety net
+  // Every screenshot is at the same in-game zoom, so once the first paste
+  // has fixed the scale, lock ALL later pastes to that exact scale — they
+  // then line up by translation alone (like matching them by hand). Before
+  // that, seed the scale from the player marker if one is visible.
   const marker = detectPlayerMarker(bitmap);
-  const hint = marker
-    ? { k: MARKER_MAP_HEIGHT / marker.h, tight: true }
-    : (learnedScale ? { k: learnedScale, tight: true } : null);
+  const hint = learnedScale
+    ? { k: learnedScale, tight: true }
+    : (marker ? { k: MARKER_MAP_HEIGHT / marker.h, tight: true } : null);
 
   let rect = null;
   try {
