@@ -345,26 +345,39 @@ function tryLabelMatch(cv, shot, baseW, baseH) {
       Math.max(8, Math.round((cx1 - cx0) * sc)),
       Math.max(8, Math.round((cy1 - cy0) * sc))), 0, 0, cv.INTER_AREA);
     cRoi.delete();
+    // equalize sharpness: reference labels are small and blurry, in-game
+    // text is crisp — without this, identical text correlates poorly
+    cv.GaussianBlur(candN, candN, new cv.Size(5, 5), 0);
 
     for (const t of texts) {
       const kImplied = t.lh / c.lh; // NB: in map px per shot-BASE px
       if (kImplied < 0.3 || kImplied > 1.8) continue;
       const st = H0 / t.lh;
-      const refN = new cv.Mat();
-      cv.resize(t.mat, refN, new cv.Size(
-        Math.max(8, Math.round(t.w * st)),
-        Math.max(8, Math.round(t.h * st))), 0, 0, cv.INTER_AREA);
+      // letter-height measurement is ±1px noisy; over a long word a few
+      // percent of size error misaligns the glyphs — try size variants
+      for (const ss of [0.93, 1.0, 1.075]) {
+        const refN = new cv.Mat();
+        cv.resize(t.mat, refN, new cv.Size(
+          Math.max(8, Math.round(t.w * st * ss)),
+          Math.max(8, Math.round(t.h * st * ss))), 0, 0, cv.INTER_AREA);
+        cv.GaussianBlur(refN, refN, new cv.Size(5, 5), 0);
 
-      let m = null, mode = null;
-      if (refN.cols <= candN.cols && refN.rows <= candN.rows) {
-        m = matchAt(cv, candN, refN); mode = 'refInCand';
-      } else if (candN.cols <= refN.cols && candN.rows <= refN.rows) {
-        m = matchAt(cv, refN, candN); mode = 'candInRef';
+        let m = null, mode = null;
+        if (refN.cols <= candN.cols && refN.rows <= candN.rows) {
+          m = matchAt(cv, candN, refN); mode = 'refInCand';
+        } else if (candN.cols <= refN.cols && candN.rows <= refN.rows) {
+          m = matchAt(cv, refN, candN); mode = 'candInRef';
+        }
+        if (m && (!best || m.score > best.score)) {
+          best = { score: m.score, mode, loc: { x: m.x, y: m.y }, c, t, sc, st: st * ss, cx0, cy0 };
+        }
+        if (self.__labelDebug && m) {
+          if (!c.__dbgBest || m.score > c.__dbgBest.score) {
+            c.__dbgBest = { score: +m.score.toFixed(3), mode, ss, t: { x: t.x, y: t.y, w: t.w, h: t.h, lh: t.lh } };
+          }
+        }
+        refN.delete();
       }
-      if (m && (!best || m.score > best.score)) {
-        best = { score: m.score, mode, loc: { x: m.x, y: m.y }, c, t, sc, st, cx0, cy0 };
-      }
-      refN.delete();
     }
     candN.delete();
   }
@@ -372,6 +385,17 @@ function tryLabelMatch(cv, shot, baseW, baseH) {
 
   // 0.5-0.6 produced false identifications on real screenshots — require a
   // solid match, the room-structure verification confirms it afterwards
+  if (self.__labelDebug) {
+    self.postMessage({
+      type: 'labeldebug',
+      cands: cands.map(c => ({ x: c.x, y: c.y, w: c.w, h: c.h, lh: +c.lh.toFixed(1), n: c.n, best: c.__dbgBest || null })),
+      best: best ? { score: +best.score.toFixed(3), mode: best.mode, t: { x: best.t.x, y: best.t.y, w: best.t.w, lh: best.t.lh }, c: { x: best.c.x, y: best.c.y, lh: +best.c.lh.toFixed(1) } } : null,
+      refCount: texts.length,
+      refNearMarrow: texts.filter(t => t.y > 1950 && t.y < 2200 && t.x > 1100 && t.x < 2100)
+        .map(t => ({ x: t.x, y: t.y, w: t.w, h: t.h, lh: t.lh })),
+    });
+  }
+
   if (!best || best.score < 0.62) return null;
 
   // reconstruct the correspondence between a shot-base point and a map point
@@ -623,7 +647,9 @@ async function locate(shot, mode, hint) {
 self.onmessage = async e => {
   const msg = e.data;
   try {
-    if (msg.type === 'init') {
+    if (msg.type === 'debug') {
+      self.__labelDebug = !!msg.on;
+    } else if (msg.type === 'init') {
       refBitmap = msg.ref;
       await getCV();
       self.postMessage({ type: 'ready' });
