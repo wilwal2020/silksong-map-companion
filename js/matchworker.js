@@ -1,4 +1,13 @@
-// Web Worker: OpenCV.js template matching off the main thread.
+// Web Worker: OpenCV.js screenshot-to-map matching off the main thread.
+//
+// Strategy: raw-pixel edge detection drowns in the in-game map's canvas
+// texture and color grading. Instead, both sides are reduced to CONTENT
+// MASKS — "is something drawn here or is it background?" — and the
+// boundaries of those masks are template-matched. That is invariant to the
+// style differences between an in-game screenshot (tinted, textured, icons)
+// and the clean reference map, and it lets room outlines AND area-name text
+// act as alignment features.
+//
 // Messages in:  { type:'init', ref: ImageBitmap }
 //               { type:'locate', shot: ImageBitmap, mode: 'map'|'full' }
 // Messages out: { type:'ready' } | { type:'progress', f } |
@@ -27,7 +36,6 @@ try {
 
 async function getCV() {
   await cvReady;
-  // belt & braces: wait until the bindings are actually registered
   for (let i = 0; i < 400 && !(self.cv && self.cv.Mat); i++) {
     await new Promise(r => setTimeout(r, 25));
   }
@@ -37,51 +45,102 @@ async function getCV() {
   return self.cv;
 }
 
-let refEdges = null, refScale = 0;   // coarse
-let refEdges2 = null, refScale2 = 0; // fine
 let refBitmap = null;
+let refMask1 = null;  // prepped reference at REF_W
+let refMask2 = null;  // prepped reference at REF_W2
+let refScale1 = 0, refScale2 = 0;
 
-function bitmapToImageData(bmp, w, h, crop = { l: 0, t: 0, r: 0, b: 0 }) {
+function bitmapToImageData(bmp, w, h) {
   w = Math.max(1, Math.round(w));
   h = Math.max(1, Math.round(h));
   const c = new OffscreenCanvas(w, h);
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.imageSmoothingQuality = 'high';
-  const sx = bmp.width * crop.l, sy = bmp.height * crop.t;
-  const sw = bmp.width * (1 - crop.l - crop.r), sh = bmp.height * (1 - crop.t - crop.b);
-  ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, w, h);
+  ctx.drawImage(bmp, 0, 0, w, h);
   return ctx.getImageData(0, 0, w, h);
 }
 
-function toEdges(cv, imageData, dilatePx, normalize = false) {
-  const src = cv.matFromImageData(imageData);
-  const gray = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  if (normalize) {
-    // in-game map screenshots are dark and low-contrast — stretch the range
-    // so Canny finds the room outlines
-    cv.normalize(gray, gray, 0, 255, cv.NORM_MINMAX);
+// binary "something is drawn here" mask: distance from the dominant
+// (background) color, robust against tint and vignette
+function binaryContentMask(imageData) {
+  const d = imageData.data;
+  const n = imageData.width * imageData.height;
+
+  const hist = new Map();
+  for (let i = 0; i < d.length; i += 16) {
+    const key = (d[i] >> 3 << 10) | (d[i + 1] >> 3 << 5) | (d[i + 2] >> 3);
+    hist.set(key, (hist.get(key) || 0) + 1);
   }
-  const edges = new cv.Mat();
-  cv.Canny(gray, edges, 60, 180);
-  if (dilatePx > 0) {
-    const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(dilatePx, dilatePx));
-    cv.dilate(edges, edges, kernel);
-    kernel.delete();
+  let bgKey = 0, bgCount = -1;
+  for (const [k, v] of hist) if (v > bgCount) { bgCount = v; bgKey = k; }
+  const bg = [(bgKey >> 10 & 31) << 3, (bgKey >> 5 & 31) << 3, (bgKey & 31) << 3];
+
+  const TH = 42 * 42;
+  const mask = new Uint8Array(n);
+  for (let i = 0, p = 0; p < n; i += 4, p++) {
+    const dr = d[i] - bg[0], dg = d[i + 1] - bg[1], db = d[i + 2] - bg[2];
+    mask[p] = (dr * dr + dg * dg + db * db > TH) ? 255 : 0;
   }
-  src.delete(); gray.delete();
-  return edges; // CV_8U
+  return mask;
+}
+
+// crop a region of a Uint8Array mask into a cv 8UC1 Mat
+function maskToMat(cv, mask, stride, rect) {
+  const m = new cv.Mat(rect.h, rect.w, cv.CV_8UC1);
+  for (let y = 0; y < rect.h; y++) {
+    const off = (rect.y + y) * stride + rect.x;
+    m.data.set(mask.subarray(off, off + rect.w), y * rect.w);
+  }
+  return m;
+}
+
+// binary mask -> matchable image: boundaries of the drawn content, blurred
+// for tolerance (gradient normalizes "outlined rooms" in the screenshot vs
+// "filled rooms" on the reference to the same thing: content borders)
+function prepMask(cv, bin) {
+  const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+  cv.morphologyEx(bin, bin, cv.MORPH_GRADIENT, k);
+  k.delete();
+  cv.GaussianBlur(bin, bin, new cv.Size(5, 5), 0);
+  return bin;
+}
+
+function scaledTemplate(cv, tmplBase, tw, th) {
+  const r = new cv.Mat();
+  cv.resize(tmplBase, r, new cv.Size(tw, th), 0, 0, cv.INTER_AREA);
+  cv.threshold(r, r, 50, 255, cv.THRESH_BINARY);
+  return prepMask(cv, r);
+}
+
+// empty border around the reference (12% of its width) so a template as big
+// as the whole map still fits, and content near the map edges can match
+const PAD_FRAC = 0.12;
+
+function refMaskAt(cv, width) {
+  const sc = width / refBitmap.width;
+  const id = bitmapToImageData(refBitmap, width, refBitmap.height * sc);
+  const src = cv.matFromImageData(id);
+  const g = new cv.Mat();
+  cv.cvtColor(src, g, cv.COLOR_RGBA2GRAY);
+  src.delete();
+  cv.threshold(g, g, 14, 255, cv.THRESH_BINARY);
+  prepMask(cv, g);
+  const pad = Math.round(width * PAD_FRAC);
+  const padded = new cv.Mat();
+  cv.copyMakeBorder(g, padded, pad, pad, pad, pad, cv.BORDER_CONSTANT, new cv.Scalar(0));
+  g.delete();
+  return padded;
 }
 
 function ensureRefs(cv) {
-  if (!refEdges) {
-    refScale = REF_W / refBitmap.width;
-    refEdges = toEdges(cv, bitmapToImageData(refBitmap, REF_W, refBitmap.height * refScale), 3);
+  if (!refMask1) {
+    refScale1 = REF_W / refBitmap.width;
+    refMask1 = refMaskAt(cv, REF_W);
   }
-  if (!refEdges2) {
+  if (!refMask2) {
     const w2 = Math.min(REF_W2, refBitmap.width);
     refScale2 = w2 / refBitmap.width;
-    refEdges2 = toEdges(cv, bitmapToImageData(refBitmap, w2, refBitmap.height * refScale2), 3);
+    refMask2 = refMaskAt(cv, w2);
   }
 }
 
@@ -97,38 +156,68 @@ async function locate(shot, mode) {
   const cv = await getCV();
   ensureRefs(cv);
 
-  const crop = mode === 'full'
-    ? { l: 0.03, t: 0.03, r: 0.03, b: 0.03 }
-    : { l: 0.06, t: 0.08, r: 0.06, b: 0.08 };
-  const cropW = 1 - crop.l - crop.r;
-  const aspect = (shot.height * (1 - crop.t - crop.b)) / (shot.width * cropW);
+  const baseW = Math.min(1400, shot.width);
+  const baseH = Math.round(shot.height * baseW / shot.width);
+  const id = bitmapToImageData(shot, baseW, baseH);
+  const mask = binaryContentMask(id);
+
+  // decide which part of the screenshot to match with
+  let rect;
+  if (mode === 'full') {
+    // crop to the drawn content's bounding box — a full-map screenshot has
+    // big empty background margins that would otherwise break the scale search
+    let minX = baseW, maxX = -1, minY = baseH, maxY = -1;
+    for (let y = 0; y < baseH; y++) {
+      for (let x = 0; x < baseW; x++) {
+        if (mask[y * baseW + x]) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX - minX < 60 || maxY - minY < 60) return null; // nothing drawn
+    const pad = Math.round(baseW * 0.015);
+    rect = {
+      x: Math.max(0, minX - pad),
+      y: Math.max(0, minY - pad),
+      w: Math.min(baseW, maxX + pad) - Math.max(0, minX - pad),
+      h: Math.min(baseH, maxY + pad) - Math.max(0, minY - pad),
+    };
+  } else {
+    // fixed margins to trim HUD / window borders
+    rect = {
+      x: Math.round(baseW * 0.06), y: Math.round(baseH * 0.08),
+      w: Math.round(baseW * 0.88), h: Math.round(baseH * 0.84),
+    };
+  }
+
+  const tmplBase = maskToMat(cv, mask, baseW, rect);
+  const aspect = rect.h / rect.w;
 
   // ---- pass 1: coarse multi-scale search over the whole map ----
-  const [lo, hi] = mode === 'full' ? [0.55, 1.02] : [0.10, 0.50];
-  const steps = mode === 'full' ? 9 : 14;
+  const [lo, hi] = mode === 'full' ? [0.35, 1.05] : [0.08, 0.55];
+  const steps = mode === 'full' ? 13 : 16;
   const widths = [];
   for (let i = 0; i < steps; i++) widths.push(REF_W * (lo + (i / (steps - 1)) * (hi - lo)));
 
   let best = null;
-  for (let i = 0; i < widths.length; i++) {
+  for (let i = 0; i < steps; i++) {
     const tw = Math.round(widths[i]);
     const th = Math.round(tw * aspect);
-    if (tw < 24 || th < 24 || tw >= refEdges.cols || th >= refEdges.rows) {
+    if (tw < 24 || th < 24 || tw >= refMask1.cols || th >= refMask1.rows) {
       self.postMessage({ type: 'progress', f: 0.7 * (i + 1) / steps });
       continue;
     }
-    const tmpl = toEdges(cv, bitmapToImageData(shot, tw, th, crop), 2, true);
-    const m = matchAt(cv, refEdges, tmpl);
+    const tmpl = scaledTemplate(cv, tmplBase, tw, th);
+    const m = matchAt(cv, refMask1, tmpl);
     tmpl.delete();
     if (!best || m.score > best.score) best = { score: m.score, mx: m.x, my: m.y, tw, th };
     self.postMessage({ type: 'progress', f: 0.7 * (i + 1) / steps });
   }
-  if (!best) return null;
+  if (!best) { tmplBase.delete(); return null; }
 
   // ---- pass 2: refine scale & position at higher resolution ----
-  // search a tight window around the coarse hit with fine scale steps —
-  // this is what nails the exact zoom level of the screenshot
-  const up = refScale2 / refScale;
+  const up = refScale2 / refScale1;
   const cx2 = (best.mx + best.tw / 2) * up;
   const cy2 = (best.my + best.th / 2) * up;
   let fine = null;
@@ -139,14 +228,14 @@ async function locate(shot, mode) {
     const padX = Math.round(tw2 * 0.35), padY = Math.round(th2 * 0.35);
     const x0 = Math.max(0, Math.round(cx2 - tw2 / 2 - padX));
     const y0 = Math.max(0, Math.round(cy2 - th2 / 2 - padY));
-    const x1 = Math.min(refEdges2.cols, Math.round(cx2 + tw2 / 2 + padX));
-    const y1 = Math.min(refEdges2.rows, Math.round(cy2 + th2 / 2 + padY));
+    const x1 = Math.min(refMask2.cols, Math.round(cx2 + tw2 / 2 + padX));
+    const y1 = Math.min(refMask2.rows, Math.round(cy2 + th2 / 2 + padY));
     if (tw2 < 24 || th2 < 24 || tw2 > x1 - x0 || th2 > y1 - y0) {
       self.postMessage({ type: 'progress', f: 0.7 + 0.3 * (i + 1) / ks.length });
       continue;
     }
-    const roi = refEdges2.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0));
-    const tmpl = toEdges(cv, bitmapToImageData(shot, tw2, th2, crop), 2, true);
+    const roi = refMask2.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0));
+    const tmpl = scaledTemplate(cv, tmplBase, tw2, th2);
     const m = matchAt(cv, roi, tmpl);
     roi.delete(); tmpl.delete();
     if (!fine || m.score > fine.score) {
@@ -154,14 +243,19 @@ async function locate(shot, mode) {
     }
     self.postMessage({ type: 'progress', f: 0.7 + 0.3 * (i + 1) / ks.length });
   }
+  tmplBase.delete();
 
   // map back to full map coordinates for the complete (uncropped) screenshot
+  // (match coordinates are in the PADDED reference frame — subtract the pad;
+  // PAD2 = PAD1 * up exactly, so coarse->fine coordinate scaling stays valid)
+  const pad2 = Math.round(Math.min(REF_W2, refBitmap.width) * PAD_FRAC);
   const pick = fine || { score: best.score, mx: best.mx * up, my: best.my * up, tw: best.tw * up };
-  const t = pick.tw / (shot.width * cropW); // shot px -> ref2 px
-  const k = t / refScale2;                  // shot px -> map px
+  const cl = rect.x / baseW, ct = rect.y / baseH, cwf = rect.w / baseW;
+  const t = pick.tw / (shot.width * cwf); // shot px -> ref2 px
+  const k = t / refScale2;                // shot px -> map px
   return {
-    x: pick.mx / refScale2 - shot.width * crop.l * k,
-    y: pick.my / refScale2 - shot.height * crop.t * k,
+    x: (pick.mx - pad2) / refScale2 - shot.width * cl * k,
+    y: (pick.my - pad2) / refScale2 - shot.height * ct * k,
     w: shot.width * k,
     h: shot.height * k,
     score: pick.score,

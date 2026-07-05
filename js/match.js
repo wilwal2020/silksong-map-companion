@@ -112,12 +112,13 @@ export function detectPlayerMarker(shot) {
 // are explored rooms (anything that differs from the dominant background
 // color) so the fog only reveals rooms you have actually been to.
 export function computeExploredMask(shot) {
-  const W = 700;
+  // high enough resolution that thin text strokes and room corners survive
+  const W = Math.min(1200, shot.width);
   const scale = W / shot.width;
   const c = document.createElement('canvas');
   c.width = W;
   c.height = Math.round(shot.height * scale);
-  const ctx = c.getContext('2d');
+  const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(shot, 0, 0, c.width, c.height);
   const img = ctx.getImageData(0, 0, c.width, c.height);
   const d = img.data;
@@ -132,7 +133,7 @@ export function computeExploredMask(shot) {
   for (const [k, v] of hist) if (v > bgCount) { bgCount = v; bgKey = k; }
   const bg = [(bgKey >> 10 & 31) << 3, (bgKey >> 5 & 31) << 3, (bgKey & 31) << 3];
 
-  const TH = 48 * 48;
+  const TH = 40 * 40;
   for (let i = 0; i < d.length; i += 4) {
     const dr = d[i] - bg[0], dg = d[i + 1] - bg[1], db = d[i + 2] - bg[2];
     const on = dr * dr + dg * dg + db * db > TH;
@@ -141,15 +142,16 @@ export function computeExploredMask(shot) {
   }
   ctx.putImageData(img, 0, 0);
 
-  // blur + re-threshold to drop speck noise and fill small gaps
+  // blur + generous re-threshold: closes gaps and slightly dilates, so
+  // text, room corners and thin outlines are fully included in the reveal
   const c2 = document.createElement('canvas');
   c2.width = c.width; c2.height = c.height;
   const ctx2 = c2.getContext('2d');
-  ctx2.filter = 'blur(3px)';
+  ctx2.filter = 'blur(4px)';
   ctx2.drawImage(c, 0, 0);
   const img2 = ctx2.getImageData(0, 0, c2.width, c2.height);
   const d2 = img2.data;
-  for (let i = 3; i < d2.length; i += 4) d2[i] = d2[i] > 140 ? 255 : 0;
+  for (let i = 3; i < d2.length; i += 4) d2[i] = d2[i] > 55 ? 255 : 0;
   ctx2.putImageData(img2, 0, 0);
   return c2;
 }

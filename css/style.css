@@ -164,6 +164,27 @@ html, body {
 #placement-msg { font-weight: 600; font-size: .9rem; }
 .placement-tip { color: var(--text-dim); font-size: .8rem; }
 
+#await-bar {
+  position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 14px; z-index: 25;
+  max-width: min(560px, 92vw);
+  background: var(--panel); border: 1px solid var(--accent);
+  border-radius: var(--radius); padding: 12px 16px; box-shadow: var(--shadow);
+  animation: await-pulse 2.2s ease-in-out infinite;
+}
+@keyframes await-pulse {
+  0%, 100% { box-shadow: var(--shadow), 0 0 0 0 rgba(224,195,126,.28); }
+  50%      { box-shadow: var(--shadow), 0 0 0 7px rgba(224,195,126,0); }
+}
+.await-step {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--accent); color: #241d0c; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.await-text { display: flex; flex-direction: column; gap: 2px; }
+.await-text b { font-size: .92rem; }
+.await-text span { font-size: .8rem; color: var(--text-dim); }
+
 #spinner {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
   display: flex; align-items: center; gap: 12px; z-index: 25;

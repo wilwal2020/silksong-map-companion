@@ -31,6 +31,18 @@ function setHint(text) {
   $('#paste-hint').classList.toggle('highlight', !!text);
 }
 
+function showAwaitBar(title, sub) {
+  $('#await-title').textContent = title;
+  $('#await-sub').innerHTML = sub;
+  $('#await-bar').classList.remove('hidden');
+  $('#paste-hint').classList.add('hidden');
+}
+
+function hideAwaitBar() {
+  $('#await-bar').classList.add('hidden');
+  $('#paste-hint').classList.remove('hidden');
+}
+
 function debounce(fn, ms) {
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
@@ -118,6 +130,7 @@ document.addEventListener('keydown', e => {
     skipAwaitingEnv();
   }
 });
+$('#btn-await-skip').addEventListener('click', () => skipAwaitingEnv());
 
 // ------------------------------------------------------------- pin editing
 
@@ -176,13 +189,13 @@ async function handleMapScreenshot(blob) {
   spinner(false);
 
   let msg = 'Check the position, then confirm';
-  if (!rect || rect.score < 0.1) {
+  if (!rect || rect.score < 0.15) {
     // fallback: drop it in the middle of the current view at a plausible size
     const c = view.screenToMap(window.innerWidth / 2, window.innerHeight / 2);
     const w = mapImage.width * 0.25;
     rect = { x: c.x - w / 2, y: c.y - (w * bitmap.height / bitmap.width) / 2, w };
     msg = 'Could not auto-locate — drag it into place';
-  } else if (rect.score < 0.22) {
+  } else if (rect.score < 0.3) {
     msg = 'Not fully sure about this spot — double-check before confirming';
   }
   view.centerOn(rect.x + rect.w / 2, rect.y + (rect.h || rect.w * bitmap.height / bitmap.width) / 2,
@@ -210,10 +223,11 @@ async function handleMapScreenshot(blob) {
   persistPin(data);
   pins.setAwaiting(data.id);
   newPinPending = data;
-  setHint('now paste a screenshot of the area itself — Esc to skip');
-  toast(marker
-    ? 'Revealed — pin placed at your position. Paste the area screenshot now 📷'
-    : 'Revealed — pin added (drag it onto your spot). Paste the area screenshot now 📷', 'ok');
+  showAwaitBar('Now screenshot the area itself',
+    (marker
+      ? 'Pin placed at your position. '
+      : 'Pin added — drag it onto your exact spot. ')
+    + 'Go back to the game, screenshot what\'s actually there, and paste it here with <span class="kbd">Ctrl+V</span>');
 }
 
 // a paste while a pin is awaiting its screenshot attaches directly — no dialog
@@ -224,7 +238,7 @@ async function attachToAwaiting(blob) {
   pins.update(entry.data);
   persistPin(entry.data);
   pins.setAwaiting(null);
-  setHint(null);
+  hideAwaitBar();
   if (newPinPending && newPinPending.id === entry.data.id) {
     newPinPending = null;
     const edit = await openPinEditor(entry.data, true);
@@ -244,7 +258,7 @@ async function attachToAwaiting(blob) {
 function skipAwaitingEnv() {
   const wasNew = newPinPending;
   pins.setAwaiting(null);
-  setHint(null);
+  hideAwaitBar();
   if (wasNew) {
     newPinPending = null;
     openPinEditor(wasNew, true).then(edit => {
@@ -285,7 +299,7 @@ async function handleFullMap(blob) {
   spinner(false);
 
   let msg = 'Check the alignment, then confirm';
-  if (!rect || rect.score < 0.1) {
+  if (!rect || rect.score < 0.15) {
     rect = { x: 0, y: 0, w: mapImage.width };
     msg = 'Could not auto-align — drag & resize to match the map';
   }
@@ -457,8 +471,8 @@ async function init() {
     onLightbox: showLightbox,
     onRequestAttach: data => {
       pins.setAwaiting(data.id);
-      setHint('paste the screenshot for this pin — Esc to cancel');
-      toast('Now paste (Ctrl+V) the screenshot for this pin.');
+      showAwaitBar('Paste the screenshot for this pin',
+        'Paste it with <span class="kbd">Ctrl+V</span> — it replaces the pin\'s current picture');
     },
     onEdit: async data => {
       const edit = await openPinEditor(data, false);
