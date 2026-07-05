@@ -64,11 +64,18 @@ export class Explored {
     this.onChange = null; // set by app for persistence / rerender
   }
 
-  // composite a keyed screenshot at map-rect (x, y, w, h) in map coords
+  // composite a keyed screenshot at map-rect (x, y, w, h) in map coords.
+  // Drawn BEHIND existing content ('destination-over'): once a pixel has been
+  // revealed by one screenshot it is never overdrawn, so overlapping pastes
+  // can't accumulate ghosted/doubled outlines — a new paste only fills areas
+  // that are still fog.
   paste(bitmap, x, y, w, h) {
     const keyed = keyScreenshot(bitmap);
     const s = this.scale;
+    const prev = this.ctx.globalCompositeOperation;
+    this.ctx.globalCompositeOperation = 'destination-over';
     this.ctx.drawImage(keyed, x * s, y * s, w * s, h * s);
+    this.ctx.globalCompositeOperation = prev;
     this._changed();
   }
 
