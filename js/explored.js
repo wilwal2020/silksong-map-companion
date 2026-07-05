@@ -73,63 +73,77 @@ export class Explored {
   }
 
   // Stitch alignment: the matcher places each screenshot independently
-  // against the reference, so two overlapping pastes can be a few pixels
-  // apart. When a new paste's rect overlaps already-composited content,
-  // brute-force a small translation that best lines the new screenshot's
-  // content up with what is already there, and return the nudged rect.
+  // against the reference, so two overlapping pastes can be slightly off in
+  // both position AND scale. When a new paste's rect overlaps already-
+  // composited content, brute-force the small scale + translation that best
+  // lines the new screenshot's content up with what is already there, and
+  // return the corrected rect.
   refineAlignment(bitmap, rect) {
     const s = this.scale;
     const rxE = rect.x * s, ryE = rect.y * s, rwE = rect.w * s, rhE = rect.h * s;
-    const DW = 220;
+    const DW = 280;
     const f = DW / rwE;                 // reduced px per explored px
     const DH = Math.max(1, Math.round(rhE * f));
-    if (DH < 12) return rect;
+    if (DH < 16) return rect;
 
-    const toContent = (drawFn) => {
-      const c = document.createElement('canvas');
-      c.width = DW; c.height = DH;
-      const cx = c.getContext('2d', { willReadFrequently: true });
-      cx.imageSmoothingEnabled = true;
-      drawFn(cx);
-      const dd = cx.getImageData(0, 0, DW, DH).data;
-      const m = new Uint8Array(DW * DH);
-      let n = 0;
-      for (let p = 0; p < m.length; p++) if (dd[p * 4 + 3] > 50) { m[p] = 1; n++; }
-      return { m, n };
-    };
+    // existing composite content over the rect region -> binary mask
+    const ecan = document.createElement('canvas');
+    ecan.width = DW; ecan.height = DH;
+    const ectx = ecan.getContext('2d', { willReadFrequently: true });
+    ectx.imageSmoothingEnabled = true;
+    ectx.drawImage(this.canvas, rxE, ryE, rwE, rhE, 0, 0, DW, DH);
+    const ed = ectx.getImageData(0, 0, DW, DH).data;
+    const E = new Uint8Array(DW * DH);
+    let eN = 0;
+    for (let p = 0; p < E.length; p++) if (ed[p * 4 + 3] > 50) { E[p] = 1; eN++; }
+    if (eN < DW * DH * 0.03) return rect; // negligible overlap — trust matcher
 
-    // existing composite content over the rect region
-    const E = toContent(cx => cx.drawImage(this.canvas, rxE, ryE, rwE, rhE, 0, 0, DW, DH));
-    if (E.n < DW * DH * 0.04) return rect; // negligible overlap — trust matcher
-
-    // new screenshot content (keyed)
     const keyed = keyScreenshot(bitmap);
-    const N = toContent(cx => cx.drawImage(keyed, 0, 0, DW, DH));
-    if (N.n < DW * DH * 0.04) return rect;
+    const ncan = document.createElement('canvas');
+    ncan.width = DW; ncan.height = DH;
+    const nctx = ncan.getContext('2d', { willReadFrequently: true });
+    nctx.imageSmoothingEnabled = true;
 
-    const R = Math.min(14, Math.max(3, Math.round(45 * s * f))); // ±~45 map px
-    let best = { score: -1, dx: 0, dy: 0 };
-    for (let dy = -R; dy <= R; dy++) {
-      for (let dx = -R; dx <= R; dx++) {
-        let inter = 0;
-        for (let y = 0; y < DH; y++) {
-          const ey = y + dy;
-          if (ey < 0 || ey >= DH) continue;
-          const nrow = y * DW, erow = ey * DW;
-          for (let x = 0; x < DW; x++) {
-            if (!N.m[nrow + x]) continue;
-            const ex = x + dx;
-            if (ex < 0 || ex >= DW) continue;
-            if (E.m[erow + ex]) inter++;
+    const cx0 = DW / 2, cy0 = DH / 2;
+    const scales = [0.965, 0.98, 0.99, 1.0, 1.01, 1.02, 1.035];
+    const R = Math.min(16, Math.max(4, Math.round(40 * s * f))); // ±~40 map px
+    let best = { score: -1, m: 1, dx: 0, dy: 0 };
+
+    for (const m of scales) {
+      // render the new content scaled by m about the grid centre
+      nctx.clearRect(0, 0, DW, DH);
+      const w2 = DW * m, h2 = DH * m;
+      nctx.drawImage(keyed, cx0 - w2 / 2, cy0 - h2 / 2, w2, h2);
+      const nd = nctx.getImageData(0, 0, DW, DH).data;
+      // pack content pixel coords for a tight inner loop
+      const ix = [], iy = [];
+      for (let y = 0; y < DH; y++) {
+        const row = y * DW;
+        for (let x = 0; x < DW; x++) if (nd[(row + x) * 4 + 3] > 50) { ix.push(x); iy.push(y); }
+      }
+      if (ix.length < DW * DH * 0.03) continue;
+      for (let dy = -R; dy <= R; dy++) {
+        for (let dx = -R; dx <= R; dx++) {
+          let inter = 0;
+          for (let k = 0; k < ix.length; k++) {
+            const ex = ix[k] + dx, ey = iy[k] + dy;
+            if (ex < 0 || ex >= DW || ey < 0 || ey >= DH) continue;
+            if (E[ey * DW + ex]) inter++;
           }
-        }
-        // prefer the smallest shift among near-equal scores (stability)
-        if (inter > best.score || (inter === best.score && Math.hypot(dx, dy) < Math.hypot(best.dx, best.dy))) {
-          best = { score: inter, dx, dy };
+          // tie-break toward no change (m=1, zero shift) for stability
+          const cost = Math.abs(m - 1) * 60 + Math.hypot(dx, dy);
+          if (inter > best.score ||
+              (inter === best.score && cost < (Math.abs(best.m - 1) * 60 + Math.hypot(best.dx, best.dy)))) {
+            best = { score: inter, m, dx, dy };
+          }
         }
       }
     }
-    return { ...rect, x: rect.x + best.dx / (f * s), y: rect.y + best.dy / (f * s) };
+
+    const dxMap = best.dx / (f * s), dyMap = best.dy / (f * s);
+    const ccx = rect.x + rect.w / 2, ccy = rect.y + rect.h / 2;
+    const nw = rect.w * best.m, nh = rect.h * best.m;
+    return { ...rect, w: nw, h: nh, x: ccx - nw / 2 + dxMap, y: ccy - nh / 2 + dyMap };
   }
 
   clear() {
