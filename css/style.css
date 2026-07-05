@@ -1,16 +1,20 @@
 :root {
-  --bg: #0b0d12;
-  --panel: #151923;
-  --panel-2: #1c2230;
-  --border: #2b3345;
-  --text: #d8dced;
-  --text-dim: #8b93ad;
-  --accent: #e0c37e;      /* silk gold */
+  --bg: #070809;          /* deepnest near-black */
+  --panel: #0f1219;
+  --panel-2: #151922;
+  --border: #262b36;
+  --border-strong: #313847;
+  --text: #e6e2d3;        /* bone */
+  --text-dim: #8890a2;
+  --accent: #9e2b25;      /* crimson silk thread */
+  --accent-glow: #c04b45;
+  --accent-soft: rgba(158,43,37,.18);
+  --rose: #d98a83;        /* accent text on dark */
   --accent-2: #b43a3a;    /* hornet red */
   --danger: #c0392b;
   --ok: #4caf7d;
-  --radius: 10px;
-  --shadow: 0 8px 30px rgba(0,0,0,.55);
+  --radius: 8px;
+  --shadow: 0 8px 30px rgba(0,0,0,.6);
   font-size: 15px;
 }
 
@@ -31,32 +35,39 @@ html, body {
   position: fixed; inset: 0 0 auto 0; z-index: 30;
   display: flex; align-items: center; gap: 16px;
   padding: 8px 14px;
-  background: linear-gradient(to bottom, rgba(11,13,18,.97), rgba(11,13,18,.85));
+  background: linear-gradient(to bottom, rgba(9,10,13,.98), rgba(9,10,13,.88));
   border-bottom: 1px solid var(--border);
+}
+/* single crimson silk thread under the toolbar */
+#toolbar::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent) 38%, var(--accent-glow) 50%, var(--accent) 62%, transparent);
+  pointer-events: none;
 }
 
 #toolbar h1 {
   margin: 0; font-family: Cinzel, serif; font-size: 1.05rem;
-  color: var(--accent); letter-spacing: .06em; white-space: nowrap;
+  color: var(--text); letter-spacing: .08em; white-space: nowrap;
 }
 #toolbar h1 span { color: var(--text-dim); font-weight: 500; }
 
 .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 .btn {
-  background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--border); border-radius: 8px;
+  background: transparent; color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: 7px;
   padding: 6px 12px; font: inherit; font-size: .85rem; cursor: pointer;
-  transition: background .12s, border-color .12s;
+  transition: background .12s, border-color .12s, color .12s;
 }
-.btn:hover { background: #232b3d; border-color: #3d4964; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #241d0c; font-weight: 600; }
-.btn.primary:hover { background: #ecd193; }
-.btn.danger { color: #e08a80; }
-.btn.danger:hover { border-color: var(--danger); }
+.btn:hover { background: var(--panel-2); border-color: #3d4658; }
+.btn.primary { background: var(--text); border-color: var(--text); color: #12151c; font-weight: 600; }
+.btn.primary:hover { background: #f2eee1; border-color: #f2eee1; }
+.btn.danger { color: var(--rose); border-color: #43272a; }
+.btn.danger:hover { border-color: var(--accent); background: var(--accent-soft); }
 .btn.subtle { background: transparent; border-color: transparent; color: var(--text-dim); }
 
 .toggle { display: flex; gap: 6px; align-items: center; font-size: .82rem; color: var(--text-dim); cursor: pointer; user-select: none; }
+.toggle input { accent-color: var(--accent); }
 
 /* filter chips */
 #filters { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -66,7 +77,7 @@ html, body {
   font-size: .85rem; line-height: 1.3; user-select: none;
   opacity: .45; transition: opacity .12s, border-color .12s;
 }
-.chip.on { opacity: 1; border-color: var(--accent); }
+.chip.on { opacity: 1; border-color: var(--accent); background: var(--accent-soft); }
 .chip:hover { opacity: .85; }
 
 /* ---------- stage / map ---------- */
@@ -99,8 +110,8 @@ html, body {
   transition: transform .08s;
 }
 .pin:hover .pin-ico { transform: scale(1.18); }
-.pin.done .pin-ico { border-color: #55694f; opacity: .55; filter: saturate(.5); }
-.pin.selected .pin-ico { border-color: #fff; box-shadow: 0 0 0 3px rgba(224,195,126,.35), 0 2px 10px rgba(0,0,0,.7); }
+.pin.done .pin-ico { border-color: #4a5560; opacity: .5; filter: saturate(.4); }
+.pin.selected .pin-ico { border-color: #fff; box-shadow: 0 0 0 3px rgba(158,43,37,.4), 0 2px 10px rgba(0,0,0,.7); }
 .pin.awaiting::after {
   content: "📷?"; position: absolute; top: -14px; right: -18px;
   font-size: 11px; background: var(--panel-2); border: 1px solid var(--border);
@@ -111,7 +122,8 @@ html, body {
 .pin-card {
   position: absolute; z-index: 20; width: 300px;
   background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow);
+  border-left: 2px solid var(--accent); border-radius: 0;
+  box-shadow: var(--shadow);
   padding: 10px; pointer-events: auto;
   display: flex; flex-direction: column; gap: 8px;
 }
@@ -124,7 +136,7 @@ html, body {
   border: 1px dashed var(--border); border-radius: 6px; padding: 14px 8px;
 }
 .pin-card .card-head { display: flex; gap: 8px; align-items: baseline; }
-.pin-card .cat { font-weight: 600; font-size: .85rem; color: var(--accent); }
+.pin-card .card-head .cat { font-family: Cinzel, serif; font-weight: 500; font-size: .85rem; letter-spacing: .03em; color: var(--rose); }
 .pin-card .note { font-size: .9rem; overflow-wrap: break-word; }
 .pin-card .note:empty { display: none; }
 .pin-card .card-actions { display: flex; gap: 6px; }
@@ -142,7 +154,7 @@ html, body {
 #paste-hint {
   position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px;
-  background: rgba(21,25,35,.9); border: 1px solid var(--border);
+  background: rgba(12,14,19,.92); border: 1px solid var(--border);
   border-radius: 999px; padding: 8px 18px 8px 10px;
   color: var(--text-dim); font-size: .85rem; z-index: 10;
   pointer-events: none;
@@ -160,8 +172,8 @@ html, body {
 #confirm-bar {
   position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
   display: flex; align-items: center; gap: 12px; z-index: 25;
-  background: var(--panel); border: 1px solid var(--accent);
-  border-radius: var(--radius); padding: 10px 14px; box-shadow: var(--shadow);
+  background: var(--panel); border: 1px solid var(--border); border-left: 2px solid var(--accent);
+  border-radius: 0; padding: 10px 14px; box-shadow: var(--shadow);
 }
 #confirm-msg { font-weight: 600; font-size: .9rem; }
 
@@ -185,12 +197,12 @@ html, body {
 /* ---------- dialogs ---------- */
 
 dialog {
-  background: var(--panel); color: var(--text);
-  border: 1px solid var(--border); border-radius: 14px;
+  position: relative; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-top: 2px solid var(--accent); border-radius: 0;
   box-shadow: var(--shadow); padding: 20px 22px; max-width: 460px; width: min(460px, 92vw);
 }
-dialog::backdrop { background: rgba(5,6,10,.65); }
-dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; color: var(--accent); }
+dialog::backdrop { background: rgba(4,5,7,.72); }
+dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; letter-spacing: .04em; color: var(--text); }
 
 #paste-preview {
   width: 100%; max-height: 200px; object-fit: contain;
@@ -207,7 +219,7 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; co
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
   padding: 8px 10px; cursor: pointer; font: inherit; font-size: .85rem; color: var(--text);
 }
-.cat-btn.on { border-color: var(--accent); background: #2a2617; }
+.cat-btn.on { border-color: var(--accent); background: var(--accent-soft); }
 
 #pin-note {
   width: 100%; background: var(--panel-2); border: 1px solid var(--border);
@@ -230,7 +242,7 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; co
 }
 .toast {
   background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
-  border-radius: 8px; padding: 9px 16px; font-size: .87rem; box-shadow: var(--shadow);
+  border-radius: 0; padding: 9px 16px; font-size: .87rem; box-shadow: var(--shadow);
   animation: toast-in .18s ease-out;
 }
 .toast.error { border-left-color: var(--danger); }
