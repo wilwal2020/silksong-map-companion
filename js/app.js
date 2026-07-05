@@ -1,7 +1,7 @@
 import { Fog } from './fog.js';
 import { MapView } from './mapview.js';
 import { store } from './store.js';
-import { locate, computeExploredMask, detectPlayerMarker } from './match.js';
+import { locate, computeExploredMask, detectPlayerMarker, MARKER_MAP_HEIGHT } from './match.js';
 import { PinManager, CATEGORIES, catById } from './pins.js';
 
 const $ = s => document.querySelector(s);
@@ -9,14 +9,17 @@ const $ = s => document.querySelector(s);
 let view, fog, pins, mapImage;
 let newPinPending = null; // freshly created pin waiting for its area screenshot
 let lastUndo = null;      // { maskCopy, pinId } — one level of paste undo
+let learnedScale = null;  // map-px per screenshot-px from past successes
 
-// three-tier confidence: `ratio` = runner-up peak / best peak (lower is
-// better). Certain matches apply instantly; plausible ones get a quick
-// yes/no check; only junk is refused outright.
-const AUTO_RATIO = 0.8;
-const MIN_SCORE = 0.12;
+// three-tier confidence, calibrated on 25 real screenshots: correct matches
+// have ratio (runner-up/best peak) 0.44-0.92, wrong ones 0.90-0.98.
+// Certain matches apply instantly; the overlap zone gets a yes/no check;
+// only clear junk is refused outright.
+const AUTO_RATIO = 0.85;
+const MAX_RATIO = 0.985;
+const MIN_SCORE = 0.15;
 const certain = rect => rect && rect.score >= MIN_SCORE && (rect.ratio ?? 1) <= AUTO_RATIO;
-const plausible = rect => rect && rect.score >= MIN_SCORE;
+const plausible = rect => rect && rect.score >= MIN_SCORE && (rect.ratio ?? 1) <= MAX_RATIO;
 const confStr = rect => rect
   ? `match ${rect.score.toFixed(2)}, uniqueness ${(1 - (rect.ratio ?? 1)).toFixed(2)}`
   : 'no match';
@@ -213,13 +216,16 @@ function openPinEditor(data, isNew) {
 
 // ------------------------------------------------------------- paste flows
 
-function applyMapPlacement(bitmap, rect) {
+function applyMapPlacement(bitmap, rect, marker) {
   // reveal only the rooms actually drawn in the screenshot, drop the pin on
   // the player marker (white Hornet icon)
   snapshotForUndo();
   const mask = computeExploredMask(bitmap);
   fog.revealMask(mask, rect.x, rect.y, rect.w, rect.h);
-  const marker = detectPlayerMarker(bitmap);
+
+  // remember this screenshot scale — it anchors future marker-less pastes
+  learnedScale = rect.w / bitmap.width;
+  store.putMeta('scale', learnedScale);
 
   const data = {
     id: crypto.randomUUID(),
@@ -246,16 +252,24 @@ function applyMapPlacement(bitmap, rect) {
 async function handleMapScreenshot(blob) {
   const bitmap = await createImageBitmap(blob);
   spinner(true, 'Locating screenshot on the map…');
+
+  // the player marker's size reveals the screenshot's scale exactly;
+  // otherwise fall back to the scale learned from previous matches
+  const marker = detectPlayerMarker(bitmap);
+  const hint = marker
+    ? { k: MARKER_MAP_HEIGHT / marker.h, tight: true }
+    : (learnedScale ? { k: learnedScale, tight: false } : null);
+
   let rect = null;
   try {
     rect = await locate(bitmap, mapImage, 'map',
-      f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`));
+      f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`), hint);
   } catch (err) {
     console.error(err);
     toast('Locating failed: ' + err.message, 'error');
   }
   spinner(false);
-  console.log('[silksong-map] map locate:', rect);
+  console.log('[silksong-map] map locate:', rect, 'marker:', marker, 'hint:', hint);
 
   if (!plausible(rect)) {
     bitmap.close?.();
@@ -273,7 +287,7 @@ async function handleMapScreenshot(blob) {
     }
   }
 
-  applyMapPlacement(bitmap, rect);
+  applyMapPlacement(bitmap, rect, marker);
   bitmap.close?.();
 }
 
@@ -551,6 +565,7 @@ async function init() {
   view.onViewChanged = () => { pins.syncPositions(); saveView(); };
 
   // restore saved state
+  learnedScale = (await store.getMeta('scale')) || null;
   const savedFog = await store.getMeta('fog');
   if (savedFog) await fog.loadFromBlob(savedFog);
   const savedView = await store.getMeta('view');

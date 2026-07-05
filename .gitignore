@@ -1,6 +1,9 @@
 # original map file (committed copy lives in assets/map.png)
 silksong map.png
 
+# local calibration screenshots (user's own captures)
+test shots/
+
 .claude/
 node_modules/
 Thumbs.db

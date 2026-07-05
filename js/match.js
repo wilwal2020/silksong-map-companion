@@ -30,11 +30,16 @@ function getWorker(mapImage) {
   return workerInit;
 }
 
+// The player marker (white Hornet icon) is drawn ON the map, so its height
+// is a fixed number of map-pixels regardless of screenshot resolution or
+// in-game zoom. Calibrated against real screenshots: marker ≈ 43.8 map px.
+export const MARKER_MAP_HEIGHT = 43.8;
+
 // Find the best placement for `shot` (an ImageBitmap of a pasted screenshot)
 // on the reference map. mode: 'map' (zoomed-in screenshot) or 'full' (whole
-// map). Returns { x, y, w, h, score } in full map coordinates for the
-// complete screenshot, or null.
-export function locate(shot, mapImage, mode, onProgress) {
+// map). `hint` = expected map-px per screenshot-px, if known. Returns
+// { x, y, w, h, score, z, ratio } in full map coordinates, or null.
+export function locate(shot, mapImage, mode, onProgress, hint = null) {
   const run = busy.then(async () => {
     const w = await getWorker(mapImage);
     const copy = await createImageBitmap(shot); // transferred; caller keeps `shot`
@@ -47,7 +52,7 @@ export function locate(shot, mapImage, mode, onProgress) {
       };
       const cleanup = () => w.removeEventListener('message', onMsg);
       w.addEventListener('message', onMsg);
-      w.postMessage({ type: 'locate', shot: copy, mode }, [copy]);
+      w.postMessage({ type: 'locate', shot: copy, mode, hint }, [copy]);
     });
   });
   busy = run.catch(() => {});
@@ -101,11 +106,18 @@ export function detectPlayerMarker(shot) {
     const sizeOk = area > 120 && area < 6000 && bh < H * 0.25;
     if (sizeOk && aspectOk && fill > 0.4) {
       if (!bestBlob || area > bestBlob.area) {
-        bestBlob = { area, fx: (sx / area) / W, fy: (sy / area) / H };
+        bestBlob = { area, fx: (sx / area) / W, fy: (sy / area) / H, bh };
       }
     }
   }
-  return bestBlob ? { fx: bestBlob.fx, fy: bestBlob.fy } : null;
+  if (!bestBlob) return null;
+  return {
+    fx: bestBlob.fx,
+    fy: bestBlob.fy,
+    // marker height in ORIGINAL screenshot pixels — the marker is drawn on
+    // the map, so its size reveals the in-game zoom level
+    h: bestBlob.bh / scale,
+  };
 }
 
 // For full-map updates: build an alpha mask of which parts of the screenshot

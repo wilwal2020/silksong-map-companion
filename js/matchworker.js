@@ -179,15 +179,23 @@ function ensureRefs(cv) {
   }
 }
 
+// peak + the correlation map's own statistics: z = (max - mean) / std is
+// comparable ACROSS template scales, unlike raw NCC (small templates peak
+// high by chance, large ones accumulate weight — both misrank)
 function matchAt(cv, ref, tmpl) {
   const result = new cv.Mat();
   cv.matchTemplate(ref, tmpl, result, cv.TM_CCOEFF_NORMED);
   const mm = cv.minMaxLoc(result);
-  result.delete();
-  return { score: mm.maxVal, x: mm.maxLoc.x, y: mm.maxLoc.y };
+  const mean = new cv.Mat(), std = new cv.Mat();
+  cv.meanStdDev(result, mean, std);
+  const z = std.data64F[0] > 1e-6 ? (mm.maxVal - mean.data64F[0]) / std.data64F[0] : 0;
+  mean.delete(); std.delete(); result.delete();
+  return { score: mm.maxVal, x: mm.maxLoc.x, y: mm.maxLoc.y, z };
 }
 
-async function locate(shot, mode) {
+async function locate(shot, mode, hint) {
+  // hint = expected map-px per screenshot-px (from the player marker's size
+  // or a previously confirmed match); collapses the search to position-only
   const cv = await getCV();
   ensureRefs(cv);
 
@@ -235,29 +243,47 @@ async function locate(shot, mode) {
   const aspect = rect.h / rect.w;
 
   // ---- pass 1: coarse multi-scale search over the whole map ----
-  // map mode uses GEOMETRIC spacing: small tightly-cropped snips need tiny
-  // templates, and arithmetic steps are far too coarse at small scales
-  const [lo, hi] = mode === 'full' ? [0.35, 1.05] : [0.05, 0.55];
-  const steps = mode === 'full' ? 13 : 20;
+  // with a scale hint the band is narrow (position search, basically) and
+  // small regions are matched against the high-res reference for detail;
+  // without a hint, a wide geometric sweep over the low-res reference
+  let coarseRef = refMask1;
+  let coarseScale = refScale1;
   const widths = [];
-  for (let i = 0; i < steps; i++) {
-    widths.push(mode === 'full'
-      ? REF_W * (lo + (i / (steps - 1)) * (hi - lo))
-      : REF_W * lo * Math.pow(hi / lo, i / (steps - 1)));
+  let steps;
+  if (hint && mode === 'map') {
+    const croppedMapW = (rect.w / baseW) * shot.width * hint.k; // map px
+    let tw2pred = croppedMapW * refScale2;
+    if (tw2pred <= 480) { coarseRef = refMask2; coarseScale = refScale2; }
+    const pred = croppedMapW * coarseScale;
+    // marker-derived hints are accurate within ~3%; learned-scale hints
+    // less so (the in-game map can be zoomed between sessions)
+    const [blo, bhi] = hint.tight ? [0.93, 1.09] : [0.85, 1.18];
+    steps = hint.tight ? 5 : 7;
+    for (let i = 0; i < steps; i++) {
+      widths.push(pred * blo * Math.pow(bhi / blo, i / (steps - 1)));
+    }
+  } else {
+    const [lo, hi] = mode === 'full' ? [0.35, 1.05] : [0.05, 0.55];
+    steps = mode === 'full' ? 13 : 20;
+    for (let i = 0; i < steps; i++) {
+      widths.push(mode === 'full'
+        ? REF_W * (lo + (i / (steps - 1)) * (hi - lo))
+        : REF_W * lo * Math.pow(hi / lo, i / (steps - 1)));
+    }
   }
 
   let best = null;
   for (let i = 0; i < steps; i++) {
     const tw = Math.round(widths[i]);
     const th = Math.round(tw * aspect);
-    if (tw < 24 || th < 24 || tw >= refMask1.cols || th >= refMask1.rows) {
+    if (tw < 24 || th < 24 || tw >= coarseRef.cols || th >= coarseRef.rows) {
       self.postMessage({ type: 'progress', f: 0.7 * (i + 1) / steps });
       continue;
     }
     const tmpl = scaledTemplate(cv, tmplBase, tw, th);
-    const m = matchAt(cv, refMask1, tmpl);
+    const m = matchAt(cv, coarseRef, tmpl);
     tmpl.delete();
-    if (!best || m.score > best.score) best = { score: m.score, mx: m.x, my: m.y, tw, th };
+    if (!best || m.z > best.z) best = { z: m.z, score: m.score, mx: m.x, my: m.y, tw, th };
     self.postMessage({ type: 'progress', f: 0.7 * (i + 1) / steps });
   }
   if (!best) { tmplBase.delete(); return null; }
@@ -269,7 +295,7 @@ async function locate(shot, mode) {
   {
     const tmpl = scaledTemplate(cv, tmplBase, best.tw, best.th);
     const result = new cv.Mat();
-    cv.matchTemplate(refMask1, tmpl, result, cv.TM_CCOEFF_NORMED);
+    cv.matchTemplate(coarseRef, tmpl, result, cv.TM_CCOEFF_NORMED);
     const mm = cv.minMaxLoc(result);
     const sx = Math.max(0, mm.maxLoc.x - Math.round(best.tw * 0.4));
     const sy = Math.max(0, mm.maxLoc.y - Math.round(best.th * 0.4));
@@ -286,11 +312,15 @@ async function locate(shot, mode) {
   }
 
   // ---- pass 2: refine scale & position at higher resolution ----
-  const up = refScale2 / refScale1;
+  const up = refScale2 / coarseScale;
   const cx2 = (best.mx + best.tw / 2) * up;
   const cy2 = (best.my + best.th / 2) * up;
   let fine = null;
-  const ks = [0.86, 0.89, 0.92, 0.95, 0.975, 1.0, 1.025, 1.05, 1.08, 1.11, 1.145];
+  // with a trusted scale hint the coarse scale is already near-exact — keep
+  // the refinement from drifting away from it
+  const ks = (hint && hint.tight && mode === 'map')
+    ? [0.95, 0.975, 1.0, 1.025, 1.05]
+    : [0.86, 0.89, 0.92, 0.95, 0.975, 1.0, 1.025, 1.05, 1.08, 1.11, 1.145];
   for (let i = 0; i < ks.length; i++) {
     const tw2 = Math.round(best.tw * up * ks[i]);
     const th2 = Math.round(tw2 * aspect);
@@ -307,6 +337,7 @@ async function locate(shot, mode) {
     const tmpl = scaledTemplate(cv, tmplBase, tw2, th2);
     const m = matchAt(cv, roi, tmpl);
     roi.delete(); tmpl.delete();
+    // within the refine window scales are near-identical — raw score is fair
     if (!fine || m.score > fine.score) {
       fine = { score: m.score, mx: x0 + m.x, my: y0 + m.y, tw: tw2 };
     }
@@ -328,7 +359,8 @@ async function locate(shot, mode) {
     w: shot.width * k,
     h: shot.height * k,
     score: pick.score,
-    ratio, // runner-up peak / best peak — lower is more trustworthy
+    z: best.z, // peak height in std-devs of the coarse correlation map
+    ratio,     // runner-up peak / best peak — lower is more trustworthy
   };
 }
 
@@ -340,7 +372,7 @@ self.onmessage = async e => {
       await getCV();
       self.postMessage({ type: 'ready' });
     } else if (msg.type === 'locate') {
-      const rect = await locate(msg.shot, msg.mode);
+      const rect = await locate(msg.shot, msg.mode, msg.hint || null);
       msg.shot.close?.();
       self.postMessage({ type: 'result', rect });
     }
