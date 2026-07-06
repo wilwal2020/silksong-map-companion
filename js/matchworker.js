@@ -507,6 +507,16 @@ async function locate(shot, mode, hint) {
   const aspect = rect.h / rect.w;
   const pad2 = Math.round(Math.min(REF_W2, refBitmap.width) * PAD_FRAC);
 
+  // how much room structure the screenshot actually contains: in an
+  // unexplored (mostly black) area there is essentially none, which is what
+  // lets a confident area-name label stand on its own below
+  let structCount = 0;
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    const row = y * baseW;
+    for (let x = rect.x; x < rect.x + rect.w; x++) if (mask[row + x]) structCount++;
+  }
+  const structFrac = structCount / Math.max(1, rect.w * rect.h);
+
   // ---- pass 0: area-name labels — identity + position + scale in one ----
   // (also the workhorse for full-map screenshots: zoomed-out room outlines
   // are too thin for the mask matcher, but the labels stay readable)
@@ -525,21 +535,45 @@ async function locate(shot, mode, hint) {
       // correct label hits verify at 0.25-0.40 on real screenshots; a wrong
       // one measured 0.14 — require solid room agreement (zoomed-out full
       // maps have thin outlines, so their verification runs weaker)
-      if (fineL && fineL.score >= (mode === 'full' ? 0.12 : 0.18)) {
+      const verified = fineL && fineL.score >= (mode === 'full' ? 0.12 : 0.18);
+
+      // ...but an unexplored area has almost no room structure to verify
+      // against, so trust a confident label on its own there
+      const sparse = structFrac < 0.035;
+
+      if (verified || (sparse && lbl.score >= 0.70)) {
         tmplBase.delete();
-        const cl = rect.x / baseW, ct = rect.y / baseH, cwf = rect.w / baseW;
-        const tt = fineL.tw / (shot.width * cwf);
-        const kk = tt / refScale2;
+        if (verified) {
+          const cl = rect.x / baseW, ct = rect.y / baseH, cwf = rect.w / baseW;
+          const tt = fineL.tw / (shot.width * cwf);
+          const kk = tt / refScale2;
+          return {
+            x: (fineL.mx - pad2) / refScale2 - shot.width * cl * kk,
+            y: (fineL.my - pad2) / refScale2 - shot.height * ct * kk,
+            w: shot.width * kk,
+            h: shot.height * kk,
+            score: fineL.score,
+            z: 99,
+            ratio: 0.4, // a verified label identification is near-certain
+            via: 'label',
+            labelScore: lbl.score,
+          };
+        }
+        // unexplored area: place straight from the label's own geometry.
+        // Auto-apply only when the identification is very strong; otherwise
+        // return it "plausible" so the app asks the user to confirm.
+        const kk = kB * baseW / shot.width; // map px per shot px
         return {
-          x: (fineL.mx - pad2) / refScale2 - shot.width * cl * kk,
-          y: (fineL.my - pad2) / refScale2 - shot.height * ct * kk,
+          x: x0map,
+          y: y0map,
           w: shot.width * kk,
           h: shot.height * kk,
-          score: fineL.score,
+          score: lbl.score,
           z: 99,
-          ratio: 0.4, // a verified label identification is near-certain
+          ratio: lbl.score >= 0.80 ? 0.4 : 0.9,
           via: 'label',
           labelScore: lbl.score,
+          unverified: true,
         };
       }
     }
