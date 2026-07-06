@@ -88,13 +88,12 @@ export class PinManager {
     return this.awaitingId || this.selectedId;
   }
 
-  // pin under the pointer (or with an open sticky card) — a plain paste while
-  // hovering a pin attaches the image straight to it
+  // pin currently under the pointer — a plain paste while hovering a pin
+  // attaches the image straight to it. Only a live hover counts (not a pin
+  // whose card is merely open from an earlier click), so pasting a fresh map
+  // screenshot isn't hijacked by the last pin you looked at.
   pasteTarget() {
     if (this.hoveredId && this.pins.has(this.hoveredId)) return this.hoveredId;
-    if (this._stickyCardPin && this.pins.has(this._stickyCardPin.data.id)) {
-      return this._stickyCardPin.data.id;
-    }
     return null;
   }
 

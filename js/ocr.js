@@ -148,7 +148,7 @@ const median = arr => {
 
 // Locate a screenshot on the map by its area-name label(s).
 // Returns a rect { x, y, w, h, score, z, ratio, via:'ocr' } in map px, or null.
-export async function ocrLocate(shot, { full = false, onStatus } = {}) {
+export async function ocrLocate(shot, { full = false, scaleHint = null, onStatus } = {}) {
   const labels = await loadLabels();
   if (!labels.length) return null;
   if (onStatus) onStatus('Reading the area name…');
@@ -179,10 +179,12 @@ export async function ocrLocate(shot, { full = false, onStatus } = {}) {
   }
   const uniq = [...byLabel.values()];
 
-  // scale k = map px per shot px
-  let k;
+  // scale k = map px per shot px, from the most reliable source available:
+  //   distance between two names  → best when several are visible (full maps)
+  //   player-marker scale hint    → calibrated; best for zoomed-in shots
+  //   glyph-height ratio          → last resort for a lone label
+  let kDist = null;
   if (uniq.length >= 2) {
-    // from the distance between matched labels — robust, resolution-free
     const ks = [];
     for (let i = 0; i < uniq.length; i++) {
       for (let j = i + 1; j < uniq.length; j++) {
@@ -192,15 +194,14 @@ export async function ocrLocate(shot, { full = false, onStatus } = {}) {
         if (shotD > 15) ks.push(mapD / shotD);
       }
     }
-    if (!ks.length) return null;
-    k = median(ks);
-  } else {
-    // single label: fall back to the glyph-height ratio
-    const m = uniq[0];
-    if (!(m.c.h > 0)) return null;
-    k = m.lb.h / m.c.h;
+    if (ks.length) kDist = median(ks);
   }
-  if (!(k > 0) || k < 0.05 || k > 40) return null;
+  const kHeight = uniq[0].c.h > 0 ? uniq[0].lb.h / uniq[0].c.h : null;
+  const hint = scaleHint > 0 ? scaleHint : null;
+  // full maps: prefer inter-name distance (marker is too small to measure);
+  // zoomed shots: prefer the calibrated marker scale
+  const k = full ? (kDist || hint || kHeight) : (hint || kDist || kHeight);
+  if (!(k > 0) || k < 0.03 || k > 60) return null;
 
   // offset = map coord of shot pixel (0,0), consensus across labels
   const oxs = uniq.map(m => m.lb.x - m.c.cx * k);

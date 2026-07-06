@@ -230,13 +230,12 @@ function openPinEditor(data, isNew) {
 
 // ------------------------------------------------------------- paste flows
 
-function applyMapPlacement(bitmap, rect, marker) {
-  // Lock scale to the first paste: force this screenshot to the exact same
-  // map-px-per-screenshot-px as everything before it (keeping the matched
-  // centre), so overlapping pastes differ only by translation and line up
-  // cleanly. Per-image scale wobble from reference matching was the cause of
-  // the misalignment.
-  if (learnedScale) {
+async function applyMapPlacement(bitmap, rect, marker) {
+  const fromOcr = rect.via === 'ocr';
+  // Shape-matched pastes lock to the first paste's scale so overlapping shots
+  // line up by translation. OCR placements already carry an accurate scale
+  // (marker- or distance-derived), so we trust them as-is.
+  if (learnedScale && !fromOcr) {
     const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
     const nw = bitmap.width * learnedScale, nh = bitmap.height * learnedScale;
     rect = { ...rect, x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
@@ -246,8 +245,8 @@ function applyMapPlacement(bitmap, rect, marker) {
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
 
-  // the first paste defines the locked scale for every following paste
-  if (!learnedScale) {
+  // a shape-matched first paste defines the locked scale for later ones
+  if (!learnedScale && !fromOcr) {
     learnedScale = rect.w / bitmap.width;
     store.putMeta('scale', learnedScale);
   }
@@ -262,24 +261,26 @@ function applyMapPlacement(bitmap, rect, marker) {
   lastUndo.pinId = data.id;
   pins.add(data, { select: true });
   persistPin(data);
-  pins.setAwaiting(data.id);
-  newPinPending = data;
-
   view.centerOn(data.x, data.y, Math.min(1, (window.innerWidth * 0.6) / rect.w));
-  showAwaitDialog('Step 2 — screenshot the area itself',
-    (marker
-      ? 'Map revealed and pin placed at your position. '
-      : 'Map revealed and pin added — drag it onto your exact spot afterwards. ')
-    + 'Now go back to the game, screenshot what\'s actually there, and paste it with <span class="kbd">Ctrl+V</span>. This dialog waits for your paste. (<span class="kbd">Ctrl+Z</span> afterwards undoes everything.)',
-    'Skip this step');
+
+  // pick a type right away; the area picture is added later by hovering the
+  // pin and pasting (so pasting another map screenshot isn't intercepted)
+  const edit = await openPinEditor(data, true);
+  if (edit) {
+    data.cat = edit.cat;
+    data.note = edit.note;
+    pins.update(data);
+    persistPin(data);
+  }
+  toast('Pin added — hover it and paste a picture to attach one.', 'ok');
 }
 
 // Read the area name(s) first — reliable even when the surrounding area is
 // unexplored (black). Returns a plausible rect or null (then we shape-match).
-async function tryOcr(bitmap, full) {
+async function tryOcr(bitmap, full, scaleHint) {
   try {
     spinner(true, 'Reading the area name…');
-    const r = await ocrLocate(bitmap, { full, onStatus: m => spinner(true, m) });
+    const r = await ocrLocate(bitmap, { full, scaleHint, onStatus: m => spinner(true, m) });
     if (r) console.log('[silksong-map] OCR match:', r.names, r);
     return (r && plausible(r)) ? r : null;
   } catch (e) {
@@ -291,8 +292,9 @@ async function tryOcr(bitmap, full) {
 async function handleMapScreenshot(blob) {
   const bitmap = await createImageBitmap(blob);
   const marker = detectPlayerMarker(bitmap);
+  const markerScale = marker ? MARKER_MAP_HEIGHT / marker.h : null;
 
-  let rect = await tryOcr(bitmap, false);
+  let rect = await tryOcr(bitmap, false, markerScale);
 
   if (!rect) {
     // fall back to shape matching. Every screenshot is at the same in-game
@@ -396,10 +398,11 @@ async function handleEnvScreenshot(blob) {
 async function handleFullMap(blob) {
   const bitmap = await createImageBitmap(blob);
   const marker = detectPlayerMarker(bitmap);
+  const markerScale = marker ? MARKER_MAP_HEIGHT / marker.h : null;
 
   // read area names first — a big zoomed-out map has several, which pins the
   // scale from the distances between them (no per-paste drift)
-  let rect = await tryOcr(bitmap, true);
+  let rect = await tryOcr(bitmap, true, markerScale);
 
   if (!rect) {
     spinner(true, 'Aligning your map…');
@@ -454,6 +457,8 @@ function routePaste(blob) {
     toast('Answer the yes/no check first.', 'error');
     return;
   }
+  // don't intercept pastes while choosing a pin type / editing a custom type
+  if (document.querySelector('#dlg-pin[open], #dlg-cattype[open]')) return;
   // a pin is waiting for its area screenshot → attach without asking
   if (pins.awaitingId) {
     attachToAwaiting(blob);
