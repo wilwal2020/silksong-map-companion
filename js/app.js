@@ -158,6 +158,7 @@ $('#btn-confirm-cancel').addEventListener('click', () => endConfirm(false));
 // ---------------------------------------------------------------- keyboard
 
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && placing) { stopPlacing(); return; }
   if (confirmActive && !document.querySelector('dialog[open]')) {
     if (e.key === 'Enter') { endConfirm(true); return; }
     if (e.key === 'Escape') { endConfirm(false); return; }
@@ -539,6 +540,17 @@ function updateCatCounts() {
   }
 }
 
+// reflect the filter set into a row's checkbox + dimmed state
+function syncRow(row) {
+  const on = pins.filter.has(row.dataset.id);
+  row.classList.toggle('off', !on);
+  const cb = row.querySelector('.cat-check');
+  if (cb) cb.checked = on;
+}
+function syncAllRows() {
+  for (const row of $('#cat-list').children) syncRow(row);
+}
+
 function renderCatList() {
   const list = $('#cat-list');
   list.innerHTML = '';
@@ -548,21 +560,25 @@ function renderCatList() {
     row.dataset.id = c.id;
     row.style.setProperty('--pc', c.color || '#9e2b25');
     row.innerHTML =
+      `<input type="checkbox" class="cat-check" title="Show / hide this type"${pins.filter.has(c.id) ? ' checked' : ''}>` +
       `<span class="cat-grip" title="Drag to reorder">⋮⋮</span>` +
       `<span class="cat-ico">${c.icon}</span>` +
       `<span class="cat-name">${c.label}</span>` +
-      `<span class="cat-count"></span>` +
-      `<button class="cat-solo" title="Show only this type">◎</button>`;
+      `<span class="cat-count"></span>`;
 
-    row.addEventListener('click', e => {
-      if (e.target.closest('.cat-solo, .cat-grip, .cat-del')) return;
-      if (pins.filter.has(c.id)) pins.filter.delete(c.id);
-      else pins.filter.add(c.id);
-      row.classList.toggle('off', !pins.filter.has(c.id));
+    // checkbox toggles visibility for just this type
+    row.querySelector('.cat-check').addEventListener('change', e => {
+      e.stopPropagation();
+      if (e.target.checked) pins.filter.add(c.id);
+      else pins.filter.delete(c.id);
+      row.classList.toggle('off', !e.target.checked);
       pins.applyFilter();
     });
-    row.querySelector('.cat-solo').addEventListener('click', e => {
-      e.stopPropagation();
+
+    // clicking the row shows ONLY this type
+    row.addEventListener('click', e => {
+      if (e.target.closest('.cat-check, .cat-grip, .cat-del')) return;
+      if (row._suppressClick) return;
       soloCategory(c.id);
     });
 
@@ -581,26 +597,26 @@ function renderCatList() {
   updateCatCounts();
 }
 
-// show only one type; clicking solo again restores all
+// show only one type
 function soloCategory(id) {
-  const already = pins.filter.size === 1 && pins.filter.has(id);
   pins.filter.clear();
-  if (already) for (const c of categories()) pins.filter.add(c.id);
-  else pins.filter.add(id);
+  pins.filter.add(id);
   pins.applyFilter();
-  for (const row of $('#cat-list').children) {
-    row.classList.toggle('off', !pins.filter.has(row.dataset.id));
-  }
+  syncAllRows();
 }
 
 function wireCatDrag(row) {
   const grip = row.querySelector('.cat-grip');
   grip.addEventListener('pointerdown', e => {
     e.preventDefault();
+    e.stopPropagation();
     const list = $('#cat-list');
-    row.classList.add('dragging');
-    grip.setPointerCapture(e.pointerId);
+    const startY = e.clientY;
+    let dragging = false;
     const onMove = ev => {
+      if (!dragging && Math.abs(ev.clientY - startY) < 4) return;
+      dragging = true;
+      row.classList.add('dragging');
       const others = [...list.querySelectorAll('.cat-row:not(.dragging)')];
       const after = others.find(r => {
         const box = r.getBoundingClientRect();
@@ -610,15 +626,18 @@ function wireCatDrag(row) {
       else list.appendChild(row);
     };
     const onUp = () => {
-      grip.releasePointerCapture(e.pointerId);
-      grip.removeEventListener('pointermove', onMove);
-      grip.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      if (!dragging) return;
       row.classList.remove('dragging');
       setOrder([...list.querySelectorAll('.cat-row')].map(r => r.dataset.id));
       persistCats();
+      // swallow the click that fires right after a drag
+      row._suppressClick = true;
+      setTimeout(() => { row._suppressClick = false; }, 0);
     };
-    grip.addEventListener('pointermove', onMove);
-    grip.addEventListener('pointerup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   });
 }
 
@@ -663,6 +682,101 @@ async function deleteCustomType(id) {
   renderCatList();
 }
 
+// ------------------------------------------------- manual pin placement
+
+let placing = false;
+let ghostPin = null;
+
+function onPlacingMove(e) {
+  if (ghostPin) ghostPin.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+}
+
+function onPlacingClick(e) {
+  // clicks on chrome (toolbar, sidebar, dialogs, sliders) don't place a pin
+  if (e.target.closest('#toolbar, #cat-bar, #map-opacity, dialog, .toast, #confirm-bar')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const m = view.screenToMap(e.clientX, e.clientY);
+  stopPlacing();
+  createManualPin(m.x, m.y);
+}
+
+function startPlacing() {
+  if (placing) return;
+  placing = true;
+  ghostPin = document.createElement('div');
+  ghostPin.className = 'pin ghost-pin';
+  ghostPin.style.setProperty('--pc', '#e0c37e');
+  ghostPin.innerHTML = '<span class="pin-ico">📍</span>';
+  document.body.appendChild(ghostPin);
+  document.addEventListener('pointermove', onPlacingMove);
+  // capture so the map's own handlers don't also react to the placing click
+  document.addEventListener('click', onPlacingClick, true);
+  document.body.classList.add('placing-mode');
+  $('#btn-add-pin').classList.add('active');
+  toast('Click the spot on the map to drop your pin. Esc to cancel.');
+}
+
+function stopPlacing() {
+  if (!placing) return;
+  placing = false;
+  document.removeEventListener('pointermove', onPlacingMove);
+  document.removeEventListener('click', onPlacingClick, true);
+  if (ghostPin) { ghostPin.remove(); ghostPin = null; }
+  document.body.classList.remove('placing-mode');
+  $('#btn-add-pin').classList.remove('active');
+}
+
+async function createManualPin(x, y) {
+  const data = {
+    id: crypto.randomUUID(),
+    x, y, cat: 'other', note: '', done: false, img: null,
+    created: Date.now(),
+  };
+  pins.add(data, { select: true });
+  persistPin(data);
+  const edit = await openPinEditor(data, true);
+  if (edit) {
+    data.cat = edit.cat;
+    data.note = edit.note;
+    pins.update(data);
+    persistPin(data);
+  }
+}
+
+// ------------------------------------------------- sidebar resize / opacity
+
+function wireSidebarResize() {
+  const bar = $('#cat-bar');
+  const handle = $('#cat-bar-resize');
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const startX = e.clientX, startW = bar.offsetWidth;
+    const onMove = ev => {
+      const w = Math.max(176, Math.min(560, startW + (ev.clientX - startX)));
+      bar.style.width = w + 'px';
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      store.putMeta('catBarWidth', bar.offsetWidth);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  });
+}
+
+function applyMapOpacity(pct) {
+  $('#map-canvas').style.opacity = pct / 100;
+  $('.op-val').textContent = pct + '%';
+}
+
+function wireOpacitySlider() {
+  const range = $('#opacity-range');
+  range.addEventListener('input', () => applyMapOpacity(+range.value));
+  range.addEventListener('change', () => store.putMeta('mapOpacity', +range.value));
+}
+
 // ----------------------------------------------------------------- toolbar
 
 function buildToolbar() {
@@ -670,8 +784,11 @@ function buildToolbar() {
   $('#btn-cat-all').addEventListener('click', () => {
     for (const c of categories()) pins.filter.add(c.id);
     pins.applyFilter();
-    for (const row of $('#cat-list').children) row.classList.remove('off');
+    syncAllRows();
   });
+  $('#btn-add-pin').addEventListener('click', () => placing ? stopPlacing() : startPlacing());
+  wireSidebarResize();
+  wireOpacitySlider();
   $('#btn-cat-new').addEventListener('click', openCatTypeDialog);
   $('#btn-cattype-save').addEventListener('click', saveCatType);
   $('#btn-cattype-cancel').addEventListener('click', () => $('#dlg-cattype').close());
@@ -759,6 +876,12 @@ async function init() {
   }
   for (const p of await store.getAllPins()) pins.add(p);
   pins.applyFilter();
+
+  // restore sidebar width + map opacity
+  const savedW = await store.getMeta('catBarWidth');
+  if (savedW) $('#cat-bar').style.width = savedW + 'px';
+  const savedOpacity = await store.getMeta('mapOpacity');
+  if (savedOpacity != null) { $('#opacity-range').value = savedOpacity; applyMapOpacity(savedOpacity); }
 
   buildToolbar();
 

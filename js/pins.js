@@ -153,7 +153,7 @@ export class PinManager {
         if (entry.card && !entry.card.matches(':hover') && this._stickyCard !== entry.card) {
           this._hideCard(entry);
         }
-      }, 120);
+      }, 240);
     });
   }
 
@@ -224,7 +224,7 @@ export class PinManager {
     const card = entry.card;
     if (!card) return;
     const w = card.offsetWidth || 320, margin = 12;
-    let x = p.x + 24, y = p.y - 20;
+    let x = p.x + 18, y = p.y - 20;
     if (x + w + margin > window.innerWidth) x = p.x - w - 24;
     x = Math.max(margin, x);
     y = Math.max(60, Math.min(y, window.innerHeight - card.offsetHeight - margin));

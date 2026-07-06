@@ -148,6 +148,10 @@ html, body {
   padding: 10px; pointer-events: auto;
   display: flex; flex-direction: column; gap: 8px;
 }
+/* invisible margin so a slight overshoot still counts as hovering the card */
+.pin-card::before {
+  content: ""; position: absolute; inset: -20px; z-index: -1;
+}
 .pin-card img.env {
   width: 100%; border-radius: 6px; display: block;
   max-height: 62vh; object-fit: contain; background: #000; cursor: zoom-in;
@@ -313,39 +317,84 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   transition: background .12s, opacity .12s, border-color .12s;
 }
 .cat-row:hover { background: var(--panel-2); border-color: var(--border); }
-.cat-row.off { opacity: .4; box-shadow: inset 3px 0 0 #3a4150; }
+.cat-row.off { opacity: .5; box-shadow: inset 3px 0 0 #3a4150; }
 .cat-row.dragging { opacity: .9; border-color: var(--pc, var(--accent)); background: var(--panel-2); }
 
+.cat-check {
+  width: 17px; height: 17px; flex: none; cursor: pointer; margin: 0;
+  accent-color: var(--pc, var(--accent));
+}
 .cat-grip {
-  color: var(--text-dim); font-size: .8rem; line-height: 1; letter-spacing: -2px;
-  cursor: grab; padding: 0 2px; user-select: none; touch-action: none;
+  color: var(--text-dim); font-size: .85rem; line-height: 1; letter-spacing: -2px;
+  cursor: grab; padding: 0 1px; user-select: none; touch-action: none;
 }
 .cat-grip:active { cursor: grabbing; }
-.cat-ico { font-size: 1.15rem; line-height: 1; width: 22px; text-align: center; filter: drop-shadow(0 0 4px var(--pc, transparent)); }
-.cat-name { flex: 1; font-size: .86rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-ico { font-size: 1.2rem; line-height: 1; width: 24px; text-align: center; filter: drop-shadow(0 0 4px var(--pc, transparent)); }
+.cat-name { flex: 1; font-size: .88rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-count {
-  font-size: .72rem; color: var(--text-dim); min-width: 16px; text-align: center;
+  font-size: .72rem; color: var(--text-dim); min-width: 16px; text-align: center; flex: none;
 }
 .cat-count:not(:empty) {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px;
 }
-.cat-solo, .cat-del {
-  background: transparent; border: 1px solid transparent; border-radius: 6px;
-  color: var(--text-dim); cursor: pointer; font-size: .9rem; line-height: 1;
-  padding: 3px 5px; opacity: 0; transition: opacity .12s, color .12s, border-color .12s;
+.cat-del {
+  flex: none; background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text-dim); cursor: pointer; font-size: .95rem; line-height: 1;
+  padding: 4px 6px; opacity: 0; transition: opacity .12s, color .12s, border-color .12s;
 }
-.cat-row:hover .cat-solo, .cat-row:hover .cat-del { opacity: 1; }
-.cat-solo:hover { color: var(--pc, var(--accent)); border-color: var(--border-strong); }
+.cat-row:hover .cat-del { opacity: 1; }
 .cat-del:hover { color: var(--rose); border-color: #43272a; }
 
 .cat-bar-hint {
   margin: 0; padding: 9px 12px; font-size: .72rem; line-height: 1.5;
   color: var(--text-dim); border-top: 1px solid var(--border);
 }
-.cat-bar-hint .solo-glyph, .cat-bar-hint .grip-glyph { color: var(--text); }
+.cat-bar-hint b { color: var(--rose); font-weight: 500; }
+.cat-bar-hint .grip-glyph { color: var(--text); }
+
+/* drag-to-resize handle on the sidebar's inner edge */
+#cat-bar-resize {
+  position: absolute; top: 0; bottom: 0; right: -3px; width: 8px;
+  cursor: ew-resize; z-index: 21;
+}
+#cat-bar-resize:hover { background: linear-gradient(90deg, transparent, var(--accent-soft)); }
 
 /* keep the paste hint clear of the sidebar */
 #paste-hint, #confirm-bar { margin-left: 116px; }
+
+/* ---------- add-pin button + placement ---------- */
+
+.add-pin {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; align-items: center; gap: 7px;
+  background: var(--panel-2); color: var(--text); font: inherit; font-size: .85rem;
+  border: 1px solid var(--border-strong); border-radius: 7px; padding: 6px 14px; cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.add-pin:hover { background: #232b3d; border-color: var(--accent); }
+.add-pin .add-pin-ico { font-size: 1rem; line-height: 1; }
+.add-pin.active { background: var(--accent-soft); border-color: var(--accent); color: var(--rose); }
+
+body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important; }
+.ghost-pin { z-index: 45; pointer-events: none; opacity: .9; }
+.ghost-pin .pin-ico { animation: ghost-pulse 1.1s ease-in-out infinite; }
+@keyframes ghost-pulse { 50% { transform: scale(1.12); } }
+
+/* ---------- vertical map-opacity slider (right) ---------- */
+
+#map-opacity {
+  position: fixed; right: 12px; top: 50%; transform: translateY(-50%); z-index: 20;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  background: linear-gradient(to left, rgba(9,10,13,.9), rgba(9,10,13,.72));
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 8px;
+}
+#map-opacity .op-ico { font-size: 1rem; line-height: 1; }
+#map-opacity .op-val { font-size: .7rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+#opacity-range {
+  writing-mode: vertical-lr; direction: rtl;
+  -webkit-appearance: slider-vertical; appearance: slider-vertical;
+  width: 6px; height: 180px; accent-color: var(--accent); cursor: pointer;
+}
 
 /* ---------- new-type dialog ---------- */
 
