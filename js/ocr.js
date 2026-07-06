@@ -77,26 +77,26 @@ function dice(a, b) {
   return (2 * inter) / (ga.size + gb.size);
 }
 
-// how well a screenshot label string matches a reference area name
-function matchScore(candNorm, labelName) {
-  const ln = norm(labelName);
-  if (!candNorm || candNorm.length < 3) return 0;
-  if (candNorm === ln) return 1;
-  // a distinctive whole word contained on either side is a strong signal
-  const stop = new Set(['the', 'of', 'and']);
-  const candTokens = candNorm.match(/[a-z]{3,}/g) || [candNorm];
-  const labelTokens = ln.match(/[a-z]{3,}/g) || [ln];
-  for (const ct of candTokens) {
-    if (ct.length < 4 || stop.has(ct)) continue;
-    for (const lt of labelTokens) {
-      if (lt.length < 4 || stop.has(lt)) continue;
-      if (ct === lt || (ct.length >= 5 && lt.includes(ct)) || (lt.length >= 5 && ct.includes(lt))) {
-        return 0.9;
-      }
-    }
+const STOP = new Set(['the', 'of', 'and', 'a', 'to']);
+function words(s) { return ((s || '').toLowerCase().match(/[a-z]{2,}/g) || []).filter(w => !STOP.has(w)); }
+
+// how well a screenshot label string matches a reference area name, comparing
+// word by word (so "Rest" matches "Pilgrim's Rest", "Fields" matches "Far
+// Fields", etc.)
+function matchScore(candText, labelName) {
+  const cw = words(candText), lw = words(labelName);
+  if (!cw.length || !lw.length) return 0;
+  if (cw.join('') === lw.join('')) return 1; // exact, ignoring spaces/stopwords
+  let matched = 0, strong = false;
+  for (const l of lw) {
+    const hit = cw.some(c =>
+      (c === l && l.length >= 3) ||
+      (c.length >= 4 && l.length >= 4 && (c.includes(l) || l.includes(c))));
+    if (hit) { matched++; if (l.length >= 5) strong = true; }
   }
-  if (ln.length >= 5 && candNorm.length >= 5 && (ln.includes(candNorm) || candNorm.includes(ln))) return 0.85;
-  return dice(candNorm, ln);
+  if (!matched) return dice(cw.join(''), lw.join(''));
+  const frac = matched / lw.length;          // share of the label's words seen
+  return Math.max(strong ? 0.85 : 0, 0.55 + 0.45 * frac);
 }
 
 // OCR the shot and return candidate name lines in SHOT pixels
@@ -159,10 +159,9 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
   // best reference label for each candidate line
   const matches = [];
   for (const c of cands) {
-    const cn = norm(c.text);
     let best = null;
     for (const lb of labels) {
-      const s = matchScore(cn, lb.name);
+      const s = matchScore(c.text, lb.name);
       if (!best || s > best.s) best = { s, lb };
     }
     if (best && best.s >= 0.62) {

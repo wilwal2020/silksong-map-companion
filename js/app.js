@@ -472,31 +472,16 @@ function routePaste(blob) {
   }
   // don't intercept pastes while choosing a pin type / editing a custom type
   if (document.querySelector('#dlg-pin[open], #dlg-cattype[open]')) return;
-  // a pin is waiting for its area screenshot → attach without asking
-  if (pins.awaitingId) {
+  // only a pin explicitly waiting for its picture (its 📷 button) takes a
+  // paste directly — everything else goes through the chooser, so pasting a
+  // map screenshot is never silently swallowed as a pin's area image
+  if (pins.awaitingId && $('#dlg-await').open) {
     attachToAwaiting(blob);
-    return;
-  }
-  // hovering a pin → attach the picture straight to it, no menu
-  const hover = pins.pasteTarget();
-  if (hover) {
-    attachEnvToPin(hover, blob);
     return;
   }
   currentPaste = { blob, url: URL.createObjectURL(blob) };
   $('#paste-preview').src = currentPaste.url;
   $('#dlg-paste').showModal();
-}
-
-// attach an area screenshot to a specific pin (used by hover-to-paste)
-function attachEnvToPin(id, blob) {
-  const entry = pins.pins.get(id);
-  if (!entry) return;
-  entry.data.img = blob;
-  pins.update(entry.data);
-  persistPin(entry.data);
-  pins.setAwaiting(null);
-  toast('Screenshot attached — hover the pin to see it.', 'ok');
 }
 
 // wired once at startup

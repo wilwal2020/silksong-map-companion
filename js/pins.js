@@ -274,7 +274,7 @@ export class PinManager {
     } else {
       const no = document.createElement('div');
       no.className = 'no-env';
-      no.textContent = 'No area screenshot yet — hover here and paste one (Ctrl+V).';
+      no.textContent = 'No area screenshot yet — click 📷 below, then paste one.';
       card.appendChild(no);
     }
 
