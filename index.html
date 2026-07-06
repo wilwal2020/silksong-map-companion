@@ -14,8 +14,6 @@
 <header id="toolbar">
   <h1>Silksong <span>Map Companion</span></h1>
 
-  <div id="filters" title="Filter pins by category"></div>
-
   <div class="toolbar-right">
     <label class="toggle" title="Show pins you've already checked off">
       <input type="checkbox" id="show-done" checked> show done
@@ -26,6 +24,16 @@
     <button id="btn-reset" class="btn danger" title="Erase all revealed map and pins">Reset</button>
   </div>
 </header>
+
+<aside id="cat-bar">
+  <div class="cat-bar-head">
+    <span class="cat-bar-title">Pin types</span>
+    <button id="btn-cat-all" class="mini" title="Show every type again">All</button>
+    <button id="btn-cat-new" class="mini primary" title="Create your own pin type">+ New</button>
+  </div>
+  <div id="cat-list"></div>
+  <p class="cat-bar-hint">Click a type to show/hide it · <span class="solo-glyph">◎</span> shows only that type · drag <span class="grip-glyph">⋮⋮</span> to reorder</p>
+</aside>
 
 <main id="stage">
   <canvas id="map-canvas"></canvas>
@@ -78,6 +86,29 @@
   <div class="dlg-actions">
     <button id="btn-pin-save" class="btn primary">Save</button>
     <button id="btn-pin-cancel" class="btn">Cancel</button>
+  </div>
+</dialog>
+
+<!-- create a custom pin type -->
+<dialog id="dlg-cattype">
+  <h2>New pin type</h2>
+  <div class="cattype-grid">
+    <label class="cattype-field">
+      <span>Icon</span>
+      <input id="cattype-icon" type="text" maxlength="4" placeholder="📌" autocomplete="off">
+    </label>
+    <label class="cattype-field">
+      <span>Colour</span>
+      <input id="cattype-color" type="color" value="#e0c37e">
+    </label>
+    <label class="cattype-field grow">
+      <span>Name</span>
+      <input id="cattype-label" type="text" maxlength="28" placeholder="e.g. Secret passage" autocomplete="off">
+    </label>
+  </div>
+  <div class="dlg-actions">
+    <button id="btn-cattype-save" class="btn primary">Create type</button>
+    <button id="btn-cattype-cancel" class="btn">Cancel</button>
   </div>
 </dialog>
 

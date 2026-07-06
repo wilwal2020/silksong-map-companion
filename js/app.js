@@ -2,7 +2,11 @@ import { Explored } from './explored.js';
 import { MapView } from './mapview.js';
 import { store } from './store.js';
 import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT } from './match.js';
-import { PinManager, CATEGORIES, catById } from './pins.js';
+import { PinManager } from './pins.js';
+import {
+  categories, catById, customCategories, currentOrder, isCustom,
+  setCustomCategories, addCustomCategory, removeCustomCategory, setOrder,
+} from './categories.js';
 
 const $ = s => document.querySelector(s);
 
@@ -175,10 +179,11 @@ function openPinEditor(data, isNew) {
   const cats = $('#pin-cats');
   cats.innerHTML = '';
   let selected = data.cat || 'other';
-  for (const c of CATEGORIES) {
+  for (const c of categories()) {
     const b = document.createElement('button');
     b.className = 'cat-btn' + (c.id === selected ? ' on' : '');
-    b.innerHTML = `<span>${c.icon}</span><span>${c.label}</span>`;
+    b.style.setProperty('--pc', c.color || '#9e2b25');
+    b.innerHTML = `<span class="cb-ico">${c.icon}</span><span>${c.label}</span>`;
     b.addEventListener('click', () => {
       selected = c.id;
       cats.querySelectorAll('.cat-btn').forEach(x => x.classList.remove('on'));
@@ -469,6 +474,8 @@ async function exportAll() {
     version: 1,
     exported: new Date().toISOString(),
     fog: await blobToDataURL(await explored.toBlob()),
+    customCats: customCategories(),
+    catOrder: currentOrder(),
     pins: await Promise.all(allPins.map(async p => ({
       ...p,
       img: p.img ? await blobToDataURL(p.img) : null,
@@ -498,32 +505,178 @@ async function importAll(file) {
   pins.removeAll();
   explored.clear();
   if (data.fog) await explored.loadFromBlob(await dataURLToBlob(data.fog));
+
+  setCustomCategories(data.customCats || []);
+  setOrder(data.catOrder || []);
+  await persistCats();
+  for (const c of categories()) pins.filter.add(c.id);
+
   for (const p of data.pins || []) {
     const pin = { ...p, img: p.img ? await dataURLToBlob(p.img) : null };
     await store.putPin(pin);
     pins.add(pin);
   }
+  renderCatList();
   pins.applyFilter();
   toast(`Imported ${data.pins?.length ?? 0} pins.`, 'ok');
+}
+
+// ------------------------------------------------------------- category bar
+
+function persistCats() {
+  return Promise.all([
+    store.putMeta('customCats', customCategories()),
+    store.putMeta('catOrder', currentOrder()),
+  ]);
+}
+
+function updateCatCounts() {
+  const counts = {};
+  for (const e of pins.pins.values()) counts[e.data.cat] = (counts[e.data.cat] || 0) + 1;
+  for (const row of $('#cat-list').children) {
+    const n = counts[row.dataset.id] || 0;
+    row.querySelector('.cat-count').textContent = n || '';
+  }
+}
+
+function renderCatList() {
+  const list = $('#cat-list');
+  list.innerHTML = '';
+  for (const c of categories()) {
+    const row = document.createElement('div');
+    row.className = 'cat-row' + (pins.filter.has(c.id) ? '' : ' off');
+    row.dataset.id = c.id;
+    row.style.setProperty('--pc', c.color || '#9e2b25');
+    row.innerHTML =
+      `<span class="cat-grip" title="Drag to reorder">⋮⋮</span>` +
+      `<span class="cat-ico">${c.icon}</span>` +
+      `<span class="cat-name">${c.label}</span>` +
+      `<span class="cat-count"></span>` +
+      `<button class="cat-solo" title="Show only this type">◎</button>`;
+
+    row.addEventListener('click', e => {
+      if (e.target.closest('.cat-solo, .cat-grip, .cat-del')) return;
+      if (pins.filter.has(c.id)) pins.filter.delete(c.id);
+      else pins.filter.add(c.id);
+      row.classList.toggle('off', !pins.filter.has(c.id));
+      pins.applyFilter();
+    });
+    row.querySelector('.cat-solo').addEventListener('click', e => {
+      e.stopPropagation();
+      soloCategory(c.id);
+    });
+
+    if (isCustom(c.id)) {
+      const del = document.createElement('button');
+      del.className = 'cat-del';
+      del.textContent = '🗑';
+      del.title = 'Delete this custom type';
+      del.addEventListener('click', e => { e.stopPropagation(); deleteCustomType(c.id); });
+      row.appendChild(del);
+    }
+
+    wireCatDrag(row);
+    list.appendChild(row);
+  }
+  updateCatCounts();
+}
+
+// show only one type; clicking solo again restores all
+function soloCategory(id) {
+  const already = pins.filter.size === 1 && pins.filter.has(id);
+  pins.filter.clear();
+  if (already) for (const c of categories()) pins.filter.add(c.id);
+  else pins.filter.add(id);
+  pins.applyFilter();
+  for (const row of $('#cat-list').children) {
+    row.classList.toggle('off', !pins.filter.has(row.dataset.id));
+  }
+}
+
+function wireCatDrag(row) {
+  const grip = row.querySelector('.cat-grip');
+  grip.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const list = $('#cat-list');
+    row.classList.add('dragging');
+    grip.setPointerCapture(e.pointerId);
+    const onMove = ev => {
+      const others = [...list.querySelectorAll('.cat-row:not(.dragging)')];
+      const after = others.find(r => {
+        const box = r.getBoundingClientRect();
+        return ev.clientY < box.top + box.height / 2;
+      });
+      if (after) list.insertBefore(row, after);
+      else list.appendChild(row);
+    };
+    const onUp = () => {
+      grip.releasePointerCapture(e.pointerId);
+      grip.removeEventListener('pointermove', onMove);
+      grip.removeEventListener('pointerup', onUp);
+      row.classList.remove('dragging');
+      setOrder([...list.querySelectorAll('.cat-row')].map(r => r.dataset.id));
+      persistCats();
+    };
+    grip.addEventListener('pointermove', onMove);
+    grip.addEventListener('pointerup', onUp);
+  });
+}
+
+function openCatTypeDialog() {
+  $('#cattype-icon').value = '';
+  $('#cattype-label').value = '';
+  $('#cattype-color').value = '#e0c37e';
+  $('#dlg-cattype').showModal();
+  $('#cattype-label').focus();
+}
+
+function saveCatType() {
+  const label = $('#cattype-label').value.trim();
+  if (!label) { $('#cattype-label').focus(); return; }
+  const cat = {
+    id: 'c_' + crypto.randomUUID().slice(0, 8),
+    icon: $('#cattype-icon').value.trim() || '📌',
+    label,
+    color: $('#cattype-color').value,
+  };
+  addCustomCategory(cat);
+  pins.filter.add(cat.id);
+  persistCats();
+  $('#dlg-cattype').close();
+  renderCatList();
+  toast('New pin type added.', 'ok');
+}
+
+async function deleteCustomType(id) {
+  if (!confirm('Delete this custom type? Any pins using it become “Other”.')) return;
+  for (const e of [...pins.pins.values()]) {
+    if (e.data.cat === id) {
+      e.data.cat = 'other';
+      pins.update(e.data);
+      persistPin(e.data);
+    }
+  }
+  removeCustomCategory(id);
+  pins.filter.delete(id);
+  pins.filter.add('other');
+  await persistCats();
+  renderCatList();
 }
 
 // ----------------------------------------------------------------- toolbar
 
 function buildToolbar() {
-  const filters = $('#filters');
-  for (const c of CATEGORIES) {
-    const chip = document.createElement('span');
-    chip.className = 'chip on';
-    chip.textContent = c.icon;
-    chip.title = c.label;
-    chip.addEventListener('click', () => {
-      chip.classList.toggle('on');
-      if (chip.classList.contains('on')) pins.filter.add(c.id);
-      else pins.filter.delete(c.id);
-      pins.applyFilter();
-    });
-    filters.appendChild(chip);
-  }
+  renderCatList();
+  $('#btn-cat-all').addEventListener('click', () => {
+    for (const c of categories()) pins.filter.add(c.id);
+    pins.applyFilter();
+    for (const row of $('#cat-list').children) row.classList.remove('off');
+  });
+  $('#btn-cat-new').addEventListener('click', openCatTypeDialog);
+  $('#btn-cattype-save').addEventListener('click', saveCatType);
+  $('#btn-cattype-cancel').addEventListener('click', () => $('#dlg-cattype').close());
+  $('#dlg-cattype').addEventListener('cancel', e => { e.preventDefault(); $('#dlg-cattype').close(); });
+  $('#cattype-label').addEventListener('keydown', e => { if (e.key === 'Enter') saveCatType(); });
 
   $('#show-done').addEventListener('change', e => {
     pins.showDone = e.target.checked;
@@ -546,6 +699,10 @@ function buildToolbar() {
     await store.clearMeta();
     pins.removeAll();
     explored.clear();
+    setCustomCategories([]);
+    setOrder([]);
+    pins.filter = new Set(categories().map(c => c.id));
+    renderCatList();
     toast('Everything reset.');
   });
 }
@@ -557,9 +714,14 @@ async function init() {
   explored = new Explored(mapImage.width, mapImage.height);
   view = new MapView($('#map-canvas'), mapImage, explored);
 
+  // category config must be loaded before the filter set is built
+  setCustomCategories((await store.getMeta('customCats')) || []);
+  setOrder((await store.getMeta('catOrder')) || []);
+
   pins = new PinManager($('#pin-layer'), view, {
     onChange: persistPin,
     onLightbox: showLightbox,
+    onPinsChanged: () => updateCatCounts(),
     onRequestAttach: data => {
       pins.setAwaiting(data.id);
       showAwaitDialog('Paste the screenshot for this pin',

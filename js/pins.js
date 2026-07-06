@@ -1,29 +1,19 @@
 // Pin management: DOM markers over the map canvas, hover cards with the
-// attached environment screenshot, dragging, filtering.
+// attached environment screenshot, dragging (with a confirm step), filtering.
 
-export const CATEGORIES = [
-  { id: 'door',    icon: '🔒', label: 'Locked door' },
-  { id: 'wall',    icon: '🧱', label: 'Breakable / suspicious wall' },
-  { id: 'ability', icon: '🕷️', label: 'Need ability / tool' },
-  { id: 'item',    icon: '✨', label: 'Item / collectible' },
-  { id: 'npc',     icon: '👤', label: 'NPC / quest' },
-  { id: 'vendor',  icon: '💰', label: 'Vendor' },
-  { id: 'bench',   icon: '🪑', label: 'Bench' },
-  { id: 'boss',    icon: '💀', label: 'Boss / danger' },
-  { id: 'other',   icon: '❓', label: 'Other' },
-];
+import { categories, catById } from './categories.js';
 
-export function catById(id) {
-  return CATEGORIES.find(c => c.id === id) || CATEGORIES[CATEGORIES.length - 1];
-}
+// re-export so existing importers keep working
+export { catById };
 
 export class PinManager {
   constructor(layer, view, handlers) {
     this.layer = layer;
     this.view = view;
-    this.handlers = handlers; // { onChange, onEdit, onDelete, onRequestAttach, onLightbox }
-    this.pins = new Map();     // id -> { data, el, card, imgUrl }
-    this.filter = new Set(CATEGORIES.map(c => c.id));
+    // { onChange, onEdit, onDelete, onRequestAttach, onLightbox, onPinsChanged }
+    this.handlers = handlers;
+    this.pins = new Map();     // id -> { data, el, ico, card, imgUrl, moveEl, pendingMove }
+    this.filter = new Set(categories().map(c => c.id));
     this.showDone = true;
     this.selectedId = null;
     this.awaitingId = null;    // pin waiting for its area screenshot
@@ -43,13 +33,14 @@ export class PinManager {
     const ico = document.createElement('span');
     ico.className = 'pin-ico';
     el.appendChild(ico);
-    const entry = { data, el, ico, card: null, imgUrl: null };
+    const entry = { data, el, ico, card: null, imgUrl: null, moveEl: null, pendingMove: null };
     this.pins.set(data.id, entry);
     this.layer.appendChild(el);
     this._decorate(entry);
     this._wire(entry);
     if (select) this.select(data.id);
     this.syncPositions();
+    this.handlers.onPinsChanged?.();
     return entry;
   }
 
@@ -61,6 +52,7 @@ export class PinManager {
     if (entry.card) { entry.card.remove(); entry.card = null; }
     this._decorate(entry);
     this.applyFilter();
+    this.handlers.onPinsChanged?.();
   }
 
   remove(id) {
@@ -68,10 +60,12 @@ export class PinManager {
     if (!entry) return;
     if (entry.imgUrl) URL.revokeObjectURL(entry.imgUrl);
     if (entry.card) entry.card.remove();
+    if (entry.moveEl) entry.moveEl.remove();
     entry.el.remove();
     this.pins.delete(id);
     if (this.selectedId === id) this.selectedId = null;
     if (this.awaitingId === id) this.awaitingId = null;
+    this.handlers.onPinsChanged?.();
   }
 
   removeAll() {
@@ -97,6 +91,7 @@ export class PinManager {
     for (const e of this.pins.values()) {
       const visible = this.filter.has(e.data.cat) && (this.showDone || !e.data.done);
       e.el.style.display = visible ? '' : 'none';
+      if (e.moveEl) e.moveEl.style.display = visible ? '' : 'none';
       if (!visible && e.card) this._hideCard(e, true);
     }
   }
@@ -106,23 +101,27 @@ export class PinManager {
       const p = this.view.mapToScreen(e.data.x, e.data.y);
       e.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
       if (e.card) this._positionCard(e);
+      if (e.moveEl) this._positionMoveConfirm(e);
     }
   }
 
   _decorate(entry) {
     const cat = catById(entry.data.cat);
     entry.ico.textContent = cat.icon;
+    entry.el.style.setProperty('--pc', cat.color || '#9e2b25');
     entry.el.title = cat.label + (entry.data.note ? ' — ' + entry.data.note : '');
     entry.el.classList.toggle('done', !!entry.data.done);
   }
 
   _wire(entry) {
     const el = entry.el;
-    let downX = 0, downY = 0, moved = false, dragging = false;
+    let downX = 0, downY = 0, moved = false, dragging = false, origin = null;
 
     el.addEventListener('pointerdown', e => {
       e.stopPropagation();
       dragging = true; moved = false;
+      // keep the original spot across repeated nudges while a move is pending
+      origin = entry.pendingMove || { x: entry.data.x, y: entry.data.y };
       downX = e.clientX; downY = e.clientY;
       el.setPointerCapture(e.pointerId);
     });
@@ -130,22 +129,25 @@ export class PinManager {
       if (!dragging) return;
       if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) < 5) return;
       moved = true;
+      this._hideCard(entry);
       const m = this.view.screenToMap(e.clientX, e.clientY);
       entry.data.x = m.x; entry.data.y = m.y;
       this.syncPositions();
     });
-    el.addEventListener('pointerup', e => {
+    el.addEventListener('pointerup', () => {
       if (!dragging) return;
       dragging = false;
       if (moved) {
-        this.handlers.onChange(entry.data);
+        this._beginMoveConfirm(entry, origin);
       } else {
         this.select(entry.data.id);
         this._showCard(entry, true);
       }
     });
 
-    el.addEventListener('pointerenter', () => this._showCard(entry, false));
+    el.addEventListener('pointerenter', () => {
+      if (!entry.pendingMove) this._showCard(entry, false);
+    });
     el.addEventListener('pointerleave', () => {
       setTimeout(() => {
         if (entry.card && !entry.card.matches(':hover') && this._stickyCard !== entry.card) {
@@ -154,6 +156,51 @@ export class PinManager {
       }, 120);
     });
   }
+
+  // ---- move confirmation (✓ keep / ✗ put back) ----------------------------
+
+  _beginMoveConfirm(entry, origin) {
+    entry.pendingMove = origin;
+    if (!entry.moveEl) {
+      const wrap = document.createElement('div');
+      wrap.className = 'move-confirm';
+      const ok = document.createElement('button');
+      ok.className = 'mc-btn mc-ok'; ok.textContent = '✓';
+      ok.title = 'Keep the new position';
+      const no = document.createElement('button');
+      no.className = 'mc-btn mc-no'; no.textContent = '✗';
+      no.title = 'Put it back';
+      for (const b of [ok, no]) b.addEventListener('pointerdown', e => e.stopPropagation());
+      ok.addEventListener('click', e => { e.stopPropagation(); this._commitMove(entry); });
+      no.addEventListener('click', e => { e.stopPropagation(); this._cancelMove(entry); });
+      wrap.append(ok, no);
+      this.layer.appendChild(wrap);
+      entry.moveEl = wrap;
+    }
+    this._positionMoveConfirm(entry);
+  }
+
+  _commitMove(entry) {
+    entry.pendingMove = null;
+    if (entry.moveEl) { entry.moveEl.remove(); entry.moveEl = null; }
+    this.handlers.onChange(entry.data);
+  }
+
+  _cancelMove(entry) {
+    const o = entry.pendingMove;
+    entry.pendingMove = null;
+    if (o) { entry.data.x = o.x; entry.data.y = o.y; }
+    if (entry.moveEl) { entry.moveEl.remove(); entry.moveEl = null; }
+    this.syncPositions();
+  }
+
+  _positionMoveConfirm(entry) {
+    if (!entry.moveEl) return;
+    const p = this.view.mapToScreen(entry.data.x, entry.data.y);
+    entry.moveEl.style.transform = `translate(${p.x}px, ${p.y}px)`;
+  }
+
+  // ---- hover / detail card ------------------------------------------------
 
   _showCard(entry, sticky) {
     if (this._stickyCard && this._stickyCard !== entry.card) {
@@ -176,9 +223,10 @@ export class PinManager {
     const p = this.view.mapToScreen(entry.data.x, entry.data.y);
     const card = entry.card;
     if (!card) return;
-    const w = 300, margin = 12;
+    const w = card.offsetWidth || 320, margin = 12;
     let x = p.x + 24, y = p.y - 20;
     if (x + w + margin > window.innerWidth) x = p.x - w - 24;
+    x = Math.max(margin, x);
     y = Math.max(60, Math.min(y, window.innerHeight - card.offsetHeight - margin));
     card.style.transform = `translate(${x}px, ${y}px)`;
   }
@@ -188,12 +236,14 @@ export class PinManager {
     const cat = catById(d.cat);
     const card = document.createElement('div');
     card.className = 'pin-card';
+    card.style.setProperty('--pc', cat.color || '#9e2b25');
 
     if (d.img) {
       if (!entry.imgUrl) entry.imgUrl = URL.createObjectURL(d.img);
       const img = document.createElement('img');
       img.className = 'env';
       img.src = entry.imgUrl;
+      img.addEventListener('load', () => this._positionCard(entry));
       img.addEventListener('click', () => this.handlers.onLightbox(entry.imgUrl));
       card.appendChild(img);
     } else {
