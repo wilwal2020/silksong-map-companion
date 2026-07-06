@@ -14,7 +14,7 @@
 <header id="toolbar">
   <h1>Silksong <span>Map Companion</span></h1>
 
-  <button id="btn-add-pin" class="add-pin" title="Add a pin — click, then click the spot on the map">
+  <button id="btn-add-pin" class="add-pin" data-tip="Add a pin — click, then click the spot on the map">
     <span class="add-pin-ico">📍</span><span class="add-pin-label">Add pin</span>
   </button>
 
@@ -75,10 +75,10 @@
   <img id="paste-preview" alt="pasted screenshot preview">
   <div class="dlg-actions vertical">
     <button class="btn primary" data-type="map">📍 Map screenshot — reveal this area &amp; add a pin</button>
-    <button class="btn" data-type="env">🖼 Area screenshot — attach to the current pin</button>
     <button class="btn" data-type="full">🗺 Full map — update everything I've explored</button>
     <button class="btn subtle" data-type="cancel">Cancel</button>
   </div>
+  <p class="paste-tip">To add a picture to an existing pin, hover over it and paste (<span class="kbd">Ctrl+V</span>) — no need for this menu.</p>
 </dialog>
 
 <!-- step 2: waiting for the area screenshot for a pin -->

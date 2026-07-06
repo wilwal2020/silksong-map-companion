@@ -17,6 +17,7 @@ export class PinManager {
     this.showDone = true;
     this.selectedId = null;
     this.awaitingId = null;    // pin waiting for its area screenshot
+    this.hoveredId = null;     // pin currently under the pointer (paste target)
     this._stickyCard = null;
 
     document.addEventListener('pointerdown', e => {
@@ -87,6 +88,16 @@ export class PinManager {
     return this.awaitingId || this.selectedId;
   }
 
+  // pin under the pointer (or with an open sticky card) — a plain paste while
+  // hovering a pin attaches the image straight to it
+  pasteTarget() {
+    if (this.hoveredId && this.pins.has(this.hoveredId)) return this.hoveredId;
+    if (this._stickyCardPin && this.pins.has(this._stickyCardPin.data.id)) {
+      return this._stickyCardPin.data.id;
+    }
+    return null;
+  }
+
   applyFilter() {
     for (const e of this.pins.values()) {
       const visible = this.filter.has(e.data.cat) && (this.showDone || !e.data.done);
@@ -151,6 +162,7 @@ export class PinManager {
 
     el.addEventListener('pointerenter', () => {
       clearTimeout(entry._leaveTimer);
+      this.hoveredId = entry.data.id;
       if (!entry.pendingMove) this._showCard(entry, false);
     });
     el.addEventListener('pointerleave', () => {
@@ -160,6 +172,7 @@ export class PinManager {
         if (entry.card && !entry.card.matches(':hover') && !el.matches(':hover')
             && this._stickyCard !== entry.card) {
           this._hideCard(entry);
+          if (this.hoveredId === entry.data.id) this.hoveredId = null;
         }
       }, 240);
     });
@@ -257,7 +270,7 @@ export class PinManager {
     } else {
       const no = document.createElement('div');
       no.className = 'no-env';
-      no.textContent = 'No area screenshot yet — click 📷 then paste one.';
+      no.textContent = 'No area screenshot yet — hover here and paste one (Ctrl+V).';
       card.appendChild(no);
     }
 

@@ -178,20 +178,33 @@ function openPinEditor(data, isNew) {
   const dlg = $('#dlg-pin');
   $('#pin-dlg-title').textContent = isNew ? 'New pin — what is here?' : 'Edit pin';
   const cats = $('#pin-cats');
-  cats.innerHTML = '';
   let selected = data.cat || 'other';
-  for (const c of categories()) {
-    const b = document.createElement('button');
-    b.className = 'cat-btn' + (c.id === selected ? ' on' : '');
-    b.style.setProperty('--pc', c.color || '#9e2b25');
-    b.innerHTML = `<span class="cb-ico">${c.icon}</span><span>${c.label}</span>`;
-    b.addEventListener('click', () => {
-      selected = c.id;
-      cats.querySelectorAll('.cat-btn').forEach(x => x.classList.remove('on'));
-      b.classList.add('on');
+
+  function renderCats() {
+    cats.innerHTML = '';
+    for (const c of categories()) {
+      const b = document.createElement('button');
+      b.className = 'cat-btn' + (c.id === selected ? ' on' : '');
+      b.style.setProperty('--pc', c.color || '#9e2b25');
+      b.innerHTML = `<span class="cb-ico">${c.icon}</span><span>${c.label}</span>`;
+      b.addEventListener('click', () => {
+        selected = c.id;
+        cats.querySelectorAll('.cat-btn').forEach(x => x.classList.remove('on'));
+        b.classList.add('on');
+      });
+      cats.appendChild(b);
+    }
+    // inline "create a new type" — opens the type dialog on top and selects it
+    const add = document.createElement('button');
+    add.className = 'cat-btn cat-btn-new';
+    add.innerHTML = `<span class="cb-ico">＋</span><span>New type…</span>`;
+    add.addEventListener('click', () => {
+      catTypeCreatedCb = cat => { selected = cat.id; renderCats(); };
+      openCatTypeDialog();
     });
-    cats.appendChild(b);
+    cats.appendChild(add);
   }
+  renderCats();
   $('#pin-note').value = data.note || '';
 
   return new Promise(resolve => {
@@ -426,14 +439,26 @@ function routePaste(blob) {
     attachToAwaiting(blob);
     return;
   }
+  // hovering a pin → attach the picture straight to it, no menu
+  const hover = pins.pasteTarget();
+  if (hover) {
+    attachEnvToPin(hover, blob);
+    return;
+  }
   currentPaste = { blob, url: URL.createObjectURL(blob) };
   $('#paste-preview').src = currentPaste.url;
-
-  const envBtn = $('#dlg-paste').querySelector('[data-type="env"]');
-  envBtn.disabled = !pins.attachTarget();
-  envBtn.style.opacity = envBtn.disabled ? 0.4 : 1;
-
   $('#dlg-paste').showModal();
+}
+
+// attach an area screenshot to a specific pin (used by hover-to-paste)
+function attachEnvToPin(id, blob) {
+  const entry = pins.pins.get(id);
+  if (!entry) return;
+  entry.data.img = blob;
+  pins.update(entry.data);
+  persistPin(entry.data);
+  pins.setAwaiting(null);
+  toast('Screenshot attached — hover the pin to see it.', 'ok');
 }
 
 // wired once at startup
@@ -532,6 +557,13 @@ function persistCats() {
   ]);
 }
 
+// persist which types are checked (visible). During a temporary solo the real
+// selection lives in soloReturn, so save that instead of the {soloed} view.
+function persistFilter() {
+  const base = soloedId ? soloReturn : pins.filter;
+  store.putMeta('catFilter', [...(base || pins.filter)]);
+}
+
 function updateCatCounts() {
   const counts = {};
   for (const e of pins.pins.values()) {
@@ -582,6 +614,7 @@ function renderCatList() {
       soloReturn = null; soloedId = null;
       row.classList.toggle('off', !e.target.checked);
       pins.applyFilter();
+      persistFilter();
     });
 
     if (isCustom(c.id)) {
@@ -622,6 +655,7 @@ function toggleSolo(id) {
   }
   pins.applyFilter();
   syncAllRows();
+  persistFilter();
 }
 
 function wireCatRow(row, id) {
@@ -672,7 +706,8 @@ function wireCatRow(row, id) {
   });
 }
 
-let catTypeEditing = null; // id of the custom type being edited, or null
+let catTypeEditing = null;     // id of the custom type being edited, or null
+let catTypeCreatedCb = null;   // set by the pin editor to receive a new type
 
 function openCatTypeDialog() {
   catTypeEditing = null;
@@ -719,8 +754,11 @@ function saveCatType() {
   addCustomCategory(cat);
   pins.filter.add(cat.id);
   persistCats();
+  persistFilter();
   $('#dlg-cattype').close();
   renderCatList();
+  // if launched from the pin editor, hand the new type back to be selected
+  if (catTypeCreatedCb) { const cb = catTypeCreatedCb; catTypeCreatedCb = null; cb(cat); }
   toast('New pin type added.', 'ok');
 }
 
@@ -737,6 +775,7 @@ async function deleteCustomType(id) {
   pins.filter.delete(id);
   pins.filter.add('other');
   await persistCats();
+  persistFilter();
   renderCatList();
 }
 
@@ -775,6 +814,7 @@ function startPlacing() {
   btn.classList.add('active');
   btn.querySelector('.add-pin-ico').textContent = '✕';
   btn.querySelector('.add-pin-label').textContent = 'Cancel';
+  btn.dataset.tip = 'Click the map to drop the pin — or click here to cancel (Esc)';
   toast('Click the spot on the map to drop your pin. Esc to cancel.');
 }
 
@@ -789,6 +829,7 @@ function stopPlacing() {
   btn.classList.remove('active');
   btn.querySelector('.add-pin-ico').textContent = '📍';
   btn.querySelector('.add-pin-label').textContent = 'Add pin';
+  btn.dataset.tip = 'Add a pin — click, then click the spot on the map';
 }
 
 async function createManualPin(x, y) {
@@ -858,6 +899,7 @@ function buildToolbar() {
     soloReturn = null; soloedId = null;
     pins.applyFilter();
     syncAllRows();
+    persistFilter();
   });
   const tip = emojiKeyboardTip();
   $('#pin-note-hint').textContent = tip;
@@ -865,10 +907,10 @@ function buildToolbar() {
   $('#btn-add-pin').addEventListener('click', () => placing ? stopPlacing() : startPlacing());
   wireSidebarResize();
   wireOpacitySlider();
-  $('#btn-cat-new').addEventListener('click', openCatTypeDialog);
+  $('#btn-cat-new').addEventListener('click', () => { catTypeCreatedCb = null; openCatTypeDialog(); });
   $('#btn-cattype-save').addEventListener('click', saveCatType);
-  $('#btn-cattype-cancel').addEventListener('click', () => $('#dlg-cattype').close());
-  $('#dlg-cattype').addEventListener('cancel', e => { e.preventDefault(); $('#dlg-cattype').close(); });
+  $('#btn-cattype-cancel').addEventListener('click', () => { catTypeCreatedCb = null; $('#dlg-cattype').close(); });
+  $('#dlg-cattype').addEventListener('cancel', e => { e.preventDefault(); catTypeCreatedCb = null; $('#dlg-cattype').close(); });
   $('#cattype-label').addEventListener('keydown', e => { if (e.key === 'Enter') saveCatType(); });
 
   $('#show-done').addEventListener('change', e => {
@@ -897,6 +939,7 @@ function buildToolbar() {
     setOrder([]);
     pins.filter = new Set(categories().map(c => c.id));
     soloReturn = null; soloedId = null;
+    persistFilter();
     renderCatList();
     toast('Everything reset.');
   });
@@ -959,6 +1002,12 @@ async function init() {
   if (savedShowDone != null) {
     pins.showDone = savedShowDone;
     $('#show-done').checked = savedShowDone;
+  }
+  // restore which types are checked (visible)
+  const savedFilter = await store.getMeta('catFilter');
+  if (Array.isArray(savedFilter)) {
+    const valid = new Set(categories().map(c => c.id));
+    pins.filter = new Set(savedFilter.filter(id => valid.has(id)));
   }
   pins.applyFilter();
 

@@ -237,6 +237,7 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 .dlg-actions.vertical { flex-direction: column; align-items: stretch; margin-top: 0; }
 .dlg-actions.vertical .btn { text-align: left; padding: 10px 14px; font-size: .9rem; }
+.paste-tip { margin: 12px 0 0; font-size: .78rem; line-height: 1.45; color: var(--text-dim); }
 
 #pin-cats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 12px; }
 .cat-btn {
@@ -246,6 +247,9 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 .cat-btn .cb-ico { font-size: 1.05rem; filter: drop-shadow(0 0 4px var(--pc, transparent)); }
 .cat-btn.on { border-color: var(--pc, var(--accent)); background: color-mix(in srgb, var(--pc, var(--accent)) 15%, transparent); }
+.cat-btn-new { background: transparent; border-style: dashed; color: var(--text-dim); }
+.cat-btn-new:hover { border-color: var(--accent); color: var(--rose); }
+.cat-btn-new .cb-ico { filter: none; }
 
 #pin-note {
   width: 100%; background: var(--panel-2); border: 1px solid var(--border);
@@ -263,7 +267,7 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 /* ---------- toasts ---------- */
 
 #toasts {
-  position: fixed; top: 58px; left: 50%; transform: translateX(-50%);
+  position: fixed; top: 102px; left: 50%; transform: translateX(-50%);
   display: flex; flex-direction: column; gap: 8px; z-index: 50; pointer-events: none;
 }
 .toast {
@@ -386,6 +390,16 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 .add-pin:hover { background: #232b3d; border-color: var(--accent); }
 .add-pin .add-pin-ico { font-size: 1rem; line-height: 1; }
 .add-pin.active { background: var(--accent-soft); border-color: var(--accent); color: var(--rose); }
+/* custom tooltip that sits UNDER the button (never covering it) */
+.add-pin[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute; top: calc(100% + 9px); left: 50%; transform: translateX(-50%);
+  white-space: nowrap; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px;
+  font-size: .78rem; box-shadow: var(--shadow);
+  opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 30;
+}
+.add-pin[data-tip]:hover::after { opacity: 1; }
 
 body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important; }
 .ghost-pin { z-index: 45; pointer-events: none; opacity: .9; }
