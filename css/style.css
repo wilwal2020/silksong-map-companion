@@ -318,7 +318,11 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 .cat-row:hover { background: var(--panel-2); border-color: var(--border); }
 .cat-row.off { opacity: .5; box-shadow: inset 3px 0 0 #3a4150; }
-.cat-row.dragging { opacity: .9; border-color: var(--pc, var(--accent)); background: var(--panel-2); }
+.cat-row.dragging {
+  border-color: var(--pc, var(--accent)); background: var(--panel-2);
+  box-shadow: inset 3px 0 0 var(--pc, var(--accent)), 0 6px 18px rgba(0,0,0,.55);
+  position: relative; z-index: 5; cursor: grabbing;
+}
 
 .cat-grip {
   color: var(--text-dim); font-size: .9rem; line-height: 1; letter-spacing: -2px;
@@ -354,6 +358,13 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 .cat-bar-hint b { color: var(--rose); font-weight: 500; }
 .cat-bar-hint .grip-glyph { color: var(--text); }
+
+/* show-done toggle pinned to the bottom of the sidebar */
+.cat-done-toggle {
+  padding: 11px 12px; border-top: 1px solid var(--border);
+  font-size: .82rem; color: var(--text);
+}
+.cat-done-toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
 
 /* drag-to-resize handle on the sidebar's inner edge */
 #cat-bar-resize {

@@ -109,7 +109,7 @@ export class PinManager {
     const cat = catById(entry.data.cat);
     entry.ico.textContent = cat.icon;
     entry.el.style.setProperty('--pc', cat.color || '#9e2b25');
-    entry.el.title = cat.label + (entry.data.note ? ' — ' + entry.data.note : '');
+    // no native title tooltip — the hover card carries the info
     entry.el.classList.toggle('done', !!entry.data.done);
   }
 
@@ -126,7 +126,11 @@ export class PinManager {
       el.setPointerCapture(e.pointerId);
     });
     el.addEventListener('pointermove', e => {
-      if (!dragging) return;
+      if (!dragging) {
+        // plain hover: make sure the card is up even if pointerenter was missed
+        if (!entry.pendingMove && !entry.card) this._showCard(entry, false);
+        return;
+      }
       if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) < 5) return;
       moved = true;
       this._hideCard(entry);

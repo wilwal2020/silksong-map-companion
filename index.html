@@ -19,9 +19,6 @@
   </button>
 
   <div class="toolbar-right">
-    <label class="toggle" title="Show pins you've already checked off">
-      <input type="checkbox" id="show-done" checked> show done
-    </label>
     <button id="btn-export" class="btn">Export</button>
     <button id="btn-import" class="btn">Import</button>
     <button id="btn-help" class="btn">Help</button>
@@ -37,6 +34,9 @@
   </div>
   <div id="cat-list"></div>
   <p class="cat-bar-hint">Click a row to show <b>only</b> that type (click again for all) · use the checkbox to toggle visibility · drag a row to reorder</p>
+  <label class="toggle cat-done-toggle" title="Show pins you've already checked off">
+    <input type="checkbox" id="show-done" checked> show done pins
+  </label>
   <div id="cat-bar-resize" title="Drag to resize"></div>
 </aside>
 

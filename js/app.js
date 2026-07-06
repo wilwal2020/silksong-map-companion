@@ -618,6 +618,7 @@ function wireCatRow(row, id) {
     const onMove = ev => {
       if (!dragging && Math.abs(ev.clientY - startY) < 5) return;
       if (!dragging) { dragging = true; row.classList.add('dragging'); }
+      // reorder when the cursor passes a neighbour's midpoint
       const others = [...list.querySelectorAll('.cat-row:not(.dragging)')];
       const after = others.find(r => {
         const box = r.getBoundingClientRect();
@@ -625,12 +626,17 @@ function wireCatRow(row, id) {
       });
       if (after) list.insertBefore(row, after);
       else list.appendChild(row);
+      // then float the row so its centre tracks the cursor between snaps —
+      // you see it move, not just jump
+      const b = row.getBoundingClientRect();
+      row.style.transform = `translateY(${ev.clientY - (b.top + b.height / 2)}px)`;
     };
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
       if (dragging) {
         row.classList.remove('dragging');
+        row.style.transform = '';
         setOrder([...list.querySelectorAll('.cat-row')].map(r => r.dataset.id));
         persistCats();
       } else {
