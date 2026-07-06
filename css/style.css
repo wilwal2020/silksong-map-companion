@@ -150,7 +150,7 @@ html, body {
 }
 /* invisible margin so a slight overshoot still counts as hovering the card */
 .pin-card::before {
-  content: ""; position: absolute; inset: -20px; z-index: -1;
+  content: ""; position: absolute; inset: -12px; z-index: -1;
 }
 .pin-card img.env {
   width: 100%; border-radius: 6px; display: block;
@@ -311,10 +311,11 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 
 .cat-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 11px 10px 11px 9px; border-radius: 9px; cursor: pointer;
+  padding: 11px 10px 11px 11px; border-radius: 9px; cursor: grab;
   border: 1px solid transparent; background: var(--panel);
   box-shadow: inset 3px 0 0 var(--pc, var(--accent));
   transition: background .12s, opacity .12s, border-color .12s;
+  touch-action: none;
 }
 .cat-row:hover { background: var(--panel-2); border-color: var(--border); }
 .cat-row.off { opacity: .5; box-shadow: inset 3px 0 0 #3a4150; }
@@ -324,11 +325,6 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   position: relative; z-index: 5; cursor: grabbing;
 }
 
-.cat-grip {
-  color: var(--text-dim); font-size: .9rem; line-height: 1; letter-spacing: -2px;
-  cursor: grab; padding: 0 1px; user-select: none; touch-action: none; flex: none;
-}
-.cat-grip:active { cursor: grabbing; }
 .cat-ico { font-size: 1.3rem; line-height: 1; width: 26px; text-align: center; flex: none; filter: drop-shadow(0 0 4px var(--pc, transparent)); }
 .cat-name { flex: 1; font-size: .92rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-count {
@@ -353,16 +349,18 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   accent-color: var(--pc, var(--accent));
 }
 
-/* show-done toggle styled like a category row, pinned to the bottom */
+/* show-done: a distinct footer control, set apart from the type rows */
 .cat-done-toggle {
-  display: flex; align-items: center; justify-content: space-between;
-  margin: 4px 9px 10px; padding: 11px 10px 11px 9px; border-radius: 9px;
-  background: var(--panel); border: 1px solid transparent;
-  box-shadow: inset 3px 0 0 var(--ok);
-  font-size: .92rem; color: var(--text); cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 13px; margin-top: 2px;
+  border-top: 1px solid var(--border);
+  background: rgba(76,175,125,.07);
+  font-size: .86rem; color: var(--text-dim); cursor: pointer; user-select: none;
+  transition: background .12s;
 }
-.cat-done-toggle:hover { background: var(--panel-2); border-color: var(--border); }
-.cat-done-name { flex: 1; }
+.cat-done-toggle:hover { background: rgba(76,175,125,.13); }
+.cat-done-ico { font-size: 1.05rem; line-height: 1; color: var(--ok); filter: drop-shadow(0 0 5px rgba(76,175,125,.4)); }
+.cat-done-name { flex: 1; letter-spacing: .02em; }
 .cat-done-toggle .cat-check { accent-color: var(--ok); }
 
 /* drag-to-resize handle on the sidebar's inner edge */
@@ -378,10 +376,11 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 /* ---------- add-pin button + placement ---------- */
 
 .add-pin {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  position: fixed; left: 50%; top: 56px; transform: translateX(-50%); z-index: 25;
   display: flex; align-items: center; gap: 7px;
-  background: var(--panel-2); color: var(--text); font: inherit; font-size: .85rem;
-  border: 1px solid var(--border-strong); border-radius: 7px; padding: 6px 14px; cursor: pointer;
+  background: rgba(21,25,34,.92); color: var(--text); font: inherit; font-size: .85rem;
+  border: 1px solid var(--border-strong); border-radius: 999px; padding: 7px 16px; cursor: pointer;
+  box-shadow: var(--shadow);
   transition: background .12s, border-color .12s, color .12s;
 }
 .add-pin:hover { background: #232b3d; border-color: var(--accent); }
@@ -429,27 +428,10 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
 }
 
-/* ---------- emoji picker ---------- */
-
-.field-with-emoji { position: relative; display: flex; align-items: center; gap: 6px; }
-.field-with-emoji > input[type="text"] { flex: 1; margin: 0; }
-.emoji-btn {
-  flex: none; background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 8px; cursor: pointer; font-size: 1.05rem; line-height: 1; padding: 8px 9px;
+/* helper line under emoji-friendly fields */
+.field-hint {
+  margin: 7px 0 0; font-size: .76rem; line-height: 1.4; color: var(--text-dim);
 }
-.emoji-btn:hover { border-color: var(--accent); }
-.emoji-pop {
-  position: absolute; left: 0; top: calc(100% + 6px); z-index: 5;
-  width: 288px; max-width: 84vw; max-height: 208px; overflow-y: auto;
-  display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px;
-  background: var(--panel); border: 1px solid var(--border); border-top: 2px solid var(--accent);
-  padding: 8px; box-shadow: var(--shadow);
-}
-.emoji-cell {
-  background: transparent; border: none; border-radius: 6px; cursor: pointer;
-  font-size: 1.2rem; line-height: 1; padding: 5px 0;
-}
-.emoji-cell:hover { background: var(--panel-2); }
 
 @media (max-width: 720px) {
   #cat-bar { width: 176px; }

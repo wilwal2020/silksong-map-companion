@@ -15,7 +15,7 @@
   <h1>Silksong <span>Map Companion</span></h1>
 
   <button id="btn-add-pin" class="add-pin" title="Add a pin — click, then click the spot on the map">
-    <span class="add-pin-ico">📍</span> Add pin
+    <span class="add-pin-ico">📍</span><span class="add-pin-label">Add pin</span>
   </button>
 
   <div class="toolbar-right">
@@ -34,6 +34,7 @@
   </div>
   <div id="cat-list"></div>
   <label class="cat-done-toggle" title="Show pins you've already checked off">
+    <span class="cat-done-ico">👁</span>
     <span class="cat-done-name">Show done pins</span>
     <input type="checkbox" id="show-done" class="cat-check" checked>
   </label>
@@ -93,11 +94,8 @@
 <dialog id="dlg-pin">
   <h2 id="pin-dlg-title">New pin</h2>
   <div id="pin-cats"></div>
-  <div class="field-with-emoji">
-    <input id="pin-note" type="text" maxlength="120" placeholder="Note — e.g. “locked gate, need a key?”">
-    <button type="button" class="emoji-btn" id="pin-note-emoji" title="Insert emoji" aria-label="Insert emoji">😀</button>
-    <div class="emoji-pop hidden" id="pin-note-pop"></div>
-  </div>
+  <input id="pin-note" type="text" maxlength="120" placeholder="Note — e.g. “locked gate, need a key?”">
+  <p class="field-hint" id="pin-note-hint"></p>
   <div class="dlg-actions">
     <button id="btn-pin-save" class="btn primary">Save</button>
     <button id="btn-pin-cancel" class="btn">Cancel</button>
@@ -108,14 +106,10 @@
 <dialog id="dlg-cattype">
   <h2 id="cattype-title">New pin type</h2>
   <div class="cattype-grid">
-    <div class="cattype-field">
+    <label class="cattype-field">
       <span>Icon</span>
-      <div class="field-with-emoji">
-        <input id="cattype-icon" type="text" maxlength="4" placeholder="📌" autocomplete="off">
-        <button type="button" class="emoji-btn" id="cattype-emoji" title="Pick emoji" aria-label="Pick emoji">😀</button>
-        <div class="emoji-pop hidden" id="cattype-pop"></div>
-      </div>
-    </div>
+      <input id="cattype-icon" type="text" maxlength="4" placeholder="📌" autocomplete="off">
+    </label>
     <label class="cattype-field">
       <span>Colour</span>
       <input id="cattype-color" type="color" value="#e0c37e">
@@ -125,6 +119,7 @@
       <input id="cattype-label" type="text" maxlength="28" placeholder="e.g. Secret passage" autocomplete="off">
     </label>
   </div>
+  <p class="field-hint" id="cattype-hint"></p>
   <div class="dlg-actions">
     <button id="btn-cattype-save" class="btn primary">Create type</button>
     <button id="btn-cattype-cancel" class="btn">Cancel</button>

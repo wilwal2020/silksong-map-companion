@@ -150,11 +150,15 @@ export class PinManager {
     });
 
     el.addEventListener('pointerenter', () => {
+      clearTimeout(entry._leaveTimer);
       if (!entry.pendingMove) this._showCard(entry, false);
     });
     el.addEventListener('pointerleave', () => {
-      setTimeout(() => {
-        if (entry.card && !entry.card.matches(':hover') && this._stickyCard !== entry.card) {
+      clearTimeout(entry._leaveTimer);
+      entry._leaveTimer = setTimeout(() => {
+        // keep it open if the pointer is back on the pin or over the card
+        if (entry.card && !entry.card.matches(':hover') && !el.matches(':hover')
+            && this._stickyCard !== entry.card) {
           this._hideCard(entry);
         }
       }, 240);

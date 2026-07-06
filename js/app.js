@@ -567,7 +567,6 @@ function renderCatList() {
     // fixed del-slot on every row keeps the count column aligned whether or
     // not the type is deletable; checkbox lives on the right
     row.innerHTML =
-      `<span class="cat-grip" title="Drag to reorder">⋮⋮</span>` +
       `<span class="cat-ico">${c.icon}</span>` +
       `<span class="cat-name">${c.label}</span>` +
       `<span class="cat-count"></span>` +
@@ -682,7 +681,6 @@ function openCatTypeDialog() {
   $('#cattype-icon').value = '';
   $('#cattype-label').value = '';
   $('#cattype-color').value = '#e0c37e';
-  $('#cattype-pop').classList.add('hidden');
   $('#dlg-cattype').showModal();
   $('#cattype-label').focus();
 }
@@ -695,7 +693,6 @@ function editCustomType(id) {
   $('#cattype-icon').value = c.icon || '';
   $('#cattype-label').value = c.label || '';
   $('#cattype-color').value = c.color || '#e0c37e';
-  $('#cattype-pop').classList.add('hidden');
   $('#dlg-cattype').showModal();
   $('#cattype-label').focus();
 }
@@ -774,7 +771,10 @@ function startPlacing() {
   // capture so the map's own handlers don't also react to the placing click
   document.addEventListener('click', onPlacingClick, true);
   document.body.classList.add('placing-mode');
-  $('#btn-add-pin').classList.add('active');
+  const btn = $('#btn-add-pin');
+  btn.classList.add('active');
+  btn.querySelector('.add-pin-ico').textContent = '✕';
+  btn.querySelector('.add-pin-label').textContent = 'Cancel';
   toast('Click the spot on the map to drop your pin. Esc to cancel.');
 }
 
@@ -785,7 +785,10 @@ function stopPlacing() {
   document.removeEventListener('click', onPlacingClick, true);
   if (ghostPin) { ghostPin.remove(); ghostPin = null; }
   document.body.classList.remove('placing-mode');
-  $('#btn-add-pin').classList.remove('active');
+  const btn = $('#btn-add-pin');
+  btn.classList.remove('active');
+  btn.querySelector('.add-pin-ico').textContent = '📍';
+  btn.querySelector('.add-pin-label').textContent = 'Add pin';
 }
 
 async function createManualPin(x, y) {
@@ -838,45 +841,12 @@ function wireOpacitySlider() {
   range.addEventListener('change', () => store.putMeta('mapOpacity', +range.value));
 }
 
-// ----------------------------------------------------------------- emoji picker
-
-const EMOJIS = [
-  '🔒','🔑','🗝️','🚪','🧱','🪜','🕳️','🕷️','🦟','🐛','🪲','🦂',
-  '✨','💎','🔮','🧭','🗺️','📌','📍','🚩','❗','❓','⚠️','💰',
-  '🪙','🛒','🏪','🪑','🔥','💀','☠️','👹','👺','👤','🧙','🧵',
-  '🪡','🧶','🌿','🍄','💠','⭐','🌟','💥','⚔️','🛡️','🏹','💊',
-  '❤️','🩸','🔔','🎵','🌀','♨️','❄️','🌊',
-];
-
-function insertAtCursor(input, text) {
-  const s = input.selectionStart ?? input.value.length;
-  const e = input.selectionEnd ?? input.value.length;
-  input.value = input.value.slice(0, s) + text + input.value.slice(e);
-  const pos = s + text.length;
-  input.setSelectionRange(pos, pos);
-}
-
-function setupEmojiPicker(btnSel, popSel, inputSel, replace) {
-  const btn = $(btnSel), pop = $(popSel), input = $(inputSel);
-  for (const em of EMOJIS) {
-    const cell = document.createElement('button');
-    cell.type = 'button';
-    cell.className = 'emoji-cell';
-    cell.textContent = em;
-    cell.addEventListener('click', () => {
-      if (replace) input.value = em;
-      else insertAtCursor(input, em);
-      pop.classList.add('hidden');
-      input.focus();
-    });
-    pop.appendChild(cell);
-  }
-  btn.addEventListener('click', e => { e.stopPropagation(); pop.classList.toggle('hidden'); });
-  document.addEventListener('click', e => {
-    if (!pop.classList.contains('hidden') && !pop.contains(e.target) && e.target !== btn) {
-      pop.classList.add('hidden');
-    }
-  });
+// tell the user how to open their OS emoji keyboard in emoji-friendly fields
+function emojiKeyboardTip() {
+  const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+  return isMac
+    ? 'Tip: press Ctrl + Cmd + Space to open the emoji keyboard.'
+    : 'Tip: press Win + . (period) to open the emoji keyboard.';
 }
 
 // ----------------------------------------------------------------- toolbar
@@ -889,8 +859,9 @@ function buildToolbar() {
     pins.applyFilter();
     syncAllRows();
   });
-  setupEmojiPicker('#pin-note-emoji', '#pin-note-pop', '#pin-note', false);
-  setupEmojiPicker('#cattype-emoji', '#cattype-pop', '#cattype-icon', true);
+  const tip = emojiKeyboardTip();
+  $('#pin-note-hint').textContent = tip;
+  $('#cattype-hint').textContent = tip;
   $('#btn-add-pin').addEventListener('click', () => placing ? stopPlacing() : startPlacing());
   wireSidebarResize();
   wireOpacitySlider();
@@ -903,6 +874,7 @@ function buildToolbar() {
   $('#show-done').addEventListener('change', e => {
     pins.showDone = e.target.checked;
     pins.applyFilter();
+    store.putMeta('showDone', e.target.checked);
   });
 
   $('#btn-export').addEventListener('click', exportAll);
@@ -981,6 +953,13 @@ async function init() {
     view.requestRender();
   }
   for (const p of await store.getAllPins()) pins.add(p);
+
+  // restore the show-done preference before the first filter pass
+  const savedShowDone = await store.getMeta('showDone');
+  if (savedShowDone != null) {
+    pins.showDone = savedShowDone;
+    $('#show-done').checked = savedShowDone;
+  }
   pins.applyFilter();
 
   // restore sidebar width + map opacity
