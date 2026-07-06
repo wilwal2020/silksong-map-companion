@@ -339,32 +339,31 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   border-radius: 999px; padding: 1px 7px; text-align: center;
 }
 /* fixed slot keeps the count column aligned; only custom rows fill it */
-.cat-del-slot { flex: none; width: 26px; display: flex; justify-content: center; }
-.cat-del {
+.cat-del-slot { flex: none; width: 46px; display: flex; justify-content: flex-end; gap: 2px; }
+.cat-del, .cat-edit {
   background: transparent; border: 1px solid transparent; border-radius: 6px;
-  color: var(--text-dim); cursor: pointer; font-size: .95rem; line-height: 1;
+  color: var(--text-dim); cursor: pointer; font-size: .9rem; line-height: 1;
   padding: 4px 5px; opacity: 0; transition: opacity .12s, color .12s, border-color .12s;
 }
-.cat-row:hover .cat-del { opacity: 1; }
+.cat-row:hover .cat-del, .cat-row:hover .cat-edit { opacity: 1; }
+.cat-edit:hover { color: var(--accent-glow); border-color: var(--border-strong); }
 .cat-del:hover { color: var(--rose); border-color: #43272a; }
 .cat-check {
   width: 18px; height: 18px; flex: none; cursor: pointer; margin: 0;
   accent-color: var(--pc, var(--accent));
 }
 
-.cat-bar-hint {
-  margin: 0; padding: 9px 12px; font-size: .72rem; line-height: 1.5;
-  color: var(--text-dim); border-top: 1px solid var(--border);
-}
-.cat-bar-hint b { color: var(--rose); font-weight: 500; }
-.cat-bar-hint .grip-glyph { color: var(--text); }
-
-/* show-done toggle pinned to the bottom of the sidebar */
+/* show-done toggle styled like a category row, pinned to the bottom */
 .cat-done-toggle {
-  padding: 11px 12px; border-top: 1px solid var(--border);
-  font-size: .82rem; color: var(--text);
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 4px 9px 10px; padding: 11px 10px 11px 9px; border-radius: 9px;
+  background: var(--panel); border: 1px solid transparent;
+  box-shadow: inset 3px 0 0 var(--ok);
+  font-size: .92rem; color: var(--text); cursor: pointer; user-select: none;
 }
-.cat-done-toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
+.cat-done-toggle:hover { background: var(--panel-2); border-color: var(--border); }
+.cat-done-name { flex: 1; }
+.cat-done-toggle .cat-check { accent-color: var(--ok); }
 
 /* drag-to-resize handle on the sidebar's inner edge */
 #cat-bar-resize {
@@ -424,11 +423,33 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
   color: var(--text); padding: 9px 11px; font: inherit; font-size: .9rem;
 }
 .cattype-field input[type="text"]:focus { outline: none; border-color: var(--accent); }
-#cattype-icon { width: 62px; text-align: center; font-size: 1.1rem; }
+#cattype-icon { flex: none; width: 62px; text-align: center; font-size: 1.1rem; }
 #cattype-color {
   width: 46px; height: 40px; padding: 2px; cursor: pointer;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
 }
+
+/* ---------- emoji picker ---------- */
+
+.field-with-emoji { position: relative; display: flex; align-items: center; gap: 6px; }
+.field-with-emoji > input[type="text"] { flex: 1; margin: 0; }
+.emoji-btn {
+  flex: none; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; font-size: 1.05rem; line-height: 1; padding: 8px 9px;
+}
+.emoji-btn:hover { border-color: var(--accent); }
+.emoji-pop {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 5;
+  width: 288px; max-width: 84vw; max-height: 208px; overflow-y: auto;
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px;
+  background: var(--panel); border: 1px solid var(--border); border-top: 2px solid var(--accent);
+  padding: 8px; box-shadow: var(--shadow);
+}
+.emoji-cell {
+  background: transparent; border: none; border-radius: 6px; cursor: pointer;
+  font-size: 1.2rem; line-height: 1; padding: 5px 0;
+}
+.emoji-cell:hover { background: var(--panel-2); }
 
 @media (max-width: 720px) {
   #cat-bar { width: 176px; }

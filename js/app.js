@@ -5,7 +5,7 @@ import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT } from './match.js';
 import { PinManager } from './pins.js';
 import {
   categories, catById, customCategories, currentOrder, isCustom,
-  setCustomCategories, addCustomCategory, removeCustomCategory, setOrder,
+  setCustomCategories, addCustomCategory, removeCustomCategory, updateCustomCategory, setOrder,
 } from './categories.js';
 
 const $ = s => document.querySelector(s);
@@ -511,6 +511,7 @@ async function importAll(file) {
   setOrder(data.catOrder || []);
   await persistCats();
   for (const c of categories()) pins.filter.add(c.id);
+  soloReturn = null; soloedId = null;
 
   for (const p of data.pins || []) {
     const pin = { ...p, img: p.img ? await dataURLToBlob(p.img) : null };
@@ -573,22 +574,30 @@ function renderCatList() {
       `<span class="cat-del-slot"></span>` +
       `<input type="checkbox" class="cat-check" title="Show / hide this type"${on ? ' checked' : ''}>`;
 
-    // checkbox toggles visibility for just this type
+    // checkbox toggles visibility for just this type; a manual edit ends the
+    // temporary solo and becomes the new base selection
     row.querySelector('.cat-check').addEventListener('change', e => {
       e.stopPropagation();
       if (e.target.checked) pins.filter.add(c.id);
       else pins.filter.delete(c.id);
+      soloReturn = null; soloedId = null;
       row.classList.toggle('off', !e.target.checked);
       pins.applyFilter();
     });
 
     if (isCustom(c.id)) {
+      const slot = row.querySelector('.cat-del-slot');
+      const edit = document.createElement('button');
+      edit.className = 'cat-edit';
+      edit.textContent = '✎';
+      edit.title = 'Edit symbol, colour or name';
+      edit.addEventListener('click', e => { e.stopPropagation(); editCustomType(c.id); });
       const del = document.createElement('button');
       del.className = 'cat-del';
       del.textContent = '🗑';
       del.title = 'Delete this custom type';
       del.addEventListener('click', e => { e.stopPropagation(); deleteCustomType(c.id); });
-      row.querySelector('.cat-del-slot').appendChild(del);
+      slot.append(edit, del);
     }
 
     wireCatRow(row, c.id);
@@ -597,39 +606,55 @@ function renderCatList() {
   updateCatCounts();
 }
 
-// clicking a row shows only that type; clicking the soloed row again
-// reveals everything. dragging anywhere on the row reorders.
+// clicking a row shows only that type; clicking it again restores whatever
+// was checked before (not everything). soloReturn remembers that base set.
+let soloReturn = null;
+let soloedId = null;
 function toggleSolo(id) {
-  const soloed = pins.filter.size === 1 && pins.filter.has(id);
-  pins.filter.clear();
-  if (soloed) for (const c of categories()) pins.filter.add(c.id);
-  else pins.filter.add(id);
+  if (soloedId === id) {
+    pins.filter = new Set(soloReturn || pins.filter);
+    soloReturn = null;
+    soloedId = null;
+  } else {
+    if (!soloReturn) soloReturn = new Set(pins.filter);
+    soloReturn.add(id);          // focusing a row keeps it visible on restore
+    soloedId = id;
+    pins.filter = new Set([id]);
+  }
   pins.applyFilter();
   syncAllRows();
 }
 
 function wireCatRow(row, id) {
   row.addEventListener('pointerdown', e => {
-    if (e.target.closest('.cat-check, .cat-del')) return; // let controls work
+    if (e.target.closest('.cat-check, .cat-del, .cat-edit')) return; // let controls work
     e.preventDefault();
     const list = $('#cat-list');
     const startY = e.clientY;
+    // where along the row we grabbed, so it stays under the cursor
+    const grab = e.clientY - row.getBoundingClientRect().top;
     let dragging = false;
+
     const onMove = ev => {
-      if (!dragging && Math.abs(ev.clientY - startY) < 5) return;
-      if (!dragging) { dragging = true; row.classList.add('dragging'); }
-      // reorder when the cursor passes a neighbour's midpoint
+      if (!dragging) {
+        if (Math.abs(ev.clientY - startY) < 5) return;
+        dragging = true;
+        row.classList.add('dragging');
+      }
+      // 1) reorder against neighbours (they carry no transform, so their
+      //    rects are the true layout positions)
       const others = [...list.querySelectorAll('.cat-row:not(.dragging)')];
-      const after = others.find(r => {
-        const box = r.getBoundingClientRect();
-        return ev.clientY < box.top + box.height / 2;
+      const before = others.find(r => {
+        const b = r.getBoundingClientRect();
+        return ev.clientY < b.top + b.height / 2;
       });
-      if (after) list.insertBefore(row, after);
+      if (before) list.insertBefore(row, before);
       else list.appendChild(row);
-      // then float the row so its centre tracks the cursor between snaps —
-      // you see it move, not just jump
-      const b = row.getBoundingClientRect();
-      row.style.transform = `translateY(${ev.clientY - (b.top + b.height / 2)}px)`;
+      // 2) float the row under the cursor — clear the transform first so we
+      //    measure the true (untransformed) layout position, no compounding
+      row.style.transform = '';
+      const top = row.getBoundingClientRect().top;
+      row.style.transform = `translateY(${ev.clientY - grab - top}px)`;
     };
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);
@@ -648,10 +673,29 @@ function wireCatRow(row, id) {
   });
 }
 
+let catTypeEditing = null; // id of the custom type being edited, or null
+
 function openCatTypeDialog() {
+  catTypeEditing = null;
+  $('#cattype-title').textContent = 'New pin type';
+  $('#btn-cattype-save').textContent = 'Create type';
   $('#cattype-icon').value = '';
   $('#cattype-label').value = '';
   $('#cattype-color').value = '#e0c37e';
+  $('#cattype-pop').classList.add('hidden');
+  $('#dlg-cattype').showModal();
+  $('#cattype-label').focus();
+}
+
+function editCustomType(id) {
+  const c = catById(id);
+  catTypeEditing = id;
+  $('#cattype-title').textContent = 'Edit pin type';
+  $('#btn-cattype-save').textContent = 'Save changes';
+  $('#cattype-icon').value = c.icon || '';
+  $('#cattype-label').value = c.label || '';
+  $('#cattype-color').value = c.color || '#e0c37e';
+  $('#cattype-pop').classList.add('hidden');
   $('#dlg-cattype').showModal();
   $('#cattype-label').focus();
 }
@@ -659,12 +703,22 @@ function openCatTypeDialog() {
 function saveCatType() {
   const label = $('#cattype-label').value.trim();
   if (!label) { $('#cattype-label').focus(); return; }
-  const cat = {
-    id: 'c_' + crypto.randomUUID().slice(0, 8),
-    icon: $('#cattype-icon').value.trim() || '📌',
-    label,
-    color: $('#cattype-color').value,
-  };
+  const icon = $('#cattype-icon').value.trim() || '📌';
+  const color = $('#cattype-color').value;
+
+  if (catTypeEditing) {
+    updateCustomCategory(catTypeEditing, { icon, label, color });
+    // re-decorate any pins already using this type
+    for (const e of pins.pins.values()) if (e.data.cat === catTypeEditing) pins.update(e.data);
+    catTypeEditing = null;
+    persistCats();
+    $('#dlg-cattype').close();
+    renderCatList();
+    toast('Pin type updated.', 'ok');
+    return;
+  }
+
+  const cat = { id: 'c_' + crypto.randomUUID().slice(0, 8), icon, label, color };
   addCustomCategory(cat);
   pins.filter.add(cat.id);
   persistCats();
@@ -784,15 +838,59 @@ function wireOpacitySlider() {
   range.addEventListener('change', () => store.putMeta('mapOpacity', +range.value));
 }
 
+// ----------------------------------------------------------------- emoji picker
+
+const EMOJIS = [
+  '🔒','🔑','🗝️','🚪','🧱','🪜','🕳️','🕷️','🦟','🐛','🪲','🦂',
+  '✨','💎','🔮','🧭','🗺️','📌','📍','🚩','❗','❓','⚠️','💰',
+  '🪙','🛒','🏪','🪑','🔥','💀','☠️','👹','👺','👤','🧙','🧵',
+  '🪡','🧶','🌿','🍄','💠','⭐','🌟','💥','⚔️','🛡️','🏹','💊',
+  '❤️','🩸','🔔','🎵','🌀','♨️','❄️','🌊',
+];
+
+function insertAtCursor(input, text) {
+  const s = input.selectionStart ?? input.value.length;
+  const e = input.selectionEnd ?? input.value.length;
+  input.value = input.value.slice(0, s) + text + input.value.slice(e);
+  const pos = s + text.length;
+  input.setSelectionRange(pos, pos);
+}
+
+function setupEmojiPicker(btnSel, popSel, inputSel, replace) {
+  const btn = $(btnSel), pop = $(popSel), input = $(inputSel);
+  for (const em of EMOJIS) {
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = 'emoji-cell';
+    cell.textContent = em;
+    cell.addEventListener('click', () => {
+      if (replace) input.value = em;
+      else insertAtCursor(input, em);
+      pop.classList.add('hidden');
+      input.focus();
+    });
+    pop.appendChild(cell);
+  }
+  btn.addEventListener('click', e => { e.stopPropagation(); pop.classList.toggle('hidden'); });
+  document.addEventListener('click', e => {
+    if (!pop.classList.contains('hidden') && !pop.contains(e.target) && e.target !== btn) {
+      pop.classList.add('hidden');
+    }
+  });
+}
+
 // ----------------------------------------------------------------- toolbar
 
 function buildToolbar() {
   renderCatList();
   $('#btn-cat-all').addEventListener('click', () => {
     for (const c of categories()) pins.filter.add(c.id);
+    soloReturn = null; soloedId = null;
     pins.applyFilter();
     syncAllRows();
   });
+  setupEmojiPicker('#pin-note-emoji', '#pin-note-pop', '#pin-note', false);
+  setupEmojiPicker('#cattype-emoji', '#cattype-pop', '#cattype-icon', true);
   $('#btn-add-pin').addEventListener('click', () => placing ? stopPlacing() : startPlacing());
   wireSidebarResize();
   wireOpacitySlider();
@@ -826,6 +924,7 @@ function buildToolbar() {
     setCustomCategories([]);
     setOrder([]);
     pins.filter = new Set(categories().map(c => c.id));
+    soloReturn = null; soloedId = null;
     renderCatList();
     toast('Everything reset.');
   });

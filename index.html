@@ -33,9 +33,9 @@
     <button id="btn-cat-new" class="mini primary" title="Create your own pin type">+ New</button>
   </div>
   <div id="cat-list"></div>
-  <p class="cat-bar-hint">Click a row to show <b>only</b> that type (click again for all) · use the checkbox to toggle visibility · drag a row to reorder</p>
-  <label class="toggle cat-done-toggle" title="Show pins you've already checked off">
-    <input type="checkbox" id="show-done" checked> show done pins
+  <label class="cat-done-toggle" title="Show pins you've already checked off">
+    <span class="cat-done-name">Show done pins</span>
+    <input type="checkbox" id="show-done" class="cat-check" checked>
   </label>
   <div id="cat-bar-resize" title="Drag to resize"></div>
 </aside>
@@ -93,21 +93,29 @@
 <dialog id="dlg-pin">
   <h2 id="pin-dlg-title">New pin</h2>
   <div id="pin-cats"></div>
-  <input id="pin-note" type="text" maxlength="120" placeholder="Note — e.g. “locked gate, need a key?”">
+  <div class="field-with-emoji">
+    <input id="pin-note" type="text" maxlength="120" placeholder="Note — e.g. “locked gate, need a key?”">
+    <button type="button" class="emoji-btn" id="pin-note-emoji" title="Insert emoji" aria-label="Insert emoji">😀</button>
+    <div class="emoji-pop hidden" id="pin-note-pop"></div>
+  </div>
   <div class="dlg-actions">
     <button id="btn-pin-save" class="btn primary">Save</button>
     <button id="btn-pin-cancel" class="btn">Cancel</button>
   </div>
 </dialog>
 
-<!-- create a custom pin type -->
+<!-- create / edit a custom pin type -->
 <dialog id="dlg-cattype">
-  <h2>New pin type</h2>
+  <h2 id="cattype-title">New pin type</h2>
   <div class="cattype-grid">
-    <label class="cattype-field">
+    <div class="cattype-field">
       <span>Icon</span>
-      <input id="cattype-icon" type="text" maxlength="4" placeholder="📌" autocomplete="off">
-    </label>
+      <div class="field-with-emoji">
+        <input id="cattype-icon" type="text" maxlength="4" placeholder="📌" autocomplete="off">
+        <button type="button" class="emoji-btn" id="cattype-emoji" title="Pick emoji" aria-label="Pick emoji">😀</button>
+        <div class="emoji-pop hidden" id="cattype-pop"></div>
+      </div>
+    </div>
     <label class="cattype-field">
       <span>Colour</span>
       <input id="cattype-color" type="color" value="#e0c37e">

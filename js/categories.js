@@ -50,6 +50,9 @@ export function removeCustomCategory(id) {
   custom = custom.filter(c => c.id !== id);
   order = order.filter(o => o !== id);
 }
+export function updateCustomCategory(id, patch) {
+  custom = custom.map(c => (c.id === id ? { ...c, ...patch, id, custom: true } : c));
+}
 
 export function setOrder(list) { order = Array.isArray(list) ? list.slice() : []; }
 export function currentOrder() { return categories().map(c => c.id); }
