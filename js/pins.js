@@ -18,9 +18,11 @@ export class PinManager {
     this.selectedId = null;
     this.awaitingId = null;    // pin waiting for its area screenshot
     this.hoveredId = null;     // pin currently under the pointer (paste target)
+    this.lastPlacedId = null;  // just-placed pin, excluded from paste-attach
     this._stickyCard = null;
 
     document.addEventListener('pointerdown', e => {
+      this.lastPlacedId = null; // any click means the user has moved on
       if (this._stickyCard && !this._stickyCard.contains(e.target)
           && !e.target.closest('.pin')) {
         this._hideCard(this._stickyCardPin, true);
@@ -93,7 +95,9 @@ export class PinManager {
   // whose card is merely open from an earlier click), so pasting a fresh map
   // screenshot isn't hijacked by the last pin you looked at.
   pasteTarget() {
-    if (this.hoveredId && this.pins.has(this.hoveredId)) return this.hoveredId;
+    if (this.hoveredId && this.hoveredId !== this.lastPlacedId && this.pins.has(this.hoveredId)) {
+      return this.hoveredId;
+    }
     return null;
   }
 
@@ -162,6 +166,7 @@ export class PinManager {
     el.addEventListener('pointerenter', () => {
       clearTimeout(entry._leaveTimer);
       this.hoveredId = entry.data.id;
+      if (entry.data.id !== this.lastPlacedId) this.lastPlacedId = null; // moved to another pin
       if (!entry.pendingMove) this._showCard(entry, false);
     });
     el.addEventListener('pointerleave', () => {

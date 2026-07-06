@@ -232,24 +232,27 @@ function openPinEditor(data, isNew) {
 
 async function applyMapPlacement(bitmap, rect, marker) {
   const fromOcr = rect.via === 'ocr';
-  // Shape-matched pastes lock to the first paste's scale so overlapping shots
-  // line up by translation. OCR placements already carry an accurate scale
-  // (marker- or distance-derived), so we trust them as-is.
-  if (learnedScale && !fromOcr) {
-    const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
-    const nw = bitmap.width * learnedScale, nh = bitmap.height * learnedScale;
-    rect = { ...rect, x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
+  if (fromOcr) {
+    // OCR aligns to the reference map itself, so trust that position — don't
+    // nudge it toward earlier (possibly-misplaced) pastes, and reuse the one
+    // global scale it carries.
+    adoptOcrScale(rect);
+  } else {
+    // shape-matched pastes lock to the first paste's scale so overlapping
+    // shots line up by translation
+    if (learnedScale) {
+      const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
+      const nw = bitmap.width * learnedScale, nh = bitmap.height * learnedScale;
+      rect = { ...rect, x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
+    }
+    rect = explored.refineAlignment(bitmap, rect);
+    if (!learnedScale) {
+      learnedScale = rect.w / bitmap.width;
+      store.putMeta('scale', learnedScale);
+    }
   }
-  // fine-tune position against already-explored content (translation only)
-  rect = explored.refineAlignment(bitmap, rect);
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
-
-  // a shape-matched first paste defines the locked scale for later ones
-  if (!learnedScale && !fromOcr) {
-    learnedScale = rect.w / bitmap.width;
-    store.putMeta('scale', learnedScale);
-  }
 
   const data = {
     id: crypto.randomUUID(),
@@ -260,6 +263,7 @@ async function applyMapPlacement(bitmap, rect, marker) {
   };
   lastUndo.pinId = data.id;
   pins.add(data, { select: true });
+  pins.lastPlacedId = data.id; // don't let a paste right after placing attach to it
   persistPin(data);
   view.centerOn(data.x, data.y, Math.min(1, (window.innerWidth * 0.6) / rect.w));
 
@@ -280,12 +284,20 @@ async function applyMapPlacement(bitmap, rect, marker) {
 async function tryOcr(bitmap, full, scaleHint) {
   try {
     spinner(true, 'Reading the area name…');
-    const r = await ocrLocate(bitmap, { full, scaleHint, onStatus: m => spinner(true, m) });
+    const r = await ocrLocate(bitmap, { full, scaleHint, lockedScale: learnedScale, onStatus: m => spinner(true, m) });
     if (r) console.log('[silksong-map] OCR match:', r.names, r);
     return (r && plausible(r)) ? r : null;
   } catch (e) {
     console.warn('[silksong-map] OCR unavailable:', e.message);
     return null;
+  }
+}
+
+// store the single global scale an OCR paste established / recalibrated
+function adoptOcrScale(rect) {
+  if (rect && rect.via === 'ocr' && rect.establishScale) {
+    learnedScale = rect.establishScale;
+    store.putMeta('scale', learnedScale);
   }
 }
 
@@ -441,7 +453,8 @@ async function handleFullMap(blob) {
 
   spinner(true, 'Compositing your map…');
   await new Promise(r => setTimeout(r, 30)); // let the spinner paint
-  rect = explored.refineAlignment(bitmap, rect);
+  if (rect.via === 'ocr') adoptOcrScale(rect); // trust the reference-aligned OCR position
+  else rect = explored.refineAlignment(bitmap, rect);
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
   spinner(false);
@@ -864,6 +877,7 @@ async function createManualPin(x, y) {
     created: Date.now(),
   };
   pins.add(data, { select: true });
+  pins.lastPlacedId = data.id;
   persistPin(data);
   const edit = await openPinEditor(data, true);
   if (edit) {

@@ -148,7 +148,7 @@ const median = arr => {
 
 // Locate a screenshot on the map by its area-name label(s).
 // Returns a rect { x, y, w, h, score, z, ratio, via:'ocr' } in map px, or null.
-export async function ocrLocate(shot, { full = false, scaleHint = null, onStatus } = {}) {
+export async function ocrLocate(shot, { full = false, scaleHint = null, lockedScale = null, onStatus } = {}) {
   const labels = await loadLabels();
   if (!labels.length) return null;
   if (onStatus) onStatus('Reading the area name…');
@@ -179,10 +179,10 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, onStatus
   }
   const uniq = [...byLabel.values()];
 
-  // scale k = map px per shot px, from the most reliable source available:
-  //   distance between two names  → best when several are visible (full maps)
-  //   player-marker scale hint    → calibrated; best for zoomed-in shots
-  //   glyph-height ratio          → last resort for a lone label
+  // Every screenshot is at the same in-game zoom, so the scale is a single
+  // GLOBAL value reused for every paste (positions vary, scale doesn't). It's
+  // established once from the best source and only recalibrated by a full-map
+  // paste, whose names are far enough apart to give the exact ratio.
   let kDist = null;
   if (uniq.length >= 2) {
     const ks = [];
@@ -191,16 +191,20 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, onStatus
         const a = uniq[i], b = uniq[j];
         const shotD = Math.hypot(a.c.cx - b.c.cx, a.c.cy - b.c.cy);
         const mapD = Math.hypot(a.lb.x - b.lb.x, a.lb.y - b.lb.y);
-        if (shotD > 15) ks.push(mapD / shotD);
+        if (shotD > 40) ks.push(mapD / shotD); // far-apart names only
       }
     }
     if (ks.length) kDist = median(ks);
   }
   const kHeight = uniq[0].c.h > 0 ? uniq[0].lb.h / uniq[0].c.h : null;
   const hint = scaleHint > 0 ? scaleHint : null;
-  // full maps: prefer inter-name distance (marker is too small to measure);
-  // zoomed shots: prefer the calibrated marker scale
-  const k = full ? (kDist || hint || kHeight) : (hint || kDist || kHeight);
+  const locked = lockedScale > 0 ? lockedScale : null;
+
+  // what scale (if any) this paste should store as the new global
+  let establishScale = null;
+  if (full && kDist) establishScale = kDist;      // full map recalibrates exactly
+  else if (!locked) establishScale = kDist || hint || kHeight; // first time
+  const k = establishScale != null ? establishScale : locked;
   if (!(k > 0) || k < 0.03 || k > 60) return null;
 
   // offset = map coord of shot pixel (0,0), consensus across labels
@@ -218,7 +222,6 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, onStatus
   }
 
   const bestScore = Math.max(...uniq.map(m => m.s));
-  const strong = uniq.length >= 2 || bestScore >= 0.85;
   return {
     x: ox,
     y: oy,
@@ -226,7 +229,9 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, onStatus
     h: shot.height * k,
     score: bestScore,
     z: 99,
-    ratio: strong ? 0.4 : 0.9, // 2+ names or an exact hit → apply; else confirm
+    // multiple names cross-check each other → apply; a lone name is confirmed
+    ratio: uniq.length >= 2 ? 0.4 : 0.9,
+    establishScale,
     via: 'ocr',
     names: uniq.map(m => m.lb.name),
   };
