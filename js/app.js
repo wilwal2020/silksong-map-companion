@@ -2,6 +2,7 @@ import { Explored } from './explored.js';
 import { MapView } from './mapview.js';
 import { store } from './store.js';
 import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT } from './match.js';
+import { ocrLocate, loadLabels } from './ocr.js';
 import { PinManager } from './pins.js';
 import {
   categories, catById, customCategories, currentOrder, isCustom,
@@ -273,36 +274,49 @@ function applyMapPlacement(bitmap, rect, marker) {
     'Skip this step');
 }
 
+// Read the area name(s) first — reliable even when the surrounding area is
+// unexplored (black). Returns a plausible rect or null (then we shape-match).
+async function tryOcr(bitmap, full) {
+  try {
+    spinner(true, 'Reading the area name…');
+    const r = await ocrLocate(bitmap, { full, onStatus: m => spinner(true, m) });
+    if (r) console.log('[silksong-map] OCR match:', r.names, r);
+    return (r && plausible(r)) ? r : null;
+  } catch (e) {
+    console.warn('[silksong-map] OCR unavailable:', e.message);
+    return null;
+  }
+}
+
 async function handleMapScreenshot(blob) {
   const bitmap = await createImageBitmap(blob);
-  spinner(true, 'Locating screenshot on the map…');
-
-  // Every screenshot is at the same in-game zoom, so once the first paste
-  // has fixed the scale, lock ALL later pastes to that exact scale — they
-  // then line up by translation alone (like matching them by hand). Before
-  // that, seed the scale from the player marker if one is visible.
   const marker = detectPlayerMarker(bitmap);
-  const hint = learnedScale
-    ? { k: learnedScale, tight: true }
-    : (marker ? { k: MARKER_MAP_HEIGHT / marker.h, tight: true } : null);
 
-  let rect = null;
-  try {
-    const prog = f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`);
-    rect = await locate(bitmap, mapImage, 'map', prog, hint);
-    // hint may be stale or wrong — whenever the hinted result isn't
-    // rock-solid, also search unconstrained and keep the better answer
-    if (hint && !(certain(rect) || rect?.via === 'label')) {
-      spinner(true, 'Double-checking across all scales…');
-      const wide = await locate(bitmap, mapImage, 'map', prog, null);
-      if (wide && (!rect || wide.via === 'label' || wide.ratio < rect.ratio)) rect = wide;
+  let rect = await tryOcr(bitmap, false);
+
+  if (!rect) {
+    // fall back to shape matching. Every screenshot is at the same in-game
+    // zoom, so once the first paste has fixed the scale, lock ALL later pastes
+    // to that exact scale; before that, seed it from the player marker.
+    spinner(true, 'Locating screenshot on the map…');
+    const hint = learnedScale
+      ? { k: learnedScale, tight: true }
+      : (marker ? { k: MARKER_MAP_HEIGHT / marker.h, tight: true } : null);
+    try {
+      const prog = f => spinner(true, `Locating screenshot on the map… ${Math.round(f * 100)}%`);
+      rect = await locate(bitmap, mapImage, 'map', prog, hint);
+      if (hint && !(certain(rect) || rect?.via === 'label')) {
+        spinner(true, 'Double-checking across all scales…');
+        const wide = await locate(bitmap, mapImage, 'map', prog, null);
+        if (wide && (!rect || wide.via === 'label' || wide.ratio < rect.ratio)) rect = wide;
+      }
+    } catch (err) {
+      console.error(err);
+      toast('Locating failed: ' + err.message, 'error');
     }
-  } catch (err) {
-    console.error(err);
-    toast('Locating failed: ' + err.message, 'error');
   }
   spinner(false);
-  console.log('[silksong-map] map locate:', rect, 'marker:', marker, 'hint:', hint);
+  console.log('[silksong-map] map locate:', rect, 'marker:', marker);
 
   if (!plausible(rect)) {
     bitmap.close?.();
@@ -381,20 +395,26 @@ async function handleEnvScreenshot(blob) {
 
 async function handleFullMap(blob) {
   const bitmap = await createImageBitmap(blob);
-  spinner(true, 'Aligning your map…');
   const marker = detectPlayerMarker(bitmap);
-  const hint = marker ? { k: MARKER_MAP_HEIGHT / marker.h, tight: true } : null;
-  let rect = null;
-  try {
-    const prog = f => spinner(true, `Aligning your map… ${Math.round(f * 100)}%`);
-    rect = await locate(bitmap, mapImage, 'full', prog, hint);
-    if (!plausible(rect) && hint) {
-      const wide = await locate(bitmap, mapImage, 'full', prog, null);
-      if (wide && (!rect || wide.ratio < rect.ratio)) rect = wide;
+
+  // read area names first — a big zoomed-out map has several, which pins the
+  // scale from the distances between them (no per-paste drift)
+  let rect = await tryOcr(bitmap, true);
+
+  if (!rect) {
+    spinner(true, 'Aligning your map…');
+    const hint = marker ? { k: MARKER_MAP_HEIGHT / marker.h, tight: true } : null;
+    try {
+      const prog = f => spinner(true, `Aligning your map… ${Math.round(f * 100)}%`);
+      rect = await locate(bitmap, mapImage, 'full', prog, hint);
+      if (!plausible(rect) && hint) {
+        const wide = await locate(bitmap, mapImage, 'full', prog, null);
+        if (wide && (!rect || wide.ratio < rect.ratio)) rect = wide;
+      }
+    } catch (err) {
+      console.error(err);
+      toast('Aligning failed: ' + err.message, 'error');
     }
-  } catch (err) {
-    console.error(err);
-    toast('Aligning failed: ' + err.message, 'error');
   }
 
   spinner(false);
@@ -1018,6 +1038,7 @@ async function init() {
   if (savedOpacity != null) { $('#opacity-range').value = savedOpacity; applyMapOpacity(savedOpacity); }
 
   buildToolbar();
+  loadLabels(); // warm the area-name table for OCR matching
 
   if (!savedFog && !(await store.getMeta('helped'))) {
     $('#dlg-help').showModal();
