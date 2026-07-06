@@ -36,15 +36,15 @@
     <button id="btn-cat-new" class="mini primary" title="Create your own pin type">+ New</button>
   </div>
   <div id="cat-list"></div>
-  <p class="cat-bar-hint">Click a row to show <b>only</b> that type · use the checkbox to toggle visibility · drag <span class="grip-glyph">⋮⋮</span> to reorder</p>
+  <p class="cat-bar-hint">Click a row to show <b>only</b> that type (click again for all) · use the checkbox to toggle visibility · drag a row to reorder</p>
   <div id="cat-bar-resize" title="Drag to resize"></div>
 </aside>
 
-<aside id="map-opacity" title="Map opacity (pins stay fully visible)">
-  <span class="op-ico">🗺</span>
+<div id="map-opacity" title="Map opacity (pins stay fully visible)">
+  <span class="op-ico">👁</span>
   <input id="opacity-range" type="range" min="15" max="100" value="100">
   <span class="op-val">100%</span>
-</aside>
+</div>
 
 <main id="stage">
   <canvas id="map-canvas"></canvas>

@@ -533,7 +533,10 @@ function persistCats() {
 
 function updateCatCounts() {
   const counts = {};
-  for (const e of pins.pins.values()) counts[e.data.cat] = (counts[e.data.cat] || 0) + 1;
+  for (const e of pins.pins.values()) {
+    if (e.data.done) continue;            // completed pins don't count
+    counts[e.data.cat] = (counts[e.data.cat] || 0) + 1;
+  }
   for (const row of $('#cat-list').children) {
     const n = counts[row.dataset.id] || 0;
     row.querySelector('.cat-count').textContent = n || '';
@@ -555,16 +558,20 @@ function renderCatList() {
   const list = $('#cat-list');
   list.innerHTML = '';
   for (const c of categories()) {
+    const on = pins.filter.has(c.id);
     const row = document.createElement('div');
-    row.className = 'cat-row' + (pins.filter.has(c.id) ? '' : ' off');
+    row.className = 'cat-row' + (on ? '' : ' off');
     row.dataset.id = c.id;
     row.style.setProperty('--pc', c.color || '#9e2b25');
+    // fixed del-slot on every row keeps the count column aligned whether or
+    // not the type is deletable; checkbox lives on the right
     row.innerHTML =
-      `<input type="checkbox" class="cat-check" title="Show / hide this type"${pins.filter.has(c.id) ? ' checked' : ''}>` +
       `<span class="cat-grip" title="Drag to reorder">⋮⋮</span>` +
       `<span class="cat-ico">${c.icon}</span>` +
       `<span class="cat-name">${c.label}</span>` +
-      `<span class="cat-count"></span>`;
+      `<span class="cat-count"></span>` +
+      `<span class="cat-del-slot"></span>` +
+      `<input type="checkbox" class="cat-check" title="Show / hide this type"${on ? ' checked' : ''}>`;
 
     // checkbox toggles visibility for just this type
     row.querySelector('.cat-check').addEventListener('change', e => {
@@ -575,48 +582,42 @@ function renderCatList() {
       pins.applyFilter();
     });
 
-    // clicking the row shows ONLY this type
-    row.addEventListener('click', e => {
-      if (e.target.closest('.cat-check, .cat-grip, .cat-del')) return;
-      if (row._suppressClick) return;
-      soloCategory(c.id);
-    });
-
     if (isCustom(c.id)) {
       const del = document.createElement('button');
       del.className = 'cat-del';
       del.textContent = '🗑';
       del.title = 'Delete this custom type';
       del.addEventListener('click', e => { e.stopPropagation(); deleteCustomType(c.id); });
-      row.appendChild(del);
+      row.querySelector('.cat-del-slot').appendChild(del);
     }
 
-    wireCatDrag(row);
+    wireCatRow(row, c.id);
     list.appendChild(row);
   }
   updateCatCounts();
 }
 
-// show only one type
-function soloCategory(id) {
+// clicking a row shows only that type; clicking the soloed row again
+// reveals everything. dragging anywhere on the row reorders.
+function toggleSolo(id) {
+  const soloed = pins.filter.size === 1 && pins.filter.has(id);
   pins.filter.clear();
-  pins.filter.add(id);
+  if (soloed) for (const c of categories()) pins.filter.add(c.id);
+  else pins.filter.add(id);
   pins.applyFilter();
   syncAllRows();
 }
 
-function wireCatDrag(row) {
-  const grip = row.querySelector('.cat-grip');
-  grip.addEventListener('pointerdown', e => {
+function wireCatRow(row, id) {
+  row.addEventListener('pointerdown', e => {
+    if (e.target.closest('.cat-check, .cat-del')) return; // let controls work
     e.preventDefault();
-    e.stopPropagation();
     const list = $('#cat-list');
     const startY = e.clientY;
     let dragging = false;
     const onMove = ev => {
-      if (!dragging && Math.abs(ev.clientY - startY) < 4) return;
-      dragging = true;
-      row.classList.add('dragging');
+      if (!dragging && Math.abs(ev.clientY - startY) < 5) return;
+      if (!dragging) { dragging = true; row.classList.add('dragging'); }
       const others = [...list.querySelectorAll('.cat-row:not(.dragging)')];
       const after = others.find(r => {
         const box = r.getBoundingClientRect();
@@ -628,13 +629,13 @@ function wireCatDrag(row) {
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
-      if (!dragging) return;
-      row.classList.remove('dragging');
-      setOrder([...list.querySelectorAll('.cat-row')].map(r => r.dataset.id));
-      persistCats();
-      // swallow the click that fires right after a drag
-      row._suppressClick = true;
-      setTimeout(() => { row._suppressClick = false; }, 0);
+      if (dragging) {
+        row.classList.remove('dragging');
+        setOrder([...list.querySelectorAll('.cat-row')].map(r => r.dataset.id));
+        persistCats();
+      } else {
+        toggleSolo(id);
+      }
     };
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
