@@ -87,10 +87,13 @@ export class Explored {
   // When the new rect overlaps existing content, brute-force the small shift
   // that best lines the new screenshot's outlines up with the composite, and
   // return the corrected rect so the seam is continuous.
-  refineAlignment(bitmap, rect) {
+  // `maxShift` (map px) caps the search: reference-aligned pastes only need
+  // a few-pixel nudge to stitch seamlessly, and a tight cap keeps them from
+  // being dragged toward an older, worse-placed paste.
+  refineAlignment(bitmap, rect, { maxShift = 45 } = {}) {
     const s = this.scale;
     const rxE = rect.x * s, ryE = rect.y * s, rwE = rect.w * s, rhE = rect.h * s;
-    const DW = 280;
+    const DW = 320;
     const f = DW / rwE;                 // reduced px per explored px
     const DH = Math.max(1, Math.round(rhE * f));
     if (DH < 16) return rect;
@@ -121,7 +124,7 @@ export class Explored {
     const ix = [], iy = [];
     for (let p = 0; p < N.m.length; p++) if (N.m[p]) { ix.push(p % DW); iy.push((p / DW) | 0); }
 
-    const R = Math.min(20, Math.max(4, Math.round(45 * s * f))); // ±~45 map px
+    const R = Math.min(24, Math.max(2, Math.round(maxShift * s * f)));
     let best = { score: -1, dx: 0, dy: 0 };
     for (let dy = -R; dy <= R; dy++) {
       for (let dx = -R; dx <= R; dx++) {

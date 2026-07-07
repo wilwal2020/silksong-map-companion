@@ -16,6 +16,7 @@ let newPinPending = null; // freshly created pin waiting for its area screenshot
 let lastUndo = null;      // { snap, pinId } — one level of paste undo
 let learnedScale = null;  // map-px per screenshot-px from past successes
 let scaleTrusted = false; // learnedScale was verified against reference content
+let scaleSamples = [];    // recent content-verified scales; learnedScale = median
 
 // three-tier confidence, calibrated on 25 real screenshots: correct matches
 // have ratio (runner-up/best peak) 0.44-0.92, wrong ones 0.90-0.98.
@@ -233,9 +234,12 @@ function openPinEditor(data, isNew) {
 
 async function applyMapPlacement(bitmap, rect, marker) {
   if (rect.via === 'ocr' || rect.via === 'label') {
-    // OCR/label placements align to the reference map itself, so trust that
-    // position — don't nudge it toward earlier (possibly-misplaced) pastes.
+    // OCR/label placements align to the reference map itself — trust them,
+    // pin them to the one global scale, then allow only a few-pixel nudge
+    // onto already-pasted content so overlaps stitch without a visible seam.
     adoptScale(rect, bitmap);
+    rect = forceGlobalScale(rect, bitmap);
+    rect = explored.refineAlignment(bitmap, rect, { maxShift: 8 });
   } else {
     // shape-matched pastes lock to the first paste's scale so overlapping
     // shots line up by translation
@@ -303,17 +307,24 @@ async function tryOcr(bitmap, full, scaleHint) {
     const spread = r.scaleSource === 'locked' && scaleTrusted ? 'narrow'
       : r.scaleSource === 'height' ? 'wide' : 'normal';
     let snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread });
+    let usedSpread = spread;
     if (snapped && snapped.sparse) return r; // unexplored area — nothing to verify against
     if (!snapped && spread !== 'wide') {
       // the scale guess may be further off than expected (stale saved scale,
       // resolution change) — search a much wider scale band before giving up
       spinner(true, 'Searching nearby scales…');
       snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread: 'wide' });
+      usedSpread = 'wide';
       if (snapped && snapped.sparse) return r;
     }
     if (snapped) {
       console.log('[silksong-map] OCR refined:', snapped);
-      return { ...snapped, score: Math.max(r.score, snapped.score), names: r.names, via: 'ocr', refined: true };
+      return {
+        ...snapped, score: Math.max(r.score, snapped.score), names: r.names,
+        via: 'ocr', refined: true,
+        // a narrow search only re-found the locked scale — not a measurement
+        scaleMeasured: usedSpread !== 'narrow',
+      };
     }
     // there IS map content here but none of it matched the reference at the
     // OCR spot — don't apply that silently, make it a yes/no check
@@ -325,20 +336,46 @@ async function tryOcr(bitmap, full, scaleHint) {
   return r;
 }
 
-// Keep the single global scale in sync. A content-verified placement (room
-// structure matched against the reference) always recalibrates it; a raw
-// OCR guess only seeds it while nothing better is known.
+// Keep the single global scale in sync. Content-verified placements (room
+// structure matched against the reference) each contribute a sample and the
+// global scale is their median — individual refinements jitter by ~1% and
+// the median keeps every future paste locked to one consistent zoom. A raw
+// OCR guess only seeds the scale while nothing better is known.
 function adoptScale(rect, bitmap) {
   const verified = rect.refined || (rect.via === 'label' && !rect.unverified);
-  let k = null;
-  if (verified) k = rect.w / bitmap.width;
-  else if (rect.via === 'ocr' && rect.establishScale && !learnedScale) k = rect.establishScale;
-  if (k) {
-    learnedScale = k;
-    scaleTrusted = verified;
-    store.putMeta('scale', k);
-    store.putMeta('scaleTrusted', verified);
+  if (verified) {
+    // only genuine measurements feed the median — a narrow re-find of the
+    // locked scale carries no new information
+    const measured = rect.via === 'label' || rect.scaleMeasured !== false;
+    if (measured || !scaleSamples.length) {
+      scaleSamples.push(rect.w / bitmap.width);
+      if (scaleSamples.length > 9) scaleSamples.shift();
+      const s = [...scaleSamples].sort((a, b) => a - b);
+      learnedScale = s[s.length >> 1];
+      store.putMeta('scale', learnedScale);
+      store.putMeta('scaleSamples', scaleSamples);
+    }
+    scaleTrusted = true;
+    store.putMeta('scaleTrusted', true);
+  } else if (rect.via === 'ocr' && rect.establishScale && !learnedScale) {
+    learnedScale = rect.establishScale;
+    scaleTrusted = false;
+    store.putMeta('scale', learnedScale);
+    store.putMeta('scaleTrusted', false);
   }
+}
+
+// Every screenshot is taken at the same in-game zoom, so once the global
+// scale is trusted there is exactly ONE correct scale. Forcing it (about the
+// placement's centre) makes overlapping pastes differ by translation only,
+// which the stitch nudge then closes seamlessly.
+function forceGlobalScale(rect, bitmap) {
+  if (!(scaleTrusted && learnedScale)) return rect;
+  const k = rect.w / bitmap.width;
+  if (Math.abs(k / learnedScale - 1) >= 0.025) return rect; // too far off — keep measured
+  const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
+  const nw = bitmap.width * learnedScale, nh = bitmap.height * learnedScale;
+  return { ...rect, x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
 }
 
 async function handleMapScreenshot(blob) {
@@ -394,10 +431,33 @@ async function handleMapScreenshot(blob) {
       toast('Cancelled — nothing was revealed.');
       return;
     }
+    rect = await postConfirmRefine(bitmap, rect, false);
   }
 
   applyMapPlacement(bitmap, rect, marker);
   bitmap.close?.();
+}
+
+// The user vouched for an OCR spot the content check couldn't verify — try
+// once more with a wide scale band and a relaxed bar. OCR text geometry
+// gets the position roughly right but the scale visibly wrong; snapping to
+// the rooms under the human-approved spot fixes the scale too.
+async function postConfirmRefine(bitmap, rect, full) {
+  if (!(rect.via === 'ocr' && !rect.refined)) return rect;
+  try {
+    spinner(true, 'Fine-tuning the position…');
+    const snapped = await locate(bitmap, mapImage, full ? 'full' : 'map', null,
+      { rect, spread: 'wide', confirmed: true });
+    if (snapped && !snapped.sparse) {
+      console.log('[silksong-map] post-confirm refine:', snapped);
+      return { ...snapped, score: Math.max(rect.score, snapped.score), names: rect.names, via: 'ocr', refined: true, scaleMeasured: true };
+    }
+  } catch (e) {
+    console.warn('[silksong-map] post-confirm refine failed:', e.message);
+  } finally {
+    spinner(false);
+  }
+  return rect;
 }
 
 // a paste while a pin is awaiting its screenshot attaches directly — no dialog
@@ -497,12 +557,20 @@ async function handleFullMap(blob) {
       toast('Cancelled — nothing was changed.');
       return;
     }
+    rect = await postConfirmRefine(bitmap, rect, true);
   }
 
   spinner(true, 'Compositing your map…');
   await new Promise(r => setTimeout(r, 30)); // let the spinner paint
-  if (rect.via === 'ocr' || rect.via === 'label') adoptScale(rect, bitmap); // reference-aligned — trust it
-  else rect = explored.refineAlignment(bitmap, rect);
+  if (rect.via === 'ocr' || rect.via === 'label') {
+    // reference-aligned — trust it, pin to the global scale, then a tiny
+    // stitch nudge onto what's already pasted
+    adoptScale(rect, bitmap);
+    rect = forceGlobalScale(rect, bitmap);
+    rect = explored.refineAlignment(bitmap, rect, { maxShift: 8 });
+  } else {
+    rect = explored.refineAlignment(bitmap, rect);
+  }
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
   spinner(false);
@@ -1065,6 +1133,7 @@ async function init() {
   // restore saved state
   learnedScale = (await store.getMeta('scale')) || null;
   scaleTrusted = !!(await store.getMeta('scaleTrusted'));
+  scaleSamples = (await store.getMeta('scaleSamples')) || [];
   const savedFog = await store.getMeta('fog');
   if (savedFog) await explored.loadFromBlob(savedFog);
   const savedView = await store.getMeta('view');

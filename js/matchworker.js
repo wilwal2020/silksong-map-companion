@@ -446,6 +446,20 @@ function refinePass(cv, tmplBase, aspect, cx2, cy2, twCenter, ks, progressFrom) 
   return fine;
 }
 
+// After a ladder search, walk the scale in shrinking sub-percent steps —
+// the ladder's 2-3% quantization leaves multi-pixel edge error on big pastes.
+function polishScale(cv, tmplBase, aspect, fine, progressFrom) {
+  let best = fine;
+  for (const step of [0.008, 0.003]) {
+    const cx2 = best.mx + best.tw / 2;
+    const cy2 = best.my + best.tw * aspect / 2;
+    const r = refinePass(cv, tmplBase, aspect, cx2, cy2, best.tw,
+      [1 - step, 1, 1 + step], progressFrom);
+    if (r && r.score > best.score) best = r;
+  }
+  return best;
+}
+
 function matchAt(cv, ref, tmpl) {
   const result = new cv.Mat();
   cv.matchTemplate(ref, tmpl, result, cv.TM_CCOEFF_NORMED);
@@ -532,14 +546,23 @@ async function locate(shot, mode, hint) {
     const ks = hint.spread === 'wide'
       ? Array.from({ length: 28 }, (_, i) => 0.6 * Math.pow(1.6 / 0.6, i / 27))
       : hint.spread === 'narrow'
-        ? [0.97, 0.985, 1.0, 1.015, 1.03]
+        ? [0.985, 1.0, 1.015]
         : [0.93, 0.955, 0.98, 1.0, 1.02, 1.045, 1.07];
-    const fine = refinePass(cv, tmplBase, aspect, cxp, cyp, twp, ks, 0.1);
+    let fine = refinePass(cv, tmplBase, aspect, cxp, cyp, twp, ks, 0.1);
+    // polish measures the scale precisely when it is genuinely unknown; with
+    // a trusted locked scale ('narrow') the caller forces that exact scale
+    // afterwards anyway, and letting polish walk off the band only feeds
+    // content-specific bias (organic areas correlate better slightly shrunk)
+    if (fine && hint.spread !== 'narrow') fine = polishScale(cv, tmplBase, aspect, fine, 0.8);
     tmplBase.delete();
     // same room-structure verification bar as a label identification; a
     // wide scale sweep has more chances to fluke past it, so it must clear
-    // a higher bar (a false edge hit measured 0.19, real ones 0.30-0.42)
-    const thr = (mode === 'full' ? 0.12 : 0.18) * (hint.spread === 'wide' ? 1.4 : 1);
+    // a higher bar (a false edge hit measured 0.19, real ones 0.30-0.42).
+    // When the user has already confirmed the location, the bar relaxes —
+    // identity is human-verified, only the geometry needs the content.
+    const thr = (mode === 'full' ? 0.12 : 0.18)
+      * (hint.spread === 'wide' ? 1.4 : 1)
+      * (hint.confirmed ? 0.55 : 1);
     if (!fine || fine.score < thr) {
       // an unexplored (near-black) shot has nothing to correlate — tell the
       // caller so it can keep the OCR placement instead of distrusting it
@@ -574,8 +597,9 @@ async function locate(shot, mode, hint) {
       const twp = rect.w * kB * refScale2;
       const cxp = (x0map + (rect.x + rect.w / 2) * kB) * refScale2 + pad2;
       const cyp = (y0map + (rect.y + rect.h / 2) * kB) * refScale2 + pad2;
-      const fineL = refinePass(cv, tmplBase, aspect, cxp, cyp, twp,
+      let fineL = refinePass(cv, tmplBase, aspect, cxp, cyp, twp,
         [0.955, 0.98, 1.0, 1.02, 1.045], 0.2);
+      if (fineL) fineL = polishScale(cv, tmplBase, aspect, fineL, 0.6);
       // correct label hits verify at 0.25-0.40 on real screenshots; a wrong
       // one measured 0.14 — require solid room agreement (zoomed-out full
       // maps have thin outlines, so their verification runs weaker)
@@ -701,7 +725,8 @@ async function locate(shot, mode, hint) {
   const ks = (hint && hint.tight)
     ? [0.95, 0.975, 1.0, 1.025, 1.05]
     : [0.86, 0.89, 0.92, 0.95, 0.975, 1.0, 1.025, 1.05, 1.08, 1.11, 1.145];
-  const fine = refinePass(cv, tmplBase, aspect, cx2, cy2, best.tw * up, ks, 0.7);
+  let fine = refinePass(cv, tmplBase, aspect, cx2, cy2, best.tw * up, ks, 0.7);
+  if (fine) fine = polishScale(cv, tmplBase, aspect, fine, 0.9);
   tmplBase.delete();
 
   // map back to full map coordinates for the complete (uncropped) screenshot

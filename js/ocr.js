@@ -104,14 +104,16 @@ async function readLabels(shot) {
   const worker = await getWorker();
   const { canvas, scale } = preprocess(shot);
   const { data } = await worker.recognize(canvas);
-  const words = (data.words || [])
+  const all = (data.words || [])
     .map(w => ({
       t: (w.text || '').replace(/[^A-Za-z']/g, ''),
       c: w.confidence,
       x0: w.bbox.x0 / scale, y0: w.bbox.y0 / scale,
       x1: w.bbox.x1 / scale, y1: w.bbox.y1 / scale,
     }))
-    .filter(w => w.t.length >= 2 && w.c >= 55 && (w.y1 - w.y0) >= 6 && (w.y1 - w.y0) <= shot.height * 0.2);
+    .filter(w => w.t.length >= 2 && (w.y1 - w.y0) >= 6 && (w.y1 - w.y0) <= shot.height * 0.2);
+  const words = all.filter(w => w.c >= 55);
+  const weak = all.filter(w => w.c >= 25 && w.c < 55);
 
   // group into lines (similar baseline, horizontally adjacent)
   words.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
@@ -131,6 +133,33 @@ async function readLabels(shot) {
       lines.push({ text: w.t, x0: w.x0, y0: w.y0, x1: w.x1, y1: w.y1, cy, h });
     }
   }
+
+  // rescue: a low-confidence word sitting on an accepted line's baseline and
+  // directly extending it is almost certainly part of the same name (the
+  // stylized first word often scores low — "Bone" in "Bone Bottom" hit 45).
+  // Without it the line's centre shifts and drags the placement with it.
+  let attached = true;
+  while (attached) {
+    attached = false;
+    for (let i = weak.length - 1; i >= 0; i--) {
+      const w = weak[i];
+      const h = w.y1 - w.y0, cy = (w.y0 + w.y1) / 2;
+      for (const l of lines) {
+        const lh = l.h;
+        const gapR = w.x0 - l.x1, gapL = l.x0 - w.x1;
+        if (Math.abs(cy - l.cy) > lh * 0.7) continue;
+        if (!((gapR <= lh * 3 && gapR > -lh) || (gapL <= lh * 3 && gapL > -lh))) continue;
+        l.text = w.x0 >= l.x0 ? l.text + ' ' + w.t : w.t + ' ' + l.text;
+        l.x0 = Math.min(l.x0, w.x0); l.x1 = Math.max(l.x1, w.x1);
+        l.y0 = Math.min(l.y0, w.y0); l.y1 = Math.max(l.y1, w.y1);
+        l.cy = (l.cy + cy) / 2; l.h = (l.h + h) / 2;
+        weak.splice(i, 1);
+        attached = true;
+        break;
+      }
+    }
+  }
+
   return lines.map(l => ({
     text: l.text,
     cx: (l.x0 + l.x1) / 2,
@@ -185,19 +214,27 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
   // GLOBAL value reused for every paste (positions vary, scale doesn't). It's
   // established once from the best source and only recalibrated by a full-map
   // paste, whose names are far enough apart to give the exact ratio.
-  let kDist = null;
-  if (uniq.length >= 2) {
-    const ks = [];
-    for (let i = 0; i < uniq.length; i++) {
-      for (let j = i + 1; j < uniq.length; j++) {
-        const a = uniq[i], b = uniq[j];
-        if (a.c.cut || b.c.cut) continue; // truncated names have shifted centres
-        const shotD = Math.hypot(a.c.cx - b.c.cx, a.c.cy - b.c.cy);
-        const mapD = Math.hypot(a.lb.x - b.lb.x, a.lb.y - b.lb.y);
-        if (shotD > 150) ks.push(mapD / shotD); // far-apart names only
-      }
+  // one similarity fit (single scale + offset) over all clean name anchors —
+  // with 3+ names this is overdetermined and pins scale and offset far
+  // better than pairwise medians. Truncated (edge-cut) names are excluded:
+  // their centres are shifted. Needs adequate spread between the names.
+  const anchors = uniq.filter(m => !m.c.cut);
+  let kDist = null, lsFit = null;
+  if (anchors.length >= 2) {
+    let cxm = 0, cym = 0, lxm = 0, lym = 0;
+    for (const m of anchors) { cxm += m.c.cx; cym += m.c.cy; lxm += m.lb.x; lym += m.lb.y; }
+    const n = anchors.length;
+    cxm /= n; cym /= n; lxm /= n; lym /= n;
+    let num = 0, den = 0;
+    for (const m of anchors) {
+      num += (m.c.cx - cxm) * (m.lb.x - lxm) + (m.c.cy - cym) * (m.lb.y - lym);
+      den += (m.c.cx - cxm) ** 2 + (m.c.cy - cym) ** 2;
     }
-    if (ks.length) kDist = median(ks);
+    // den for two names d apart is d²/2 — this is the old >150px pair rule
+    if (den >= 11000 && num > 0) {
+      kDist = num / den;
+      lsFit = { ox: lxm - kDist * cxm, oy: lym - kDist * cym };
+    }
   }
   const kHeight = uniq[0].c.h > 0 ? uniq[0].lb.h / uniq[0].c.h : null;
   const hint = scaleHint > 0 ? scaleHint : null;
@@ -220,13 +257,14 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
   }
   if (!(k > 0) || k < 0.03 || k > 60) return null;
 
-  // offset = map coord of shot pixel (0,0), consensus across labels;
-  // prefer names that are fully inside the frame
-  const anchors = uniq.filter(m => !m.c.cut);
+  // offset = map coord of shot pixel (0,0): the least-squares offset when
+  // the fit supplied the scale, otherwise a consensus across labels
+  // (preferring names that are fully inside the frame)
   const use = anchors.length ? anchors : uniq;
   const oxs = use.map(m => m.lb.x - m.c.cx * k);
   const oys = use.map(m => m.lb.y - m.c.cy * k);
-  const ox = median(oxs), oy = median(oys);
+  let ox = median(oxs), oy = median(oys);
+  if (lsFit && k === kDist) { ox = lsFit.ox; oy = lsFit.oy; }
 
   // reject if the labels disagree badly on the offset (a bad match set)
   if (use.length >= 2) {
