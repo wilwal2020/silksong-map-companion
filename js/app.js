@@ -1075,6 +1075,16 @@ function buildToolbar() {
   $('#btn-help').addEventListener('click', () => $('#dlg-help').showModal());
   $('#btn-help-close').addEventListener('click', () => $('#dlg-help').close());
 
+  // start the composited map over (e.g. after misaligned pastes) without
+  // touching the pins — their pictures, notes and types all stay
+  $('#btn-clear-map').addEventListener('click', () => {
+    if (!confirm('Erase the revealed map? All pins (with their pictures and notes) are kept.')) return;
+    snapshotForUndo();
+    explored.clear();
+    store.putMeta('fog', null);
+    toast('Map cleared — pins kept. Paste screenshots to rebuild it.', 'ok', { label: 'Undo', fn: undoLast });
+  });
+
   $('#btn-reset').addEventListener('click', async () => {
     if (!confirm('Erase ALL revealed map and pins? Consider exporting a backup first.')) return;
     await store.clearPins();
