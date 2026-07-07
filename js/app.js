@@ -15,6 +15,7 @@ let view, explored, pins, mapImage;
 let newPinPending = null; // freshly created pin waiting for its area screenshot
 let lastUndo = null;      // { snap, pinId } — one level of paste undo
 let learnedScale = null;  // map-px per screenshot-px from past successes
+let scaleTrusted = false; // learnedScale was verified against reference content
 
 // three-tier confidence, calibrated on 25 real screenshots: correct matches
 // have ratio (runner-up/best peak) 0.44-0.92, wrong ones 0.90-0.98.
@@ -231,12 +232,10 @@ function openPinEditor(data, isNew) {
 // ------------------------------------------------------------- paste flows
 
 async function applyMapPlacement(bitmap, rect, marker) {
-  const fromOcr = rect.via === 'ocr';
-  if (fromOcr) {
-    // OCR aligns to the reference map itself, so trust that position — don't
-    // nudge it toward earlier (possibly-misplaced) pastes, and reuse the one
-    // global scale it carries.
-    adoptOcrScale(rect);
+  if (rect.via === 'ocr' || rect.via === 'label') {
+    // OCR/label placements align to the reference map itself, so trust that
+    // position — don't nudge it toward earlier (possibly-misplaced) pastes.
+    adoptScale(rect, bitmap);
   } else {
     // shape-matched pastes lock to the first paste's scale so overlapping
     // shots line up by translation
@@ -282,22 +281,51 @@ async function applyMapPlacement(bitmap, rect, marker) {
 // Read the area name(s) first — reliable even when the surrounding area is
 // unexplored (black). Returns a plausible rect or null (then we shape-match).
 async function tryOcr(bitmap, full, scaleHint) {
+  let r = null;
   try {
     spinner(true, 'Reading the area name…');
-    const r = await ocrLocate(bitmap, { full, scaleHint, lockedScale: learnedScale, onStatus: m => spinner(true, m) });
+    r = await ocrLocate(bitmap, { full, scaleHint, lockedScale: learnedScale, onStatus: m => spinner(true, m) });
     if (r) console.log('[silksong-map] OCR match:', r.names, r);
-    return (r && plausible(r)) ? r : null;
   } catch (e) {
     console.warn('[silksong-map] OCR unavailable:', e.message);
     return null;
   }
+  if (!r || !plausible(r)) return null;
+
+  // OCR gives identity + a rough spot, but its bounding boxes are only
+  // approximate (dropped words, names cut off at the edge) — snap the
+  // prediction onto the reference's room structure to get exact position
+  // AND scale. In unexplored (black) areas there is nothing to snap to;
+  // the raw OCR rect is the best we have then.
+  try {
+    const prog = f => spinner(true, `Fine-tuning the position… ${Math.round(f * 100)}%`);
+    const spread = r.scaleSource === 'locked' && scaleTrusted ? 'narrow'
+      : r.scaleSource === 'height' ? 'wide' : 'normal';
+    const snapped = await locate(bitmap, mapImage, full ? 'full' : 'map', prog,
+      { rect: r, spread });
+    if (snapped) {
+      console.log('[silksong-map] OCR refined:', snapped);
+      return { ...snapped, score: Math.max(r.score, snapped.score), names: r.names, via: 'ocr', refined: true };
+    }
+  } catch (e) {
+    console.warn('[silksong-map] OCR refine failed:', e.message);
+  }
+  return r;
 }
 
-// store the single global scale an OCR paste established / recalibrated
-function adoptOcrScale(rect) {
-  if (rect && rect.via === 'ocr' && rect.establishScale) {
-    learnedScale = rect.establishScale;
-    store.putMeta('scale', learnedScale);
+// Keep the single global scale in sync. A content-verified placement (room
+// structure matched against the reference) always recalibrates it; a raw
+// OCR guess only seeds it while nothing better is known.
+function adoptScale(rect, bitmap) {
+  const verified = rect.refined || (rect.via === 'label' && !rect.unverified);
+  let k = null;
+  if (verified) k = rect.w / bitmap.width;
+  else if (rect.via === 'ocr' && rect.establishScale && !learnedScale) k = rect.establishScale;
+  if (k) {
+    learnedScale = k;
+    scaleTrusted = verified;
+    store.putMeta('scale', k);
+    store.putMeta('scaleTrusted', verified);
   }
 }
 
@@ -329,6 +357,14 @@ async function handleMapScreenshot(blob) {
       toast('Locating failed: ' + err.message, 'error');
     }
   }
+
+  // a shape match whose scale disagrees with the established global scale is
+  // suspect (all screenshots share one zoom) — ask before applying it
+  if (rect && !rect.via && learnedScale
+      && Math.abs(rect.w / bitmap.width / learnedScale - 1) > 0.08) {
+    rect = { ...rect, ratio: Math.max(rect.ratio ?? 1, 0.9) };
+  }
+
   spinner(false);
   console.log('[silksong-map] map locate:', rect, 'marker:', marker);
 
@@ -453,7 +489,7 @@ async function handleFullMap(blob) {
 
   spinner(true, 'Compositing your map…');
   await new Promise(r => setTimeout(r, 30)); // let the spinner paint
-  if (rect.via === 'ocr') adoptOcrScale(rect); // trust the reference-aligned OCR position
+  if (rect.via === 'ocr' || rect.via === 'label') adoptScale(rect, bitmap); // reference-aligned — trust it
   else rect = explored.refineAlignment(bitmap, rect);
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
@@ -943,6 +979,12 @@ function buildToolbar() {
     store.putMeta('showDone', e.target.checked);
   });
 
+  $('#btn-reveal').addEventListener('click', e => {
+    view.debugReveal = !view.debugReveal;
+    e.currentTarget.classList.toggle('active', view.debugReveal);
+    view.requestRender();
+  });
+
   $('#btn-export').addEventListener('click', exportAll);
   $('#btn-import').addEventListener('click', () => $('#import-file').click());
   $('#import-file').addEventListener('change', e => {
@@ -1010,6 +1052,7 @@ async function init() {
 
   // restore saved state
   learnedScale = (await store.getMeta('scale')) || null;
+  scaleTrusted = !!(await store.getMeta('scaleTrusted'));
   const savedFog = await store.getMeta('fog');
   if (savedFog) await explored.loadFromBlob(savedFog);
   const savedView = await store.getMeta('view');

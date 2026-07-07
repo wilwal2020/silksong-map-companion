@@ -507,6 +507,41 @@ async function locate(shot, mode, hint) {
   const aspect = rect.h / rect.w;
   const pad2 = Math.round(Math.min(REF_W2, refBitmap.width) * PAD_FRAC);
 
+  // ---- refine-only: the caller already knows roughly where this shot goes
+  // (an OCR'd area name) — snap that prediction onto the reference room
+  // structure. OCR bounding boxes are only approximate (dropped words,
+  // names cut off at the screenshot edge), so both position AND scale are
+  // re-derived from content here. `hint.spread` says how far the caller's
+  // scale guess may be off: 'narrow' = content-verified global scale (fix
+  // position only), 'wide' = weak guess (letter-height ratio).
+  if (hint && hint.rect) {
+    const kB = hint.rect.w / baseW; // map px per shot-base px
+    const cxp = (hint.rect.x + (rect.x + rect.w / 2) * kB) * refScale2 + pad2;
+    const cyp = (hint.rect.y + (rect.y + rect.h / 2) * kB) * refScale2 + pad2;
+    const twp = rect.w * kB * refScale2;
+    const ks = hint.spread === 'wide'
+      ? Array.from({ length: 15 }, (_, i) => 0.78 * Math.pow(1.28 / 0.78, i / 14))
+      : hint.spread === 'narrow'
+        ? [0.97, 0.985, 1.0, 1.015, 1.03]
+        : [0.93, 0.955, 0.98, 1.0, 1.02, 1.045, 1.07];
+    const fine = refinePass(cv, tmplBase, aspect, cxp, cyp, twp, ks, 0.1);
+    tmplBase.delete();
+    // same room-structure verification bar as a label identification
+    if (!fine || fine.score < (mode === 'full' ? 0.12 : 0.18)) return null;
+    const cl = rect.x / baseW, ct = rect.y / baseH, cwf = rect.w / baseW;
+    const kk = fine.tw / (shot.width * cwf) / refScale2;
+    return {
+      x: (fine.mx - pad2) / refScale2 - shot.width * cl * kk,
+      y: (fine.my - pad2) / refScale2 - shot.height * ct * kk,
+      w: shot.width * kk,
+      h: shot.height * kk,
+      score: fine.score,
+      z: 99,
+      ratio: 0.4,
+      via: 'refine',
+    };
+  }
+
   // how much room structure the screenshot actually contains: in an
   // unexplored (mostly black) area there is essentially none, which is what
   // lets a confident area-name label stand on its own below

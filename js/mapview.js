@@ -16,6 +16,9 @@ export class MapView {
     // placement overlay: { img, x, y, w } in map coords (h from aspect)
     this.placement = null;
 
+    // debug: overlay the reference map to check alignment
+    this.debugReveal = false;
+
     this.onViewChanged = null;
     this._raf = 0;
 
@@ -75,10 +78,26 @@ export class MapView {
     ctx.setTransform(dpr * this.scale, 0, 0, dpr * this.scale, dpr * this.ox, dpr * this.oy);
     ctx.imageSmoothingQuality = 'high';
 
+    // debug overlay: the reference map, faint, UNDER the explored composite,
+    // so you can see how your pastes line up with it
+    if (this.debugReveal) {
+      ctx.globalAlpha = 0.5;
+      ctx.drawImage(this.map, 0, 0, this.map.width, this.map.height);
+      ctx.globalAlpha = 1;
+    }
+
     // the explored map: your pasted screenshots composited at their matched
     // positions, over the black fog. The reference map is never drawn (it is
     // only used to work out where a screenshot goes) — no spoilers.
     ctx.drawImage(this.explored.canvas, 0, 0, this.map.width, this.map.height);
+
+    // debug: also draw the reference OVER the pastes, faint, so the room
+    // outlines can be compared directly on top of what you pasted
+    if (this.debugReveal) {
+      ctx.globalAlpha = 0.4;
+      ctx.drawImage(this.map, 0, 0, this.map.width, this.map.height);
+      ctx.globalAlpha = 1;
+    }
 
     // subtle bounds so you can tell where the world map area is
     ctx.strokeStyle = 'rgba(216, 220, 237, 0.08)';

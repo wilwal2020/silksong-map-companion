@@ -136,6 +136,9 @@ async function readLabels(shot) {
     cx: (l.x0 + l.x1) / 2,
     cy: (l.y0 + l.y1) / 2,
     h: l.y1 - l.y0,
+    // a name touching the screenshot edge is likely truncated — its centre
+    // is shifted, which poisons any scale/offset derived from it
+    cut: l.x0 <= 2 || l.x1 >= shot.width - 2 || l.y0 <= 2 || l.y1 >= shot.height - 2,
   }));
 }
 
@@ -188,9 +191,10 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
     for (let i = 0; i < uniq.length; i++) {
       for (let j = i + 1; j < uniq.length; j++) {
         const a = uniq[i], b = uniq[j];
+        if (a.c.cut || b.c.cut) continue; // truncated names have shifted centres
         const shotD = Math.hypot(a.c.cx - b.c.cx, a.c.cy - b.c.cy);
         const mapD = Math.hypot(a.lb.x - b.lb.x, a.lb.y - b.lb.y);
-        if (shotD > 40) ks.push(mapD / shotD); // far-apart names only
+        if (shotD > 150) ks.push(mapD / shotD); // far-apart names only
       }
     }
     if (ks.length) kDist = median(ks);
@@ -199,20 +203,29 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
   const hint = scaleHint > 0 ? scaleHint : null;
   const locked = lockedScale > 0 ? lockedScale : null;
 
-  // what scale (if any) this paste should store as the new global
-  let establishScale = null;
-  if (full && kDist) establishScale = kDist;      // full map recalibrates exactly
-  else if (!locked) establishScale = kDist || hint || kHeight; // first time
+  // what scale (if any) this paste should store as the new global, and how
+  // trustworthy the source is (the content refiner widens its search band
+  // for weak sources)
+  let establishScale = null, scaleSource = 'locked';
+  if (full && kDist) { establishScale = kDist; scaleSource = 'dist'; }
+  else if (!locked) {
+    if (kDist) { establishScale = kDist; scaleSource = 'dist'; }
+    else if (hint) { establishScale = hint; scaleSource = 'marker'; }
+    else if (kHeight) { establishScale = kHeight; scaleSource = 'height'; }
+  }
   const k = establishScale != null ? establishScale : locked;
   if (!(k > 0) || k < 0.03 || k > 60) return null;
 
-  // offset = map coord of shot pixel (0,0), consensus across labels
-  const oxs = uniq.map(m => m.lb.x - m.c.cx * k);
-  const oys = uniq.map(m => m.lb.y - m.c.cy * k);
+  // offset = map coord of shot pixel (0,0), consensus across labels;
+  // prefer names that are fully inside the frame
+  const anchors = uniq.filter(m => !m.c.cut);
+  const use = anchors.length ? anchors : uniq;
+  const oxs = use.map(m => m.lb.x - m.c.cx * k);
+  const oys = use.map(m => m.lb.y - m.c.cy * k);
   const ox = median(oxs), oy = median(oys);
 
   // reject if the labels disagree badly on the offset (a bad match set)
-  if (uniq.length >= 2) {
+  if (use.length >= 2) {
     const spread = Math.max(
       Math.max(...oxs) - Math.min(...oxs),
       Math.max(...oys) - Math.min(...oys),
@@ -231,6 +244,7 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
     // multiple names cross-check each other → apply; a lone name is confirmed
     ratio: uniq.length >= 2 ? 0.4 : 0.9,
     establishScale,
+    scaleSource,
     via: 'ocr',
     names: uniq.map(m => m.lb.name),
   };
