@@ -299,14 +299,26 @@ async function tryOcr(bitmap, full, scaleHint) {
   // the raw OCR rect is the best we have then.
   try {
     const prog = f => spinner(true, `Fine-tuning the position… ${Math.round(f * 100)}%`);
+    const mode = full ? 'full' : 'map';
     const spread = r.scaleSource === 'locked' && scaleTrusted ? 'narrow'
       : r.scaleSource === 'height' ? 'wide' : 'normal';
-    const snapped = await locate(bitmap, mapImage, full ? 'full' : 'map', prog,
-      { rect: r, spread });
+    let snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread });
+    if (snapped && snapped.sparse) return r; // unexplored area — nothing to verify against
+    if (!snapped && spread !== 'wide') {
+      // the scale guess may be further off than expected (stale saved scale,
+      // resolution change) — search a much wider scale band before giving up
+      spinner(true, 'Searching nearby scales…');
+      snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread: 'wide' });
+      if (snapped && snapped.sparse) return r;
+    }
     if (snapped) {
       console.log('[silksong-map] OCR refined:', snapped);
       return { ...snapped, score: Math.max(r.score, snapped.score), names: r.names, via: 'ocr', refined: true };
     }
+    // there IS map content here but none of it matched the reference at the
+    // OCR spot — don't apply that silently, make it a yes/no check
+    console.log('[silksong-map] OCR unverified — asking:', r.names);
+    return { ...r, ratio: Math.max(r.ratio ?? 1, 0.9) };
   } catch (e) {
     console.warn('[silksong-map] OCR refine failed:', e.message);
   }

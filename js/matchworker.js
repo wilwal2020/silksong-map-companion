@@ -507,6 +507,16 @@ async function locate(shot, mode, hint) {
   const aspect = rect.h / rect.w;
   const pad2 = Math.round(Math.min(REF_W2, refBitmap.width) * PAD_FRAC);
 
+  // how much room structure the screenshot actually contains — computed
+  // early so the refine-only path can tell "verification failed" apart
+  // from "there is nothing here to verify against" (unexplored area)
+  let structCount0 = 0;
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    const row = y * baseW;
+    for (let x = rect.x; x < rect.x + rect.w; x++) if (mask[row + x]) structCount0++;
+  }
+  const structFrac0 = structCount0 / Math.max(1, rect.w * rect.h);
+
   // ---- refine-only: the caller already knows roughly where this shot goes
   // (an OCR'd area name) — snap that prediction onto the reference room
   // structure. OCR bounding boxes are only approximate (dropped words,
@@ -520,14 +530,21 @@ async function locate(shot, mode, hint) {
     const cyp = (hint.rect.y + (rect.y + rect.h / 2) * kB) * refScale2 + pad2;
     const twp = rect.w * kB * refScale2;
     const ks = hint.spread === 'wide'
-      ? Array.from({ length: 15 }, (_, i) => 0.78 * Math.pow(1.28 / 0.78, i / 14))
+      ? Array.from({ length: 28 }, (_, i) => 0.6 * Math.pow(1.6 / 0.6, i / 27))
       : hint.spread === 'narrow'
         ? [0.97, 0.985, 1.0, 1.015, 1.03]
         : [0.93, 0.955, 0.98, 1.0, 1.02, 1.045, 1.07];
     const fine = refinePass(cv, tmplBase, aspect, cxp, cyp, twp, ks, 0.1);
     tmplBase.delete();
-    // same room-structure verification bar as a label identification
-    if (!fine || fine.score < (mode === 'full' ? 0.12 : 0.18)) return null;
+    // same room-structure verification bar as a label identification; a
+    // wide scale sweep has more chances to fluke past it, so it must clear
+    // a higher bar (a false edge hit measured 0.19, real ones 0.30-0.42)
+    const thr = (mode === 'full' ? 0.12 : 0.18) * (hint.spread === 'wide' ? 1.4 : 1);
+    if (!fine || fine.score < thr) {
+      // an unexplored (near-black) shot has nothing to correlate — tell the
+      // caller so it can keep the OCR placement instead of distrusting it
+      return structFrac0 < 0.035 ? { sparse: true } : null;
+    }
     const cl = rect.x / baseW, ct = rect.y / baseH, cwf = rect.w / baseW;
     const kk = fine.tw / (shot.width * cwf) / refScale2;
     return {
@@ -542,15 +559,7 @@ async function locate(shot, mode, hint) {
     };
   }
 
-  // how much room structure the screenshot actually contains: in an
-  // unexplored (mostly black) area there is essentially none, which is what
-  // lets a confident area-name label stand on its own below
-  let structCount = 0;
-  for (let y = rect.y; y < rect.y + rect.h; y++) {
-    const row = y * baseW;
-    for (let x = rect.x; x < rect.x + rect.w; x++) if (mask[row + x]) structCount++;
-  }
-  const structFrac = structCount / Math.max(1, rect.w * rect.h);
+  const structFrac = structFrac0;
 
   // ---- pass 0: area-name labels — identity + position + scale in one ----
   // (also the workhorse for full-map screenshots: zoomed-out room outlines

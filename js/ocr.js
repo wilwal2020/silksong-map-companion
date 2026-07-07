@@ -206,14 +206,18 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
   // what scale (if any) this paste should store as the new global, and how
   // trustworthy the source is (the content refiner widens its search band
   // for weak sources)
-  let establishScale = null, scaleSource = 'locked';
-  if (full && kDist) { establishScale = kDist; scaleSource = 'dist'; }
-  else if (!locked) {
-    if (kDist) { establishScale = kDist; scaleSource = 'dist'; }
-    else if (hint) { establishScale = hint; scaleSource = 'marker'; }
-    else if (kHeight) { establishScale = kHeight; scaleSource = 'height'; }
+  let k = null, establishScale = null, scaleSource = 'locked';
+  if (full && kDist) { k = establishScale = kDist; scaleSource = 'dist'; }
+  else if (locked) {
+    k = locked;
+    // a stale locked scale (resolution change, old bad calibration) loses
+    // to the player marker, which is accurate within ~3%
+    if (hint && Math.abs(locked / hint - 1) > 0.08) { k = hint; scaleSource = 'marker'; }
+  } else {
+    if (kDist) { k = establishScale = kDist; scaleSource = 'dist'; }
+    else if (hint) { k = establishScale = hint; scaleSource = 'marker'; }
+    else if (kHeight) { k = establishScale = kHeight; scaleSource = 'height'; }
   }
-  const k = establishScale != null ? establishScale : locked;
   if (!(k > 0) || k < 0.03 || k > 60) return null;
 
   // offset = map coord of shot pixel (0,0), consensus across labels;
