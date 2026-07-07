@@ -18,18 +18,18 @@ let learnedScale = null;  // map-px per screenshot-px from past successes
 let scaleTrusted = false; // learnedScale was verified against reference content
 let scaleSamples = [];    // recent content-verified scales; learnedScale = median
 
-// three-tier confidence, calibrated on 25 real screenshots: correct matches
-// have ratio (runner-up/best peak) 0.44-0.92, wrong ones 0.90-0.98.
-// Certain matches apply instantly; the overlap zone gets a yes/no check;
-// only clear junk is refused outright.
+// Placement is all-or-nothing: a paste is either confident enough to apply
+// on its own, or it fails outright — no "does this look right?" middle step
+// (if the match needs a human to vouch for it, it isn't good enough). A match
+// is `certain` when it stands well clear of its runner-up (ratio, calibrated
+// on real screenshots: correct 0.44-0.92, wrong 0.90-0.98). `plausible` is a
+// looser gate used only internally to decide whether a wider re-search is
+// worth trying.
 const AUTO_RATIO = 0.85;
 const MAX_RATIO = 0.985;
 const MIN_SCORE = 0.15;
 const certain = rect => rect && rect.score >= MIN_SCORE && (rect.ratio ?? 1) <= AUTO_RATIO;
 const plausible = rect => rect && rect.score >= MIN_SCORE && (rect.ratio ?? 1) <= MAX_RATIO;
-const confStr = rect => rect
-  ? `match ${rect.score.toFixed(2)}, uniqueness ${(1 - (rect.ratio ?? 1)).toFixed(2)}`
-  : 'no match';
 
 // ---------------------------------------------------------------- utilities
 
@@ -139,44 +139,10 @@ function persistPin(data) {
   store.putPin(data);
 }
 
-// ------------------------------------------------- uncertain-match confirm
-
-let confirmActive = null; // resolve fn while the yes/no bar is up
-
-// Show the screenshot pinned at the proposed spot (not movable) and ask
-// yes/no. Resolves true to apply, false to cancel.
-function previewConfirm(bitmap, rect) {
-  return new Promise(resolve => {
-    confirmActive = resolve;
-    view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w, locked: true });
-    view.centerOn(rect.x + rect.w / 2, rect.y + rect.h / 2,
-      Math.min(1, (window.innerWidth * 0.55) / rect.w));
-    $('#confirm-bar').classList.remove('hidden');
-    $('#paste-hint').classList.add('hidden');
-  });
-}
-
-function endConfirm(apply) {
-  if (!confirmActive) return;
-  view.setPlacement(null);
-  $('#confirm-bar').classList.add('hidden');
-  $('#paste-hint').classList.remove('hidden');
-  const resolve = confirmActive;
-  confirmActive = null;
-  resolve(apply);
-}
-
-$('#btn-confirm-ok').addEventListener('click', () => endConfirm(true));
-$('#btn-confirm-cancel').addEventListener('click', () => endConfirm(false));
-
 // ---------------------------------------------------------------- keyboard
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && placing) { stopPlacing(); return; }
-  if (confirmActive && !document.querySelector('dialog[open]')) {
-    if (e.key === 'Enter') { endConfirm(true); return; }
-    if (e.key === 'Escape') { endConfirm(false); return; }
-  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'
       && !document.querySelector('dialog[open]')) {
     e.preventDefault();
@@ -314,16 +280,22 @@ async function tryOcr(bitmap, full, scaleHint) {
     const mode = full ? 'full' : 'map';
     const spread = r.scaleSource === 'locked' && scaleTrusted ? 'narrow'
       : r.scaleSource === 'height' ? 'wide' : 'normal';
+    // an unexplored (near-black) area has no room structure to snap to, so a
+    // confident name is the only signal there — trust it alone; a weak lone
+    // name isn't enough, fall through so shape matching gets a try
+    const sparseResult = () =>
+      (r.names?.length >= 2 || r.score >= 0.72) ? { ...r, ratio: 0.4 } : null;
+
     let snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread });
     let usedSpread = spread;
-    if (snapped && snapped.sparse) return r; // unexplored area — nothing to verify against
+    if (snapped && snapped.sparse) return sparseResult();
     if (!snapped && spread !== 'wide') {
       // the scale guess may be further off than expected (stale saved scale,
       // resolution change) — search a much wider scale band before giving up
       spinner(true, 'Searching nearby scales…');
       snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread: 'wide' });
       usedSpread = 'wide';
-      if (snapped && snapped.sparse) return r;
+      if (snapped && snapped.sparse) return sparseResult();
     }
     if (snapped) {
       console.log('[silksong-map] OCR refined:', snapped);
@@ -334,10 +306,11 @@ async function tryOcr(bitmap, full, scaleHint) {
         scaleMeasured: usedSpread !== 'narrow',
       };
     }
-    // there IS map content here but none of it matched the reference at the
-    // OCR spot — don't apply that silently, make it a yes/no check
-    console.log('[silksong-map] OCR unverified — asking:', r.names);
-    return { ...r, ratio: Math.max(r.ratio ?? 1, 0.9) };
+    // a name was read but nothing under it matched the reference — the name
+    // match is probably wrong. Give shape matching a chance instead of
+    // applying an unverified guess.
+    console.log('[silksong-map] OCR unverified, falling through:', r.names);
+    return null;
   } catch (e) {
     console.warn('[silksong-map] OCR refine failed:', e.message);
   }
@@ -416,7 +389,7 @@ async function handleMapScreenshot(blob) {
   }
 
   // a shape match whose scale disagrees with the established global scale is
-  // suspect (all screenshots share one zoom) — ask before applying it
+  // suspect (all screenshots share one zoom) — treat it as a non-match
   if (rect && !rect.via && learnedScale
       && Math.abs(rect.w / bitmap.width / learnedScale - 1) > 0.08) {
     rect = { ...rect, ratio: Math.max(rect.ratio ?? 1, 0.9) };
@@ -425,47 +398,14 @@ async function handleMapScreenshot(blob) {
   spinner(false);
   console.log('[silksong-map] map locate:', rect, 'marker:', marker);
 
-  if (!plausible(rect)) {
-    bitmap.close?.();
-    toast(`Couldn't find this spot (${confStr(rect)}) — nothing was revealed. Try a screenshot showing a bit more of the map.`, 'error');
-    return;
-  }
-
   if (!certain(rect)) {
-    $('#confirm-msg').textContent = 'Not fully sure about this spot — does it look right?';
-    const apply = await previewConfirm(bitmap, rect);
-    if (!apply) {
-      bitmap.close?.();
-      toast('Cancelled — nothing was revealed.');
-      return;
-    }
-    rect = await postConfirmRefine(bitmap, rect, false);
+    bitmap.close?.();
+    toast("Couldn't place this screenshot confidently — nothing was revealed. Try one that clearly shows the area name, or a bit more of the map.", 'error');
+    return;
   }
 
   applyMapPlacement(bitmap, rect, marker);
   bitmap.close?.();
-}
-
-// The user vouched for an OCR spot the content check couldn't verify — try
-// once more with a wide scale band and a relaxed bar. OCR text geometry
-// gets the position roughly right but the scale visibly wrong; snapping to
-// the rooms under the human-approved spot fixes the scale too.
-async function postConfirmRefine(bitmap, rect, full) {
-  if (!(rect.via === 'ocr' && !rect.refined)) return rect;
-  try {
-    spinner(true, 'Fine-tuning the position…');
-    const snapped = await locate(bitmap, mapImage, full ? 'full' : 'map', null,
-      { rect, spread: 'wide', confirmed: true });
-    if (snapped && !snapped.sparse) {
-      console.log('[silksong-map] post-confirm refine:', snapped);
-      return { ...snapped, score: Math.max(rect.score, snapped.score), names: rect.names, via: 'ocr', refined: true, scaleMeasured: true };
-    }
-  } catch (e) {
-    console.warn('[silksong-map] post-confirm refine failed:', e.message);
-  } finally {
-    spinner(false);
-  }
-  return rect;
 }
 
 // a paste while a pin is awaiting its screenshot attaches directly — no dialog
@@ -548,31 +488,13 @@ async function handleFullMap(blob) {
     }
   }
 
-  // a full-map screenshot must cover most of the world map — a placement
-  // spanning only a corner means it isn't a full map (or the match is wrong),
-  // so never apply it silently
-  if (rect && rect.w < mapImage.width * 0.5) {
-    rect = { ...rect, ratio: Math.max(rect.ratio ?? 1, 0.9) };
-  }
-
   spinner(false);
   console.log('[silksong-map] full locate:', rect);
 
-  if (!plausible(rect)) {
-    bitmap.close?.();
-    toast(`Couldn't align your map (${confStr(rect)}) — nothing was changed. Zoom the in-game map out and include all of it in the screenshot.`, 'error');
-    return;
-  }
-
   if (!certain(rect)) {
-    $('#confirm-msg').textContent = 'Not fully sure about this alignment — does it look right?';
-    const apply = await previewConfirm(bitmap, rect);
-    if (!apply) {
-      bitmap.close?.();
-      toast('Cancelled — nothing was changed.');
-      return;
-    }
-    rect = await postConfirmRefine(bitmap, rect, true);
+    bitmap.close?.();
+    toast("Couldn't align this map confidently — nothing was changed. Make sure an area name is visible, or zoom out a little more.", 'error');
+    return;
   }
 
   spinner(true, 'Compositing your map…');
@@ -597,10 +519,6 @@ async function handleFullMap(blob) {
 let currentPaste = null; // { blob, url } while the type chooser is open
 
 function routePaste(blob) {
-  if (confirmActive) {
-    toast('Answer the yes/no check first.', 'error');
-    return;
-  }
   // don't intercept pastes while choosing a pin type / editing a custom type
   if (document.querySelector('#dlg-pin[open], #dlg-cattype[open]')) return;
   // only a pin explicitly waiting for its picture (its 📷 button) takes a
@@ -954,7 +872,7 @@ function onPlacingMove(e) {
 
 function onPlacingClick(e) {
   // clicks on chrome (toolbar, sidebar, dialogs, sliders) don't place a pin
-  if (e.target.closest('#toolbar, #cat-bar, #map-opacity, dialog, .toast, #confirm-bar')) return;
+  if (e.target.closest('#toolbar, #cat-bar, #map-opacity, dialog, .toast')) return;
   e.preventDefault();
   e.stopPropagation();
   const m = view.screenToMap(e.clientX, e.clientY);

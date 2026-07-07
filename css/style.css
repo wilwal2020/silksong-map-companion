@@ -192,15 +192,7 @@ html, body {
 .toast { pointer-events: auto; }
 .toast .btn { margin-left: 10px; padding: 3px 10px; font-size: .78rem; }
 
-/* ---------- spinner / await dialog / confirm bar ---------- */
-
-#confirm-bar {
-  position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 12px; z-index: 25;
-  background: var(--panel); border: 1px solid var(--border); border-left: 2px solid var(--accent);
-  border-radius: 0; padding: 10px 14px; box-shadow: var(--shadow);
-}
-#confirm-msg { font-weight: 600; font-size: .9rem; }
+/* ---------- spinner / await dialog ---------- */
 
 #dlg-await { border-color: var(--accent); }
 .await-sub { font-size: .88rem; line-height: 1.5; color: var(--text-dim); margin: 0; }
@@ -375,7 +367,7 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 #cat-bar-resize:hover { background: linear-gradient(90deg, transparent, var(--accent-soft)); }
 
 /* keep the paste hint clear of the sidebar */
-#paste-hint, #confirm-bar { margin-left: 116px; }
+#paste-hint { margin-left: 116px; }
 
 /* ---------- add-pin button + placement ---------- */
 
@@ -449,5 +441,5 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 
 @media (max-width: 720px) {
   #cat-bar { width: 176px; }
-  #paste-hint, #confirm-bar { margin-left: 88px; }
+  #paste-hint { margin-left: 88px; }
 }
