@@ -281,16 +281,13 @@ async function applyMapPlacement(bitmap, rect, marker) {
   persistPin(data);
   view.centerOn(data.x, data.y, Math.min(1, (window.innerWidth * 0.6) / rect.w));
 
-  // pick a type right away; the area picture is added later by hovering the
-  // pin and pasting (so pasting another map screenshot isn't intercepted)
-  const edit = await openPinEditor(data, true);
-  if (edit) {
-    data.cat = edit.cat;
-    data.note = edit.note;
-    pins.update(data);
-    persistPin(data);
-  }
-  toast('Pin added — hover it and paste a picture to attach one.', 'ok');
+  // ask for the spot's picture right away — a paste now attaches it to this
+  // pin; Skip (or Esc) goes straight to choosing the type
+  newPinPending = data;
+  pins.setAwaiting(data.id);
+  showAwaitDialog('Pin placed — add a picture of the spot?',
+    'Screenshot what is actually there in game and paste it here (<span class="kbd">Ctrl+V</span>) — or skip.',
+    'Skip');
 }
 
 // Read the area name(s) first — reliable even when the surrounding area is
@@ -551,6 +548,13 @@ async function handleFullMap(blob) {
     }
   }
 
+  // a full-map screenshot must cover most of the world map — a placement
+  // spanning only a corner means it isn't a full map (or the match is wrong),
+  // so never apply it silently
+  if (rect && rect.w < mapImage.width * 0.5) {
+    rect = { ...rect, ratio: Math.max(rect.ratio ?? 1, 0.9) };
+  }
+
   spinner(false);
   console.log('[silksong-map] full locate:', rect);
 
@@ -604,6 +608,16 @@ function routePaste(blob) {
   // map screenshot is never silently swallowed as a pin's area image
   if (pins.awaitingId && $('#dlg-await').open) {
     attachToAwaiting(blob);
+    return;
+  }
+  // ...except when the pointer is on a pin card's empty screenshot square:
+  // that is an explicit target, paste straight into it
+  if (pins.hoverAttachId && pins.pins.has(pins.hoverAttachId)) {
+    const entry = pins.pins.get(pins.hoverAttachId);
+    entry.data.img = blob;
+    pins.update(entry.data);
+    persistPin(entry.data);
+    toast('Screenshot attached.', 'ok');
     return;
   }
   currentPaste = { blob, url: URL.createObjectURL(blob) };

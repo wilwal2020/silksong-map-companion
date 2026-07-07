@@ -18,6 +18,7 @@ export class PinManager {
     this.selectedId = null;
     this.awaitingId = null;    // pin waiting for its area screenshot
     this.hoveredId = null;     // pin currently under the pointer (paste target)
+    this.hoverAttachId = null; // pin whose empty screenshot square is hovered
     this.lastPlacedId = null;  // just-placed pin, excluded from paste-attach
     this._stickyCard = null;
 
@@ -68,6 +69,7 @@ export class PinManager {
     this.pins.delete(id);
     if (this.selectedId === id) this.selectedId = null;
     if (this.awaitingId === id) this.awaitingId = null;
+    if (this.hoverAttachId === id) this.hoverAttachId = null;
     this.handlers.onPinsChanged?.();
   }
 
@@ -240,6 +242,7 @@ export class PinManager {
     if (!entry || !entry.card) return;
     if (this._stickyCard === entry.card && !force) return;
     if (this._stickyCard === entry.card) { this._stickyCard = null; this._stickyCardPin = null; }
+    if (this.hoverAttachId === entry.data.id) this.hoverAttachId = null;
     entry.card.remove();
     entry.card = null;
   }
@@ -274,7 +277,10 @@ export class PinManager {
     } else {
       const no = document.createElement('div');
       no.className = 'no-env';
-      no.textContent = 'No area screenshot yet — click 📷 below, then paste one.';
+      no.textContent = 'No area screenshot yet — paste one right here (Ctrl+V) while hovering.';
+      // hovering this square makes the pin an explicit paste target
+      no.addEventListener('pointerenter', () => { this.hoverAttachId = d.id; });
+      no.addEventListener('pointerleave', () => { if (this.hoverAttachId === d.id) this.hoverAttachId = null; });
       card.appendChild(no);
     }
 

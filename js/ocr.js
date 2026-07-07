@@ -41,7 +41,10 @@ export function loadLabels() {
   return labelsPromise;
 }
 
-// black-text-on-white, upscaled so small labels are legible to the OCR
+// black-text-on-white, upscaled so small labels are legible to the OCR.
+// Text = notably brighter than its OWN local surroundings — a fixed global
+// threshold either misses dim labels (unexplored-area names) or floods
+// solid room fills into huge black blobs that break OCR segmentation.
 function preprocess(shot) {
   const scale = Math.min(4, Math.max(1.6, 1900 / shot.width));
   const W = Math.round(shot.width * scale), H = Math.round(shot.height * scale);
@@ -52,9 +55,24 @@ function preprocess(shot) {
   ctx.drawImage(shot, 0, 0, W, H);
   const id = ctx.getImageData(0, 0, W, H);
   const d = id.data;
+
+  // local background: the shot heavily downscaled and stretched back up
+  const bs = document.createElement('canvas');
+  bs.width = Math.max(1, Math.round(shot.width / 8));
+  bs.height = Math.max(1, Math.round(shot.height / 8));
+  bs.getContext('2d').drawImage(shot, 0, 0, bs.width, bs.height);
+  const bc = document.createElement('canvas');
+  bc.width = W; bc.height = H;
+  const bctx = bc.getContext('2d', { willReadFrequently: true });
+  bctx.imageSmoothingEnabled = true;
+  bctx.imageSmoothingQuality = 'high';
+  bctx.drawImage(bs, 0, 0, W, H);
+  const b = bctx.getImageData(0, 0, W, H).data;
+
   for (let i = 0; i < d.length; i += 4) {
     const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
-    const v = lum > 85 ? 0 : 255; // bright text -> black on white
+    const blum = b[i] * 0.299 + b[i + 1] * 0.587 + b[i + 2] * 0.114;
+    const v = (lum > 55 && lum - blum > 20) ? 0 : 255;
     d[i] = d[i + 1] = d[i + 2] = v;
   }
   ctx.putImageData(id, 0, 0);
@@ -83,20 +101,35 @@ function words(s) { return ((s || '').toLowerCase().match(/[a-z]{2,}/g) || []).f
 // how well a screenshot label string matches a reference area name, comparing
 // word by word (so "Rest" matches "Pilgrim's Rest", "Fields" matches "Far
 // Fields", etc.)
+// Word pairing: exact equality is worth full weight; containment only counts
+// when the lengths are comparable — "home" inside "mosshome" is NOT a match
+// (that one placed a Halfway Home screenshot at Mosshome), "pilgrims" inside
+// "pilgrim's" is.
+function wordHit(c, l) {
+  if (c === l && l.length >= 3) return 1;
+  if (c.length >= 4 && l.length >= 4 && (c.includes(l) || l.includes(c))
+      && Math.min(c.length, l.length) / Math.max(c.length, l.length) >= 0.67) return 0.7;
+  return 0;
+}
 function matchScore(candText, labelName) {
   const cw = words(candText), lw = words(labelName);
   if (!cw.length || !lw.length) return 0;
   if (cw.join('') === lw.join('')) return 1; // exact, ignoring spaces/stopwords
-  let matched = 0, strong = false;
+  let matched = 0, strong = false, candHits = 0;
   for (const l of lw) {
-    const hit = cw.some(c =>
-      (c === l && l.length >= 3) ||
-      (c.length >= 4 && l.length >= 4 && (c.includes(l) || l.includes(c))));
-    if (hit) { matched++; if (l.length >= 5) strong = true; }
+    let hit = 0;
+    for (const c of cw) {
+      const h = wordHit(c, l);
+      hit = Math.max(hit, h);
+      if (h === 1 && l.length >= 5) strong = true; // exact long word — not containment
+    }
+    matched += hit;
   }
+  for (const c of cw) if (lw.some(l => wordHit(c, l) > 0)) candHits++;
   if (!matched) return dice(cw.join(''), lw.join(''));
-  const frac = matched / lw.length;          // share of the label's words seen
-  return Math.max(strong ? 0.85 : 0, 0.55 + 0.45 * frac);
+  const frac = matched / lw.length;      // share of the label's words seen
+  const candFrac = candHits / cw.length; // share of the read text that fits
+  return Math.max(strong ? 0.85 : 0, 0.55 + 0.45 * frac) * (0.75 + 0.25 * candFrac);
 }
 
 // OCR the shot and return candidate name lines in SHOT pixels
@@ -122,7 +155,11 @@ async function readLabels(shot) {
     const h = w.y1 - w.y0, cy = (w.y0 + w.y1) / 2;
     let line = null;
     for (const l of lines) {
-      if (Math.abs(cy - l.cy) <= l.h * 0.7 && w.x0 - l.x1 <= l.h * 3 && w.x0 - l.x1 > -l.h) { line = l; break; }
+      if (Math.abs(cy - l.cy) > l.h * 0.7) continue;
+      // adjacent on EITHER side — y-sorting can visit "Lake" before "Craw",
+      // and a right-only join then splits one name into two lines
+      const gapR = w.x0 - l.x1, gapL = l.x0 - w.x1;
+      if ((gapR <= l.h * 3 && gapR > -l.h) || (gapL <= l.h * 3 && gapL > -l.h)) { line = l; break; }
     }
     if (line) {
       line.text += ' ' + w.t;
@@ -186,19 +223,26 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
   if (onStatus) onStatus('Reading the area name…');
 
   const cands = await readLabels(shot);
+  console.debug('[silksong-map] OCR lines:', cands.map(c => `"${c.text}" @${Math.round(c.cx)},${Math.round(c.cy)}${c.cut ? ' (cut)' : ''}`));
   if (!cands.length) return null;
 
-  // best reference label for each candidate line
+  // best reference label for each candidate line; a line whose best and
+  // runner-up are different labels with near-equal scores is ambiguous
+  // ("Lake" alone fits Craw Lake AND Pale Lake) and must not place anything
   const matches = [];
   for (const c of cands) {
-    let best = null;
+    let best = null, second = null;
     for (const lb of labels) {
       const s = matchScore(c.text, lb.name);
-      if (!best || s > best.s) best = { s, lb };
+      if (!best || s > best.s) { second = best; best = { s, lb }; }
+      else if (!second || s > second.s) second = { s, lb };
     }
-    if (best && best.s >= 0.62) {
-      matches.push({ c, lb: best.lb, s: best.s });
+    if (!best || best.s < 0.62) continue;
+    if (second && second.lb.name !== best.lb.name && second.s >= best.s - 0.05) {
+      console.debug('[silksong-map] ambiguous name dropped:', c.text, '→', best.lb.name, 'vs', second.lb.name);
+      continue;
     }
+    matches.push({ c, lb: best.lb, s: best.s });
   }
   if (!matches.length) return null;
 
