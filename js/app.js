@@ -60,14 +60,25 @@ function showAwaitDialog(title, sub, skipLabel) {
   $('#dlg-await').showModal();
 }
 
-// one-level undo of the last paste (explored composite + created pin)
+// one-level undo of the last paste (explored composite + created pin);
+// the scale calibration is snapshotted too so undoing also restores it
 function snapshotForUndo(pinId = null) {
-  lastUndo = { snap: explored.snapshot(), pinId };
+  lastUndo = {
+    snap: explored.snapshot(), pinId,
+    scaleState: { learnedScale, scaleTrusted, scaleSamples: [...scaleSamples] },
+  };
 }
 
 function undoLast() {
   if (!lastUndo) { toast('Nothing to undo.'); return; }
   explored.restore(lastUndo.snap);
+  if (lastUndo.scaleState) {
+    ({ learnedScale, scaleTrusted } = lastUndo.scaleState);
+    scaleSamples = [...lastUndo.scaleState.scaleSamples];
+    store.putMeta('scale', learnedScale);
+    store.putMeta('scaleTrusted', scaleTrusted);
+    store.putMeta('scaleSamples', scaleSamples);
+  }
   if (lastUndo.pinId) {
     pins.remove(lastUndo.pinId);
     store.deletePin(lastUndo.pinId);
@@ -1076,12 +1087,20 @@ function buildToolbar() {
   $('#btn-help-close').addEventListener('click', () => $('#dlg-help').close());
 
   // start the composited map over (e.g. after misaligned pastes) without
-  // touching the pins — their pictures, notes and types all stay
+  // touching the pins — their pictures, notes and types all stay. The scale
+  // calibration is cleared too: a bad calibration may be exactly why the
+  // map needs redoing, and the first fresh paste re-measures it anyway.
   $('#btn-clear-map').addEventListener('click', () => {
     if (!confirm('Erase the revealed map? All pins (with their pictures and notes) are kept.')) return;
     snapshotForUndo();
     explored.clear();
+    learnedScale = null;
+    scaleTrusted = false;
+    scaleSamples = [];
     store.putMeta('fog', null);
+    store.putMeta('scale', null);
+    store.putMeta('scaleTrusted', false);
+    store.putMeta('scaleSamples', []);
     toast('Map cleared — pins kept. Paste screenshots to rebuild it.', 'ok', { label: 'Undo', fn: undoLast });
   });
 
