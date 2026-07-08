@@ -289,13 +289,20 @@ async function tryOcr(bitmap, full, scaleHint) {
     let snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread });
     let usedSpread = spread;
     if (snapped && snapped.sparse) return sparseResult();
-    if (!snapped && spread !== 'wide') {
-      // the scale guess may be further off than expected (stale saved scale,
-      // resolution change) — search a much wider scale band before giving up
-      spinner(true, 'Searching nearby scales…');
-      snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread: 'wide' });
-      usedSpread = 'wide';
-      if (snapped && snapped.sparse) return sparseResult();
+    if (!snapped) {
+      // one retry. With a content-verified scale the failure is almost
+      // always POSITION (an imprecise OCR anchor), so widen the search
+      // window and keep the scale pinned; without a trusted scale, widen
+      // the scale band instead (stale save, resolution change).
+      const retry = scaleTrusted
+        ? { rect: r, spread: 'narrow', wideWindow: true }
+        : { rect: r, spread: 'wide' };
+      if (!(spread === retry.spread && !retry.wideWindow)) {
+        spinner(true, scaleTrusted ? 'Searching a wider area…' : 'Searching nearby scales…');
+        snapped = await locate(bitmap, mapImage, mode, prog, retry);
+        usedSpread = retry.spread;
+        if (snapped && snapped.sparse) return sparseResult();
+      }
     }
     if (snapped) {
       console.log('[silksong-map] OCR refined:', snapped);
@@ -388,11 +395,15 @@ async function handleMapScreenshot(blob) {
     }
   }
 
-  // a shape match whose scale disagrees with the established global scale is
-  // suspect (all screenshots share one zoom) — treat it as a non-match
-  if (rect && !rect.via && learnedScale
-      && Math.abs(rect.w / bitmap.width / learnedScale - 1) > 0.08) {
-    rect = { ...rect, ratio: Math.max(rect.ratio ?? 1, 0.9) };
+  // a shape match whose scale disagrees with the established global scale
+  // (all screenshots share one zoom) or with the player marker's size is
+  // suspect — treat it as a non-match. Without this, a cold start with a
+  // junk first match can seed a poisoned scale that breaks every paste.
+  if (rect && !rect.via) {
+    const k = rect.w / bitmap.width;
+    const offLearned = learnedScale && Math.abs(k / learnedScale - 1) > 0.08;
+    const offMarker = markerScale && Math.abs(k / markerScale - 1) > 0.15;
+    if (offLearned || offMarker) rect = { ...rect, ratio: Math.max(rect.ratio ?? 1, 0.9) };
   }
 
   spinner(false);
@@ -528,13 +539,15 @@ function routePaste(blob) {
     attachToAwaiting(blob);
     return;
   }
-  // ...except when the pointer is on a pin card's empty screenshot square:
-  // that is an explicit target, paste straight into it
-  if (pins.hoverAttachId && pins.pins.has(pins.hoverAttachId)) {
-    const entry = pins.pins.get(pins.hoverAttachId);
-    entry.data.img = blob;
-    pins.update(entry.data);
-    persistPin(entry.data);
+  // ...except when the pointer is on a pin card's empty screenshot square
+  // RIGHT NOW (live :hover check — tracked hover state went stale when the
+  // card moved under a zoom or pan and swallowed unrelated pastes)
+  const hoverSquare = document.querySelector('.pin-card .no-env:hover');
+  const hoverEntry = hoverSquare && pins.pins.get(hoverSquare.dataset.pinId);
+  if (hoverEntry) {
+    hoverEntry.data.img = blob;
+    pins.update(hoverEntry.data);
+    persistPin(hoverEntry.data);
     toast('Screenshot attached.', 'ok');
     return;
   }

@@ -69,11 +69,41 @@ function preprocess(shot) {
   bctx.drawImage(bs, 0, 0, W, H);
   const b = bctx.getImageData(0, 0, W, H).data;
 
-  for (let i = 0; i < d.length; i += 4) {
+  const bin = new Uint8Array(W * H);
+  for (let i = 0, p = 0; p < bin.length; i += 4, p++) {
     const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
     const blum = b[i] * 0.299 + b[i + 1] * 0.587 + b[i + 2] * 0.114;
-    const v = (lum > 55 && lum - blum > 20) ? 0 : 255;
-    d[i] = d[i + 1] = d[i + 2] = v;
+    bin[p] = (lum > 55 && lum - blum > 20) ? 1 : 0;
+  }
+
+  // despeckle: dotted/dashed room outlines binarize into a sea of specks
+  // that drowns the OCR's segmentation — drop components far smaller than a
+  // letter. Scale-aware but capped: at low upscale factors serif letters
+  // fragment into pieces a fixed cutoff would eat, while at high factors an
+  // uncapped 16·scale² also ate letter fragments ("Halfway Home" vanished)
+  const minSpeck = Math.min(60, Math.round(16 * scale * scale));
+  const seen = new Uint8Array(W * H);
+  const stack = new Int32Array(W * H);
+  const member = new Int32Array(4096);
+  for (let s = 0; s < bin.length; s++) {
+    if (!bin[s] || seen[s]) continue;
+    let top = 0, n = 0, overflow = false;
+    stack[top++] = s; seen[s] = 1;
+    while (top > 0) {
+      const p = stack[--top];
+      if (n < member.length) member[n] = p; else overflow = true;
+      n++;
+      const x = p % W;
+      if (x > 0 && bin[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack[top++] = p - 1; }
+      if (x < W - 1 && bin[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack[top++] = p + 1; }
+      if (p >= W && bin[p - W] && !seen[p - W]) { seen[p - W] = 1; stack[top++] = p - W; }
+      if (p < W * (H - 1) && bin[p + W] && !seen[p + W]) { seen[p + W] = 1; stack[top++] = p + W; }
+    }
+    if (!overflow && n < minSpeck) for (let i = 0; i < n; i++) bin[member[i]] = 0;
+  }
+
+  for (let i = 0, p = 0; p < bin.length; i += 4, p++) {
+    d[i] = d[i + 1] = d[i + 2] = bin[p] ? 0 : 255; // text black on white
   }
   ctx.putImageData(id, 0, 0);
   return { canvas: c, scale };
@@ -109,6 +139,9 @@ function wordHit(c, l) {
   if (c === l && l.length >= 3) return 1;
   if (c.length >= 4 && l.length >= 4 && (c.includes(l) || l.includes(c))
       && Math.min(c.length, l.length) / Math.max(c.length, l.length) >= 0.67) return 0.7;
+  // a short OCR fragment that starts a label word is weak but real evidence
+  // ("Bel" from a mangled "Bellway" separates Grand Bellway from Grand Gate)
+  if (c.length >= 3 && l.length > c.length && l.startsWith(c)) return 0.4;
   return 0;
 }
 function matchScore(candText, labelName) {
@@ -126,18 +159,29 @@ function matchScore(candText, labelName) {
     matched += hit;
   }
   for (const c of cw) if (lw.some(l => wordHit(c, l) > 0)) candHits++;
-  if (!matched) return dice(cw.join(''), lw.join(''));
+  // whole-string similarity as a floor: heavily garbled reads ("tadel Spr"
+  // for Citadel Spa) fail word pairing but are unmistakable as a string
+  const whole = dice(cw.join(''), lw.join(''));
+  if (!matched) return whole;
   const frac = matched / lw.length;      // share of the label's words seen
   const candFrac = candHits / cw.length; // share of the read text that fits
-  return Math.max(strong ? 0.85 : 0, 0.55 + 0.45 * frac) * (0.75 + 0.25 * candFrac);
+  return Math.max(whole, Math.max(strong ? 0.85 : 0, 0.55 + 0.45 * frac) * (0.75 + 0.25 * candFrac));
 }
 
-// OCR the shot and return candidate name lines in SHOT pixels
+// OCR the shot and return candidate name lines in SHOT pixels.
+// Tesseract's page segmentation is fickle on map imagery: automatic layout
+// sometimes discards a clearly legible label that sparse-text mode finds,
+// and vice versa — so run BOTH and union the words (dedupe by overlap).
 async function readLabels(shot) {
   const worker = await getWorker();
   const { canvas, scale } = preprocess(shot);
-  const { data } = await worker.recognize(canvas);
-  const all = (data.words || [])
+  const raw = [];
+  for (const psm of ['11', '3']) { // SPARSE_TEXT, then AUTO
+    await worker.setParameters({ tessedit_pageseg_mode: psm });
+    const { data } = await worker.recognize(canvas);
+    raw.push(...(data.words || []));
+  }
+  const mapped = raw
     .map(w => ({
       t: (w.text || '').replace(/[^A-Za-z']/g, ''),
       c: w.confidence,
@@ -145,6 +189,20 @@ async function readLabels(shot) {
       x1: w.bbox.x1 / scale, y1: w.bbox.y1 / scale,
     }))
     .filter(w => w.t.length >= 2 && (w.y1 - w.y0) >= 6 && (w.y1 - w.y0) <= shot.height * 0.2);
+  // union: two reads of the same word overlap heavily — keep the more
+  // confident one
+  const all = [];
+  for (const w of mapped.sort((a, b) => b.c - a.c)) {
+    const dup = all.some(v => {
+      const ix = Math.min(w.x1, v.x1) - Math.max(w.x0, v.x0);
+      const iy = Math.min(w.y1, v.y1) - Math.max(w.y0, v.y0);
+      if (ix <= 0 || iy <= 0) return false;
+      const inter = ix * iy;
+      const area = Math.min((w.x1 - w.x0) * (w.y1 - w.y0), (v.x1 - v.x0) * (v.y1 - v.y0));
+      return inter > area * 0.5;
+    });
+    if (!dup) all.push(w);
+  }
   const words = all.filter(w => w.c >= 55);
   const weak = all.filter(w => w.c >= 25 && w.c < 55);
 
@@ -163,11 +221,12 @@ async function readLabels(shot) {
     }
     if (line) {
       line.text += ' ' + w.t;
+      line.words.push(w);
       line.x0 = Math.min(line.x0, w.x0); line.x1 = Math.max(line.x1, w.x1);
       line.y0 = Math.min(line.y0, w.y0); line.y1 = Math.max(line.y1, w.y1);
       line.cy = (line.cy + cy) / 2; line.h = (line.h + h) / 2;
     } else {
-      lines.push({ text: w.t, x0: w.x0, y0: w.y0, x1: w.x1, y1: w.y1, cy, h });
+      lines.push({ text: w.t, words: [w], x0: w.x0, y0: w.y0, x1: w.x1, y1: w.y1, cy, h });
     }
   }
 
@@ -187,6 +246,7 @@ async function readLabels(shot) {
         if (Math.abs(cy - l.cy) > lh * 0.7) continue;
         if (!((gapR <= lh * 3 && gapR > -lh) || (gapL <= lh * 3 && gapL > -lh))) continue;
         l.text = w.x0 >= l.x0 ? l.text + ' ' + w.t : w.t + ' ' + l.text;
+        l.words.push(w);
         l.x0 = Math.min(l.x0, w.x0); l.x1 = Math.max(l.x1, w.x1);
         l.y0 = Math.min(l.y0, w.y0); l.y1 = Math.max(l.y1, w.y1);
         l.cy = (l.cy + cy) / 2; l.h = (l.h + h) / 2;
@@ -197,8 +257,37 @@ async function readLabels(shot) {
     }
   }
 
+  // merge stacked two-line names — some labels render on two lines in game
+  // ("Citadel" over "Spa") while the reference table has one centre for both
+  let didMerge = true;
+  while (didMerge) {
+    didMerge = false;
+    outer:
+    for (let i = 0; i < lines.length; i++) {
+      for (let j = 0; j < lines.length; j++) {
+        if (i === j) continue;
+        const a = lines[i], b = lines[j];
+        if (b.y0 < a.y0) continue; // treat each pair once, a on top
+        const lh = Math.max(a.h, b.h);
+        const gap = b.y0 - a.y1;
+        if (gap > lh || gap < -lh * 0.3) continue;
+        const overlapX = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+        if (overlapX < 0.5 * Math.min(a.x1 - a.x0, b.x1 - b.x0)) continue;
+        a.text += ' ' + b.text;
+        a.words.push(...b.words);
+        a.x0 = Math.min(a.x0, b.x0); a.x1 = Math.max(a.x1, b.x1);
+        a.y0 = Math.min(a.y0, b.y0); a.y1 = Math.max(a.y1, b.y1);
+        a.cy = (a.y0 + a.y1) / 2; a.h = (a.h + b.h) / 2;
+        lines.splice(j, 1);
+        didMerge = true;
+        break outer;
+      }
+    }
+  }
+
   return lines.map(l => ({
     text: l.text,
+    words: l.words,
     cx: (l.x0 + l.x1) / 2,
     cy: (l.y0 + l.y1) / 2,
     h: l.y1 - l.y0,
@@ -242,7 +331,21 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
       console.debug('[silksong-map] ambiguous name dropped:', c.text, '→', best.lb.name, 'vs', second.lb.name);
       continue;
     }
-    matches.push({ c, lb: best.lb, s: best.s });
+    // anchor on only the words that actually matched the label — OCR junk
+    // glued onto the line ("MID SF OD NG CHORAL CHAMBERS") shifts the line
+    // centre far enough to push the refine window off target
+    let anchor = c;
+    const lw = words(best.lb.name);
+    const hitWords = (c.words || []).filter(w => {
+      const t = (w.t || '').toLowerCase().replace(/[^a-z]/g, '');
+      return t && lw.some(l => wordHit(t, l) > 0);
+    });
+    if (hitWords.length && hitWords.length < (c.words || []).length) {
+      const x0 = Math.min(...hitWords.map(w => w.x0)), x1 = Math.max(...hitWords.map(w => w.x1));
+      const y0 = Math.min(...hitWords.map(w => w.y0)), y1 = Math.max(...hitWords.map(w => w.y1));
+      anchor = { ...c, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+    }
+    matches.push({ c: anchor, lb: best.lb, s: best.s });
   }
   if (!matches.length) return null;
 

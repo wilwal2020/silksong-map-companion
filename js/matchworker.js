@@ -49,6 +49,49 @@ let refBitmap = null;
 let refMask1 = null;  // prepped reference at REF_W
 let refMask2 = null;  // prepped reference at REF_W2
 let refScale1 = 0, refScale2 = 0;
+let refFill = null;   // full-res binary "reference has content here" mask
+
+// full-resolution fill mask of the reference: the arbiter for the one-sided
+// overlap verification ("does what the screenshot shows land on rooms?")
+function ensureRefFill() {
+  if (refFill) return refFill;
+  const W = refBitmap.width, H = refBitmap.height;
+  const d = bitmapToImageData(refBitmap, W, H).data;
+  refFill = new Uint8Array(W * H);
+  for (let i = 0, p = 0; p < refFill.length; i += 4, p++) {
+    refFill[p] = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) > 14 ? 1 : 0;
+  }
+  return refFill;
+}
+
+// reference content BOUNDARIES, dilated ~2px: sparse, structural, and the
+// thing that actually discriminates one room layout from another (fill
+// overlap alone accepts any roomy neighborhood)
+let refEdge = null;
+function ensureRefEdge() {
+  if (refEdge) return refEdge;
+  const fill = ensureRefFill();
+  const W = refBitmap.width, H = refBitmap.height;
+  let e = new Uint8Array(W * H);
+  for (let p = 0; p < e.length; p++) {
+    if (!fill[p]) continue;
+    const x = p % W;
+    if ((x > 0 && !fill[p - 1]) || (x < W - 1 && !fill[p + 1])
+        || (p >= W && !fill[p - W]) || (p < W * (H - 1) && !fill[p + W])) e[p] = 1;
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    const d2 = new Uint8Array(e);
+    for (let p = 0; p < e.length; p++) {
+      if (e[p]) continue;
+      const x = p % W;
+      if ((x > 0 && e[p - 1]) || (x < W - 1 && e[p + 1])
+          || (p >= W && e[p - W]) || (p < W * (H - 1) && e[p + W])) d2[p] = 1;
+    }
+    e = d2;
+  }
+  refEdge = e;
+  return refEdge;
+}
 
 function bitmapToImageData(bmp, w, h) {
   w = Math.max(1, Math.round(w));
@@ -446,6 +489,126 @@ function refinePass(cv, tmplBase, aspect, cx2, cy2, twCenter, ks, progressFrom) 
   return fine;
 }
 
+// Refine an OCR-predicted placement by ONE-SIDED overlap of the screenshot's
+// content BOUNDARIES on the reference's (dilated) boundaries. One-sided
+// because the screenshot shows only a subset of the reference's rooms
+// (partial exploration, dashed outlines); boundaries rather than fills
+// because edges are what discriminate one room layout from another — fill
+// overlap alone accepts any roomy neighborhood. A fill sanity check on top
+// rejects placements whose rooms hang over reference void.
+function fillRefine(mask, baseW, baseH, crop, hint, mode) {
+  const fill = ensureRefFill();
+  const edge = ensureRefEdge();
+  const RW = refBitmap.width, RH = refBitmap.height;
+  const kMap0 = hint.rect.w / baseW; // predicted map px per shot-base px
+  const ks = hint.spread === 'wide'
+    ? Array.from({ length: 15 }, (_, i) => 0.6 * Math.pow(1.6 / 0.6, i / 14))
+    : hint.spread === 'narrow'
+      ? [0.985, 1.0, 1.015]
+      : [0.93, 0.965, 1.0, 1.035, 1.07];
+
+  // boundary points of the shot's content mask, restricted to the trimmed
+  // crop (skips HUD borders); fill points kept separately for the sanity check
+  const epts = [], fpts = [];
+  for (let y = crop.y + 1; y < crop.y + crop.h - 1; y++) {
+    const row = y * baseW;
+    for (let x = crop.x + 1; x < crop.x + crop.w - 1; x++) {
+      const p = row + x;
+      if (!mask[p]) continue;
+      if (!mask[p - 1] || !mask[p + 1] || !mask[p - baseW] || !mask[p + baseW]) epts.push(x, y);
+      else if (((x ^ y) & 3) === 0) fpts.push(x, y); // sparse interior sample
+    }
+  }
+  let estride = 1;
+  while (epts.length / (2 * estride) > 7000) estride++;
+  const eN = Math.floor(epts.length / 2 / estride);
+  if (eN < 200) return null;
+
+  const cx = hint.rect.x + hint.rect.w / 2;
+  const cy = hint.rect.y + (hint.rect.w * baseH / baseW) / 2;
+  // search window in map px; the wide-window retry covers OCR anchors that
+  // landed further off (junk words glued to a line, truncated names)
+  const R = Math.max(60, hint.rect.w * 0.12) * (hint.wideWindow ? 2.5 : 1);
+  const step = hint.wideWindow ? 4 : 3;
+
+  const edgeOvAt = (X0, Y0, k) => {
+    let inter = 0, n = 0;
+    for (let i = 0; i < epts.length; i += 2 * estride) {
+      const mx = (X0 + epts[i] * k) | 0, my = (Y0 + epts[i + 1] * k) | 0;
+      n++;
+      if (mx >= 0 && mx < RW && my >= 0 && my < RH && edge[my * RW + mx]) inter++;
+    }
+    return inter / n;
+  };
+  const fillOvAt = (X0, Y0, k) => {
+    if (!fpts.length) return 1;
+    let inter = 0, n = 0;
+    for (let i = 0; i < fpts.length; i += 2) {
+      const mx = (X0 + fpts[i] * k) | 0, my = (Y0 + fpts[i + 1] * k) | 0;
+      n++;
+      if (mx >= 0 && mx < RW && my >= 0 && my < RH && fill[my * RW + mx]) inter++;
+    }
+    return inter / n;
+  };
+
+  let best = null;
+  const samples = [];
+  for (let ki = 0; ki < ks.length; ki++) {
+    const k = kMap0 * ks[ki];
+    const bx = cx - baseW * k / 2, by = cy - baseH * k / 2;
+    for (let dy = -R; dy <= R; dy += step) {
+      for (let dx = -R; dx <= R; dx += step) {
+        const ov = edgeOvAt(bx + dx, by + dy, k);
+        samples.push(ov);
+        if (!best || ov > best.ov) best = { ov, X0: bx + dx, Y0: by + dy, k, ki };
+      }
+    }
+    self.postMessage({ type: 'progress', f: 0.9 * (ki + 1) / ks.length });
+  }
+  if (!best) return null;
+  // 1px polish around the coarse best
+  for (let dy = -3; dy <= 3; dy++) {
+    for (let dx = -3; dx <= 3; dx++) {
+      const ov = edgeOvAt(best.X0 + dx, best.Y0 + dy, best.k);
+      if (ov > best.ov) best = { ...best, ov, X0: best.X0 + dx, Y0: best.Y0 + dy };
+    }
+  }
+
+  // a best at the extreme of a real scale sweep is unconfirmable
+  if (ks.length >= 5 && (best.ki === 0 || best.ki === ks.length - 1)) return null;
+
+  // chance level: how much dilated reference edge there is under the
+  // placement anyway (in dense regions a random spot still hits some)
+  let refN = 0, refHit = 0;
+  for (let y = crop.y; y < crop.y + crop.h; y += 4) {
+    for (let x = crop.x; x < crop.x + crop.w; x += 4) {
+      const mx = (best.X0 + x * best.k) | 0, my = (best.Y0 + y * best.k) | 0;
+      if (mx >= 0 && mx < RW && my >= 0 && my < RH) { refN++; if (edge[my * RW + mx]) refHit++; }
+    }
+  }
+  const refFrac = refN ? refHit / refN : 1;
+  const lift = (best.ov - refFrac) / Math.max(0.05, 1 - refFrac);
+  const fillOv = fillOvAt(best.X0, best.Y0, best.k);
+  // calibrated on real shots: correct placements score ov 0.46-0.52 with
+  // lift 0.30-0.37; wrong-neighborhood placements 0.25-0.38 with lift ≤0.17
+  if (best.ov < (mode === 'full' ? 0.4 : 0.45) || lift < 0.25 || fillOv < 0.5) {
+    return hint.debug ? { fail: true, ov: +best.ov.toFixed(3), refFrac: +refFrac.toFixed(3), lift: +lift.toFixed(3), fillOv: +fillOv.toFixed(3), k: +best.k.toFixed(4), ki: best.ki, nE: eN } : null;
+  }
+
+  return {
+    x: best.X0,
+    y: best.Y0,
+    w: baseW * best.k,
+    h: baseH * best.k,
+    score: best.ov,
+    z: 99,
+    ratio: 0.4,
+    via: 'refine',
+    lift: +lift.toFixed(3),
+    fillOv: +fillOv.toFixed(3),
+  };
+}
+
 // After a ladder search, walk the scale in shrinking sub-percent steps —
 // the ladder's 2-3% quantization leaves multi-pixel edge error on big pastes.
 function polishScale(cv, tmplBase, aspect, fine, progressFrom) {
@@ -532,54 +695,24 @@ async function locate(shot, mode, hint) {
   const structFrac0 = structCount0 / Math.max(1, rect.w * rect.h);
 
   // ---- refine-only: the caller already knows roughly where this shot goes
-  // (an OCR'd area name) — snap that prediction onto the reference room
-  // structure. OCR bounding boxes are only approximate (dropped words,
-  // names cut off at the screenshot edge), so both position AND scale are
-  // re-derived from content here. `hint.spread` says how far the caller's
-  // scale guess may be off: 'narrow' = content-verified global scale (fix
-  // position only), 'wide' = weak guess (letter-height ratio).
+  // (an OCR'd area name) — snap that prediction onto the reference content.
+  // OCR bounding boxes are only approximate (dropped words, names cut off at
+  // the screenshot edge), so position AND scale are re-derived here.
+  // `hint.spread` says how far the caller's scale guess may be off:
+  // 'narrow' = content-verified global scale (position only), 'wide' = weak
+  // guess (letter-height ratio).
   if (hint && hint.rect) {
-    const kB = hint.rect.w / baseW; // map px per shot-base px
-    const cxp = (hint.rect.x + (rect.x + rect.w / 2) * kB) * refScale2 + pad2;
-    const cyp = (hint.rect.y + (rect.y + rect.h / 2) * kB) * refScale2 + pad2;
-    const twp = rect.w * kB * refScale2;
-    const ks = hint.spread === 'wide'
-      ? Array.from({ length: 28 }, (_, i) => 0.6 * Math.pow(1.6 / 0.6, i / 27))
-      : hint.spread === 'narrow'
-        ? [0.985, 1.0, 1.015]
-        : [0.93, 0.955, 0.98, 1.0, 1.02, 1.045, 1.07];
-    let fine = refinePass(cv, tmplBase, aspect, cxp, cyp, twp, ks, 0.1);
-    // polish measures the scale precisely when it is genuinely unknown; with
-    // a trusted locked scale ('narrow') the caller forces that exact scale
-    // afterwards anyway, and letting polish walk off the band only feeds
-    // content-specific bias (organic areas correlate better slightly shrunk)
-    if (fine && hint.spread !== 'narrow') fine = polishScale(cv, tmplBase, aspect, fine, 0.8);
     tmplBase.delete();
-    // same room-structure verification bar as a label identification; a
-    // wide scale sweep has more chances to fluke past it, so it must clear
-    // a higher bar (a false edge hit measured 0.19, real ones 0.30-0.42).
-    // When the user has already confirmed the location, the bar relaxes —
-    // identity is human-verified, only the geometry needs the content.
-    const thr = (mode === 'full' ? 0.12 : 0.18)
-      * (hint.spread === 'wide' ? 1.4 : 1)
-      * (hint.confirmed ? 0.55 : 1);
-    if (!fine || fine.score < thr) {
+    if (structFrac0 < 0.035) {
       // an unexplored (near-black) shot has nothing to correlate — tell the
       // caller so it can keep the OCR placement instead of distrusting it
-      return structFrac0 < 0.035 ? { sparse: true } : null;
+      return { sparse: true };
     }
-    const cl = rect.x / baseW, ct = rect.y / baseH, cwf = rect.w / baseW;
-    const kk = fine.tw / (shot.width * cwf) / refScale2;
-    return {
-      x: (fine.mx - pad2) / refScale2 - shot.width * cl * kk,
-      y: (fine.my - pad2) / refScale2 - shot.height * ct * kk,
-      w: shot.width * kk,
-      h: shot.height * kk,
-      score: fine.score,
-      z: 99,
-      ratio: 0.4,
-      via: 'refine',
-    };
+    // one-sided fill overlap instead of edge correlation: robust in dense
+    // regions where the screenshot shows only a subset of the reference's
+    // rooms. The returned rect covers the full base frame, which IS the
+    // full shot (base is just the shot resized) — no coordinate mapping.
+    return fillRefine(mask, baseW, baseH, rect, hint, mode);
   }
 
   const structFrac = structFrac0;
@@ -602,8 +735,11 @@ async function locate(shot, mode, hint) {
       if (fineL) fineL = polishScale(cv, tmplBase, aspect, fineL, 0.6);
       // correct label hits verify at 0.25-0.40 on real screenshots; a wrong
       // one measured 0.14 — require solid room agreement (zoomed-out full
-      // maps have thin outlines, so their verification runs weaker)
-      const verified = fineL && fineL.score >= (mode === 'full' ? 0.12 : 0.18);
+      // maps have thin outlines, so their verification runs weaker). A
+      // borderline verify only counts when the label identification itself
+      // was emphatic (a false label match squeaked by at verify 0.19).
+      const verified = fineL && fineL.score >= (mode === 'full' ? 0.12 : 0.18)
+        && (fineL.score >= 0.25 || lbl.score >= 0.75);
 
       // ...but an unexplored area has almost no room structure to verify
       // against, so trust a confident label on its own there
