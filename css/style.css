@@ -78,8 +78,10 @@ html, body {
   font-size: .85rem; line-height: 1.3; user-select: none;
   opacity: .45; transition: opacity .12s, border-color .12s;
 }
+.chip { transition: opacity .12s, border-color .12s, transform .09s; }
 .chip.on { opacity: 1; border-color: var(--accent); background: var(--accent-soft); }
 .chip:hover { opacity: .85; }
+.chip:active { transform: scale(.93); }
 
 /* ---------- stage / map ---------- */
 
@@ -163,10 +165,35 @@ html, body {
 .pin-card img.env {
   width: 100%; border-radius: 6px; display: block;
   max-height: 62vh; object-fit: contain; background: #000; cursor: zoom-in;
+  animation: env-in .32s ease-out;
 }
+@keyframes env-in { from { opacity: 0; transform: scale(.95); } }
 .pin-card .no-env {
-  color: var(--text-dim); font-size: .8rem; text-align: center;
+  color: var(--text-dim); font-size: .8rem; text-align: center; cursor: pointer;
   border: 1px dashed var(--border); border-radius: 6px; padding: 14px 8px;
+  transition: border-color .16s, color .16s, background .16s, box-shadow .16s;
+}
+.pin-card .no-env:hover {
+  border-color: var(--pc, var(--accent)); border-style: solid; color: var(--text);
+  background: color-mix(in srgb, var(--pc, var(--accent)) 12%, transparent);
+  box-shadow: inset 0 0 22px -8px var(--pc, var(--accent)), 0 0 11px -5px var(--pc, var(--accent));
+}
+
+/* a pasted screenshot flying from where it dropped into its pin */
+.attach-fly {
+  position: fixed; z-index: 55; border-radius: 6px; background: #000;
+  box-shadow: var(--shadow); pointer-events: none; object-fit: contain;
+  transition: transform .5s cubic-bezier(.5,0,.2,1), opacity .46s ease;
+  will-change: transform, opacity;
+}
+/* the pin flashes a ring as the screenshot lands in it */
+.pin-ico.pin-flash { animation: pin-flash .62s ease-out; }
+@keyframes pin-flash {
+  0%   { box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc, var(--accent)) 85%, transparent),
+                     0 0 17px 5px color-mix(in srgb, var(--pc, var(--accent)) 70%, transparent);
+         transform: scale(1); }
+  35%  { transform: scale(1.32); }
+  100% { box-shadow: 0 0 0 15px transparent, 0 0 0 0 transparent; transform: scale(1); }
 }
 .pin-card .card-head { display: flex; gap: 8px; align-items: baseline; }
 .pin-card .card-head .cat { font-family: Cinzel, serif; font-weight: 500; font-size: .85rem; letter-spacing: .03em; color: var(--pc, var(--rose)); }
@@ -229,7 +256,10 @@ dialog {
   border: 1px solid var(--border); border-top: 2px solid var(--accent); border-radius: 0;
   box-shadow: var(--shadow); padding: 20px 22px; max-width: 460px; width: min(460px, 92vw);
 }
-dialog::backdrop { background: rgba(4,5,7,.72); }
+dialog[open] { animation: dlg-in .22s cubic-bezier(.2,.9,.3,1.12); }
+dialog::backdrop { background: rgba(4,5,7,.72); animation: fade-in .2s ease; }
+@keyframes dlg-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+@keyframes fade-in { from { opacity: 0; } }
 dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; letter-spacing: .04em; color: var(--text); }
 
 #paste-preview {
@@ -284,7 +314,9 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 @keyframes toast-shake { 25% { transform: translateX(-4px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .toast, .toast.error, .pin-ico.pin-pop, .btn:active { animation: none; transition: none; }
+  .toast, .toast.error, .pin-ico.pin-pop, .pin-ico.pin-flash, .btn:active,
+  .add-pin.active, .add-pin.active .add-pin-ico, .pin-card img.env,
+  dialog[open], dialog::backdrop, .attach-fly { animation: none !important; transition: none !important; }
 }
 
 /* ---------- category sidebar (left) ---------- */
@@ -330,6 +362,8 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   touch-action: none;
 }
 .cat-row:hover { background: var(--panel-2); border-color: var(--border); }
+.cat-ico { transition: transform .13s cubic-bezier(.2,.9,.3,1.4); }
+.cat-row:hover .cat-ico { transform: scale(1.18) rotate(-4deg); }
 .cat-row.off { opacity: .5; box-shadow: inset 3px 0 0 #3a4150; }
 .cat-row.dragging {
   border-color: var(--pc, var(--accent)); background: var(--panel-2);
@@ -395,9 +429,27 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   box-shadow: var(--shadow);
   transition: background .12s, border-color .12s, color .12s;
 }
-.add-pin:hover { background: #232b3d; border-color: var(--accent); }
-.add-pin .add-pin-ico { font-size: 1rem; line-height: 1; }
-.add-pin.active { background: var(--accent-soft); border-color: var(--accent); color: var(--rose); }
+.add-pin {
+  transition: background .14s, border-color .14s, color .14s, box-shadow .18s, transform .1s;
+}
+.add-pin:hover {
+  background: #232b3d; border-color: var(--accent);
+  transform: translateX(-50%) translateY(-1px);
+  box-shadow: var(--shadow), 0 0 16px -2px var(--accent-glow);
+}
+.add-pin:active { transform: translateX(-50%) translateY(1px) scale(.97); }
+.add-pin .add-pin-ico { font-size: 1rem; line-height: 1; transition: transform .18s cubic-bezier(.2,.9,.3,1.4); }
+.add-pin:hover .add-pin-ico { transform: translateY(-1px) rotate(-9deg) scale(1.12); }
+.add-pin.active {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--rose);
+  animation: addpin-pulse 1.5s ease-in-out infinite;
+}
+.add-pin.active .add-pin-ico { animation: addpin-ico 1.5s ease-in-out infinite; }
+@keyframes addpin-pulse {
+  0%,100% { box-shadow: var(--shadow), 0 0 0 0 transparent; }
+  50%     { box-shadow: var(--shadow), 0 0 16px 2px color-mix(in srgb, var(--accent-glow) 60%, transparent); }
+}
+@keyframes addpin-ico { 50% { transform: scale(1.16); } }
 /* custom tooltip that sits UNDER the button (never covering it) */
 .add-pin[data-tip]::after {
   content: attr(data-tip);

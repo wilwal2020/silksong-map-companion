@@ -65,6 +65,54 @@ function showPasteGhost(bitmap) {
   dockSpinner(true);
 }
 
+// a zoom level that frames a pasted rect nicely — so a full-map paste that
+// only covers a corner zooms to that corner instead of the whole world
+function fitRectScale(rect, frac = 0.85) {
+  const cw = view.canvas.clientWidth, ch = view.canvas.clientHeight;
+  const s = Math.min(cw * frac / rect.w, ch * frac / rect.h);
+  return Math.min(view.maxScale, Math.max(view.minScale, s));
+}
+
+// fly a just-attached screenshot from where it dropped into its pin, then
+// flash the pin. Resolves when the animation finishes (or immediately if
+// motion is reduced).
+function flyImageToPin(blob, entry, fromRect = null) {
+  return new Promise(resolve => {
+    if (view.reduceMotion || !entry) { pins.flashPin(entry?.data.id); resolve(); return; }
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.className = 'attach-fly';
+    const done = () => { img.remove(); URL.revokeObjectURL(url); pins.flashPin(entry.data.id); resolve(); };
+    img.onerror = done;
+    img.onload = () => {
+      const pr = entry.el.getBoundingClientRect();
+      const tx = pr.left + pr.width / 2, ty = pr.top + pr.height / 2;
+      let start = fromRect;
+      if (!start) {
+        const w = Math.min(300, window.innerWidth * 0.5);
+        const h = w * (img.naturalHeight / img.naturalWidth);
+        start = { left: innerWidth / 2 - w / 2, top: innerHeight / 2 - h / 2, width: w };
+      }
+      img.style.left = (start.left ?? start.x) + 'px';
+      img.style.top = (start.top ?? start.y) + 'px';
+      img.style.width = start.width + 'px';
+      document.body.appendChild(img);
+      const fw = img.offsetWidth, fh = img.offsetHeight;
+      const dx = tx - ((start.left ?? start.x) + fw / 2);
+      const dy = ty - ((start.top ?? start.y) + fh / 2);
+      requestAnimationFrame(() => {
+        img.style.transform = `translate(${dx}px, ${dy}px) scale(.05)`;
+        img.style.opacity = '.1';
+      });
+      let fired = false;
+      const finish = () => { if (fired) return; fired = true; done(); };
+      img.addEventListener('transitionend', finish, { once: true });
+      setTimeout(finish, 720); // safety if transitionend is missed
+    };
+    img.src = url;
+  });
+}
+
 function showAwaitDialog(title, sub, skipLabel) {
   $('#await-title').textContent = title;
   $('#await-sub').innerHTML = sub;
@@ -455,6 +503,8 @@ async function attachToAwaiting(blob) {
   persistPin(entry.data);
   pins.setAwaiting(null);
   if ($('#dlg-await').open) $('#dlg-await').close();
+  // let the screenshot fly into the pin before anything else pops up
+  await flyImageToPin(blob, entry);
   if (newPinPending && newPinPending.id === entry.data.id) {
     newPinPending = null;
     const edit = await openPinEditor(entry.data, true);
@@ -498,6 +548,7 @@ async function handleEnvScreenshot(blob) {
   pins.update(entry.data);
   persistPin(entry.data);
   pins.setAwaiting(null);
+  flyImageToPin(blob, entry);
   toast('Screenshot attached — hover the pin to see it.', 'ok');
 }
 
@@ -548,11 +599,15 @@ async function handleFullMap(blob) {
   } else {
     rect = explored.refineAlignment(bitmap, rect);
   }
+  // frame the update by how much it actually covers — a partial map zooms to
+  // its region, a whole-world screenshot zooms right out
+  const held = view.ghostScreenRect();
+  view.centerOn(rect.x + rect.w / 2, rect.y + rect.h / 2, fitRectScale(rect));
+  view.setGhostFromScreenRect(held);
   await view.flyGhostTo(rect);
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
   bitmap.close?.();
-  view.fitToScreen();
   view.settleGhost();
   toast('Map updated with everything you have explored.', 'ok', { label: 'Undo', fn: undoLast });
 }
@@ -575,9 +630,11 @@ function routePaste(blob) {
   const hoverSquare = document.querySelector('.pin-card .no-env:hover');
   const hoverEntry = hoverSquare && pins.pins.get(hoverSquare.dataset.pinId);
   if (hoverEntry) {
+    const fromRect = hoverSquare.getBoundingClientRect(); // capture before update rebuilds the card
     hoverEntry.data.img = blob;
     pins.update(hoverEntry.data);
     persistPin(hoverEntry.data);
+    flyImageToPin(blob, hoverEntry, fromRect);
     toast('Screenshot attached.', 'ok');
     return;
   }

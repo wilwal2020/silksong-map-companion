@@ -84,6 +84,16 @@ export class PinManager {
     for (const [pid, e] of this.pins) e.el.classList.toggle('selected', pid === id);
   }
 
+  // ring flash on a pin (e.g. a screenshot just landed in it)
+  flashPin(id) {
+    const e = this.pins.get(id);
+    if (!e) return;
+    e.ico.classList.remove('pin-flash');
+    void e.ico.offsetWidth; // restart the animation if it's already running
+    e.ico.classList.add('pin-flash');
+    e.ico.addEventListener('animationend', () => e.ico.classList.remove('pin-flash'), { once: true });
+  }
+
   setAwaiting(id) {
     this.awaitingId = id;
     for (const [pid, e] of this.pins) e.el.classList.toggle('awaiting', pid === id);
