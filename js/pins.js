@@ -6,13 +6,37 @@ import { categories, catById } from './categories.js';
 // re-export so existing importers keep working
 export { catById };
 
-// is point p inside triangle a-b-c? (sign test)
-function inTriangle(p, a, b, c) {
-  const s = (u, v, w) => (u.x - w.x) * (v.y - w.y) - (v.x - w.x) * (u.y - w.y);
-  const d1 = s(p, a, b), d2 = s(p, b, c), d3 = s(p, c, a);
-  const neg = d1 < 0 || d2 < 0 || d3 < 0;
-  const pos = d1 > 0 || d2 > 0 || d3 > 0;
-  return !(neg && pos);
+// convex hull (Andrew's monotone chain) of a set of points
+function convexHull(pts) {
+  pts = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop(); upper.pop();
+  return lower.concat(upper);
+}
+
+// is point p inside the convex polygon? (all edge cross-products same sign)
+function pointInConvex(p, poly) {
+  let sign = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const c = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    if (c === 0) continue;
+    const s = c > 0 ? 1 : -1;
+    if (sign === 0) sign = s;
+    else if (s !== sign) return false;
+  }
+  return true;
 }
 
 export class PinManager {
@@ -56,16 +80,19 @@ export class PinManager {
   }
 
   _inSafeZone(entry, x, y) {
-    const pin = entry.el.getBoundingClientRect();
-    if (x >= pin.left - 4 && x <= pin.right + 4 && y >= pin.top - 4 && y <= pin.bottom + 4) return true;
-    const card = entry.card.getBoundingClientRect();
-    const pad = 8;
-    if (x >= card.left - pad && x <= card.right + pad && y >= card.top - pad && y <= card.bottom + pad) return true;
-    // triangle from the pin centre out to the card's near vertical edge
-    const cx = (pin.left + pin.right) / 2, cy = (pin.top + pin.bottom) / 2;
-    const ex = card.left >= cx ? card.left : card.right;
-    return inTriangle({ x, y }, { x: cx, y: cy },
-      { x: ex, y: card.top - pad }, { x: ex, y: card.bottom + pad });
+    // safe = anywhere inside the convex hull that wraps BOTH the pin and its
+    // card (plus a little padding). This keeps the whole corridor between them
+    // wide — including right next to the pin — so a diagonal move toward a
+    // card button never slips out, while moving away from the card exits it.
+    const pad = 7;
+    const rects = [entry.el.getBoundingClientRect(), entry.card.getBoundingClientRect()];
+    const corners = [];
+    for (const r of rects) {
+      corners.push(
+        { x: r.left - pad, y: r.top - pad }, { x: r.right + pad, y: r.top - pad },
+        { x: r.right + pad, y: r.bottom + pad }, { x: r.left - pad, y: r.bottom + pad });
+    }
+    return pointInConvex({ x, y }, convexHull(corners));
   }
 
   add(data, { select = false, pop = false } = {}) {
