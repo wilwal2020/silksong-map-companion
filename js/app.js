@@ -56,6 +56,33 @@ function spinner(show, msg) {
 // dock the spinner to the bottom so it clears the floating paste ghost
 function dockSpinner(on) { $('#spinner').classList.toggle('docked', on); }
 
+// in-app confirm dialog (replaces the browser's confirm()). Resolves true/false.
+function confirmDialog(text, { title = 'Are you sure?', okLabel = 'Delete', danger = true } = {}) {
+  const dlg = $('#dlg-confirm');
+  $('#confirm-title').textContent = title;
+  $('#confirm-text').textContent = text;
+  const ok = $('#btn-confirm-yes'), no = $('#btn-confirm-no');
+  ok.textContent = okLabel;
+  ok.classList.toggle('danger', danger);
+  ok.classList.toggle('primary', !danger);
+  return new Promise(resolve => {
+    const done = v => {
+      ok.removeEventListener('click', onOk);
+      no.removeEventListener('click', onNo);
+      dlg.removeEventListener('cancel', onCancel);
+      closeDialog(dlg);
+      resolve(v);
+    };
+    const onOk = () => done(true);
+    const onNo = () => done(false);
+    const onCancel = e => { e.preventDefault(); done(false); };
+    ok.addEventListener('click', onOk);
+    no.addEventListener('click', onNo);
+    dlg.addEventListener('cancel', onCancel);
+    dlg.showModal();
+  });
+}
+
 // close a <dialog> with a brief out-animation instead of snapping shut
 function closeDialog(dlg) {
   if (typeof dlg === 'string') dlg = $(dlg);
@@ -739,7 +766,8 @@ async function importAll(file) {
     toast('Could not read that file: ' + err.message, 'error');
     return;
   }
-  if (!confirm('Importing replaces your current map progress and pins. Continue?')) return;
+  if (!await confirmDialog('Importing replaces your current map progress and pins. Continue?',
+    { title: 'Import backup?', okLabel: 'Import', danger: false })) return;
 
   await store.clearPins();
   pins.removeAll();
@@ -977,7 +1005,8 @@ function saveCatType() {
 }
 
 async function deleteCustomType(id) {
-  if (!confirm('Delete this custom type? Any pins using it become “Other”.')) return;
+  if (!await confirmDialog('Any pins using it become “Other”.',
+    { title: 'Delete this pin type?', okLabel: 'Delete' })) return;
   for (const e of [...pins.pins.values()]) {
     if (e.data.cat === id) {
       e.data.cat = 'other';
@@ -1159,8 +1188,9 @@ function buildToolbar() {
   // touching the pins — their pictures, notes and types all stay. The scale
   // calibration is cleared too: a bad calibration may be exactly why the
   // map needs redoing, and the first fresh paste re-measures it anyway.
-  $('#btn-clear-map').addEventListener('click', () => {
-    if (!confirm('Erase the revealed map? All pins (with their pictures and notes) are kept.')) return;
+  $('#btn-clear-map').addEventListener('click', async () => {
+    if (!await confirmDialog('All pins (with their pictures and notes) are kept.',
+      { title: 'Erase the revealed map?', okLabel: 'Clear map' })) return;
     snapshotForUndo();
     explored.clear();
     learnedScale = null;
@@ -1174,7 +1204,8 @@ function buildToolbar() {
   });
 
   $('#btn-reset').addEventListener('click', async () => {
-    if (!confirm('Erase ALL revealed map and pins? Consider exporting a backup first.')) return;
+    if (!await confirmDialog('This erases ALL revealed map and pins. Consider exporting a backup first.',
+      { title: 'Reset everything?', okLabel: 'Reset everything' })) return;
     await store.clearPins();
     await store.clearMeta();
     pins.removeAll();
@@ -1218,8 +1249,9 @@ async function init() {
       pins.update(data);
       persistPin(data);
     },
-    onDelete: data => {
-      if (!confirm('Delete this pin?')) return;
+    onDelete: async data => {
+      if (!await confirmDialog('This removes the pin and its attached picture.',
+        { title: 'Delete this pin?', okLabel: 'Delete' })) return;
       pins.remove(data.id);
       store.deletePin(data.id);
     },

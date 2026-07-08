@@ -84,7 +84,7 @@ export class PinManager {
     // card (plus a little padding). This keeps the whole corridor between them
     // wide — including right next to the pin — so a diagonal move toward a
     // card button never slips out, while moving away from the card exits it.
-    const pad = 7;
+    const pad = 16;
     const rects = [entry.el.getBoundingClientRect(), entry.card.getBoundingClientRect()];
     const corners = [];
     for (const r of rects) {
@@ -154,9 +154,20 @@ export class PinManager {
     this._playIco(id, 'pin-flash');
   }
 
-  // celebratory burst when a pin is checked off
+  // celebratory burst when a pin is checked off — an expanding green ring
+  // laid over the pin-layer (independent of the pin's dimmed done styling,
+  // and visible even if "show done" hides the pin itself)
   flashDone(id) {
+    const e = this.pins.get(id);
+    if (!e) return;
     this._playIco(id, 'pin-doneburst');
+    const p = this.view.mapToScreen(e.data.x, e.data.y);
+    const ring = document.createElement('div');
+    ring.className = 'done-burst';
+    ring.style.left = p.x + 'px';
+    ring.style.top = p.y + 'px';
+    this.layer.appendChild(ring);
+    ring.addEventListener('animationend', () => ring.remove(), { once: true });
   }
 
   _playIco(id, cls) {
@@ -313,6 +324,11 @@ export class PinManager {
   // ---- hover / detail card ------------------------------------------------
 
   _showCard(entry, sticky) {
+    // only ever one card visible — drop any other pin's card first (a stray
+    // hover card from a nearby pin would otherwise get orphaned/stuck)
+    if (this._hoverCardEntry && this._hoverCardEntry !== entry) {
+      this._hideCard(this._hoverCardEntry);
+    }
     if (this._stickyCard && this._stickyCard !== entry.card) {
       this._hideCard(this._stickyCardPin, true);
     }
