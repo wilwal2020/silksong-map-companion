@@ -30,7 +30,7 @@ export class PinManager {
     });
   }
 
-  add(data, { select = false } = {}) {
+  add(data, { select = false, pop = false } = {}) {
     const el = document.createElement('div');
     el.className = 'pin';
     const ico = document.createElement('span');
@@ -42,6 +42,10 @@ export class PinManager {
     this._decorate(entry);
     this._wire(entry);
     if (select) this.select(data.id);
+    if (pop) {
+      ico.classList.add('pin-pop');
+      ico.addEventListener('animationend', () => ico.classList.remove('pin-pop'), { once: true });
+    }
     this.syncPositions();
     this.handlers.onPinsChanged?.();
     return entry;

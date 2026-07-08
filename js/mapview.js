@@ -2,6 +2,8 @@
 // (optional) placement overlay for a screenshot being positioned. `mapImage`
 // is used only for its dimensions (the reference map is never displayed).
 
+const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
 export class MapView {
   constructor(canvas, mapImage, explored) {
     this.canvas = canvas;
@@ -15,6 +17,12 @@ export class MapView {
 
     // placement overlay: { img, x, y, w } in map coords (h from aspect)
     this.placement = null;
+
+    // ghost: a pasted screenshot shown floating while it's being located,
+    // then flown into place (see showGhost / flyGhostTo / settleGhost)
+    this.ghost = null;
+    this._ghostRaf = 0;
+    this.reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     // debug: overlay the reference map to check alignment
     this.debugReveal = false;
@@ -58,6 +66,183 @@ export class MapView {
     this.placement = p;
     this.canvas.classList.toggle('placing', !!p);
     this.requestRender();
+  }
+
+  // ---- paste ghost: float, fly into place, settle -----------------------
+
+  // Show the pasted screenshot floating, screen-anchored (stays put while the
+  // map pans behind it), gently pulsing to signal "working". `screenW` is its
+  // width in screen px.
+  showGhost(img, screenW) {
+    this.ghost = {
+      img, screenW, aspect: img.height / img.width,
+      x: 0, y: 0, w: 0, phase: 'processing',
+    };
+    this._syncProcessing();
+    this._loop();
+  }
+
+  // where a screen-anchored ghost sits right now, in map coords
+  _syncProcessing() {
+    const g = this.ghost;
+    if (!g) return;
+    const cw = this.canvas.clientWidth, ch = this.canvas.clientHeight;
+    g.w = g.screenW / this.scale;
+    const h = g.w * g.aspect;
+    const c = this.screenToMap(cw / 2, ch / 2);
+    g.x = c.x - g.w / 2;
+    g.y = c.y - h / 2;
+  }
+
+  // the ghost's current on-screen rect (so a view recenter can keep it put)
+  ghostScreenRect() {
+    const g = this.ghost;
+    if (!g) return null;
+    const s = this.mapToScreen(g.x, g.y);
+    return { sx: s.x, sy: s.y, sw: g.w * this.scale };
+  }
+  // re-anchor the ghost so it occupies `r` (a prior ghostScreenRect) under
+  // the current view — keeps it visually still across a centerOn
+  setGhostFromScreenRect(r) {
+    const g = this.ghost;
+    if (!g || !r) return;
+    const m = this.screenToMap(r.sx, r.sy);
+    g.w = r.sw / this.scale;
+    g.x = m.x; g.y = m.y;
+  }
+
+  // fly the ghost from where it floats to a final map rect
+  flyGhostTo(rect, dur = 620) {
+    const g = this.ghost;
+    if (!g) return Promise.resolve();
+    if (this.reduceMotion) {
+      g.phase = 'landed'; g.x = rect.x; g.y = rect.y; g.w = rect.w;
+      this.requestRender();
+      return Promise.resolve();
+    }
+    return new Promise(res => {
+      g.phase = 'flying';
+      g.from = { x: g.x, y: g.y, w: g.w };
+      g.to = { x: rect.x, y: rect.y, w: rect.w };
+      g.t = 0; g.t0 = performance.now(); g.dur = dur; g.onDone = res;
+      this._loop();
+    });
+  }
+
+  // a bright flash + gold glow over the just-composited paste, then clear
+  settleGhost(dur = 460) {
+    const g = this.ghost;
+    if (!g) return Promise.resolve();
+    if (this.reduceMotion) { this.clearGhost(); return Promise.resolve(); }
+    return new Promise(res => {
+      g.phase = 'settle'; g.noImg = true; g.t = 0; g.t0 = performance.now();
+      g.dur = dur; g.onDone = res;
+      this._loop();
+    });
+  }
+
+  // shake + fade: the paste couldn't be placed
+  rejectGhost(dur = 520) {
+    const g = this.ghost;
+    if (!g) return Promise.resolve();
+    if (this.reduceMotion) { this.clearGhost(); return Promise.resolve(); }
+    return new Promise(res => {
+      g.phase = 'reject'; g.t = 0; g.t0 = performance.now(); g.dur = dur; g.onDone = res;
+      this._loop();
+    });
+  }
+
+  clearGhost() {
+    this.ghost = null;
+    if (this._ghostRaf) { cancelAnimationFrame(this._ghostRaf); this._ghostRaf = 0; }
+    this.requestRender();
+  }
+
+  _loop() {
+    if (this._ghostRaf) return;
+    const step = now => {
+      this._ghostRaf = 0;
+      const g = this.ghost;
+      if (!g) return;
+      if (g.phase === 'processing') {
+        this._syncProcessing();
+      } else if (g.phase === 'flying' || g.phase === 'settle' || g.phase === 'reject') {
+        g.t = Math.min(1, (now - g.t0) / g.dur);
+        if (g.phase === 'flying') {
+          const e = easeInOut(g.t);
+          g.x = g.from.x + (g.to.x - g.from.x) * e;
+          g.y = g.from.y + (g.to.y - g.from.y) * e;
+          g.w = g.from.w + (g.to.w - g.from.w) * e;
+        }
+        if (g.t >= 1) {
+          const done = g.onDone; g.onDone = null;
+          if (g.phase === 'flying') g.phase = 'landed';
+          else { this.render(); this.clearGhost(); done && done(); return; }
+          this.render();
+          done && done();
+          return; // landed: hold the frame, stop the loop until settle
+        }
+      }
+      this.render();
+      const cur = this.ghost;
+      if (cur && cur.phase !== 'landed') this._ghostRaf = requestAnimationFrame(step);
+    };
+    this._ghostRaf = requestAnimationFrame(step);
+  }
+
+  _drawGhost(ctx) {
+    const g = this.ghost;
+    const h = g.w * g.aspect;
+    const s = this.scale;
+    const gold = (a, blur) => {
+      ctx.strokeStyle = `rgba(224,195,126,${a})`;
+      ctx.lineWidth = 2.4 / s;
+      ctx.shadowColor = 'rgba(224,195,126,.85)';
+      ctx.shadowBlur = blur / s;
+    };
+    ctx.save();
+    if (g.phase === 'processing') {
+      const now = performance.now();
+      const pulse = 1 + 0.022 * Math.sin(now / 360);
+      const glow = 0.5 + 0.5 * Math.sin(now / 360);
+      const cx = g.x + g.w / 2, cy = g.y + h / 2;
+      const w = g.w * pulse, hh = h * pulse;
+      ctx.globalAlpha = 0.93;
+      ctx.drawImage(g.img, cx - w / 2, cy - hh / 2, w, hh);
+      ctx.globalAlpha = 1;
+      gold(0.5 + 0.4 * glow, 12 + 8 * glow);
+      ctx.strokeRect(cx - w / 2, cy - hh / 2, w, hh);
+    } else if (g.phase === 'flying') {
+      const e = g.t;
+      ctx.globalAlpha = 0.9 + 0.1 * e;
+      ctx.drawImage(g.img, g.x, g.y, g.w, h);
+      ctx.globalAlpha = 1;
+      gold(0.55 * (1 - e) + 0.15, 12 * (1 - e) + 3);
+      ctx.strokeRect(g.x, g.y, g.w, h);
+    } else if (g.phase === 'landed') {
+      ctx.drawImage(g.img, g.x, g.y, g.w, h);
+    } else if (g.phase === 'settle') {
+      const a = 1 - g.t;
+      ctx.globalAlpha = 0.32 * a;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(g.x, g.y, g.w, h);
+      ctx.globalAlpha = 1;
+      gold(0.7 * a, 22 * a);
+      ctx.lineWidth = (2 + 6 * a) / s;
+      ctx.strokeRect(g.x, g.y, g.w, h);
+    } else if (g.phase === 'reject') {
+      const a = 1 - g.t;
+      const shake = Math.sin(g.t * Math.PI * 6) * a * 15 / s;
+      ctx.globalAlpha = 0.9 * a;
+      ctx.drawImage(g.img, g.x + shake, g.y, g.w, h);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = `rgba(192,57,43,${0.8 * a})`;
+      ctx.lineWidth = 2.5 / s;
+      ctx.shadowColor = 'rgba(192,57,43,.75)';
+      ctx.shadowBlur = 14 * a / s;
+      ctx.strokeRect(g.x + shake, g.y, g.w, h);
+    }
+    ctx.restore();
   }
 
   requestRender() {
@@ -114,6 +299,8 @@ export class MapView {
       ctx.lineWidth = 2 / this.scale;
       ctx.strokeRect(p.x, p.y, p.w, h);
     }
+
+    if (this.ghost) this._drawGhost(ctx);
   }
 
   _resize() {

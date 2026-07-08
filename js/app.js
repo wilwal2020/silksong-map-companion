@@ -53,6 +53,18 @@ function spinner(show, msg) {
   if (msg) $('#spinner-msg').textContent = msg;
 }
 
+// dock the spinner to the bottom so it clears the floating paste ghost
+function dockSpinner(on) { $('#spinner').classList.toggle('docked', on); }
+
+// float the just-pasted screenshot on the map while it's being located
+function showPasteGhost(bitmap) {
+  const cw = view.canvas.clientWidth, ch = view.canvas.clientHeight;
+  const ar = bitmap.width / bitmap.height;
+  const screenW = Math.min(cw * 0.44, ch * 0.5 * ar);
+  view.showGhost(bitmap, screenW);
+  dockSpinner(true);
+}
+
 function showAwaitDialog(title, sub, skipLabel) {
   $('#await-title').textContent = title;
   $('#await-sub').innerHTML = sub;
@@ -231,8 +243,19 @@ async function applyMapPlacement(bitmap, rect, marker) {
       store.putMeta('scale', learnedScale);
     }
   }
+  // bring the spot into view, then fly the floating ghost onto its home rect
+  // before compositing so the paste visibly lands where it belongs. Preserve
+  // the ghost's on-screen spot across the recenter so it doesn't jump first.
+  const held = view.ghostScreenRect();
+  view.centerOn(rect.x + rect.w / 2, rect.y + rect.h / 2,
+    Math.min(1, (window.innerWidth * 0.6) / rect.w));
+  view.setGhostFromScreenRect(held);
+  await view.flyGhostTo(rect);
+
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
+  view.settleGhost();   // flash over the composite, then clears itself
+  bitmap.close?.();
 
   const data = {
     id: crypto.randomUUID(),
@@ -242,10 +265,9 @@ async function applyMapPlacement(bitmap, rect, marker) {
     created: Date.now(),
   };
   lastUndo.pinId = data.id;
-  pins.add(data, { select: true });
+  pins.add(data, { select: true, pop: true });
   pins.lastPlacedId = data.id; // don't let a paste right after placing attach to it
   persistPin(data);
-  view.centerOn(data.x, data.y, Math.min(1, (window.innerWidth * 0.6) / rect.w));
 
   // ask for the spot's picture right away — a paste now attaches it to this
   // pin; Skip (or Esc) goes straight to choosing the type
@@ -371,6 +393,8 @@ async function handleMapScreenshot(blob) {
   const marker = detectPlayerMarker(bitmap);
   const markerScale = marker ? MARKER_MAP_HEIGHT / marker.h : null;
 
+  showPasteGhost(bitmap); // float it on the map while we work out where it goes
+
   let rect = await tryOcr(bitmap, false, markerScale);
 
   if (!rect) {
@@ -407,16 +431,19 @@ async function handleMapScreenshot(blob) {
   }
 
   spinner(false);
+  dockSpinner(false);
   console.log('[silksong-map] map locate:', rect, 'marker:', marker);
 
   if (!certain(rect)) {
+    await view.rejectGhost();
     bitmap.close?.();
     toast("Couldn't place this screenshot confidently — nothing was revealed. Try one that clearly shows the area name, or a bit more of the map.", 'error');
     return;
   }
 
-  applyMapPlacement(bitmap, rect, marker);
-  bitmap.close?.();
+  // applyMapPlacement flies the ghost into place, composites, then closes the
+  // bitmap once the fly is done
+  await applyMapPlacement(bitmap, rect, marker);
 }
 
 // a paste while a pin is awaiting its screenshot attaches directly — no dialog
@@ -479,6 +506,8 @@ async function handleFullMap(blob) {
   const marker = detectPlayerMarker(bitmap);
   const markerScale = marker ? MARKER_MAP_HEIGHT / marker.h : null;
 
+  showPasteGhost(bitmap);
+
   // read area names first — a big zoomed-out map has several, which pins the
   // scale from the distances between them (no per-paste drift)
   let rect = await tryOcr(bitmap, true, markerScale);
@@ -500,16 +529,16 @@ async function handleFullMap(blob) {
   }
 
   spinner(false);
+  dockSpinner(false);
   console.log('[silksong-map] full locate:', rect);
 
   if (!certain(rect)) {
+    await view.rejectGhost();
     bitmap.close?.();
     toast("Couldn't align this map confidently — nothing was changed. Make sure an area name is visible, or zoom out a little more.", 'error');
     return;
   }
 
-  spinner(true, 'Compositing your map…');
-  await new Promise(r => setTimeout(r, 30)); // let the spinner paint
   if (rect.via === 'ocr' || rect.via === 'label') {
     // reference-aligned — trust it, pin to the global scale, then a tiny
     // stitch nudge onto what's already pasted
@@ -519,11 +548,12 @@ async function handleFullMap(blob) {
   } else {
     rect = explored.refineAlignment(bitmap, rect);
   }
+  await view.flyGhostTo(rect);
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
-  spinner(false);
   bitmap.close?.();
   view.fitToScreen();
+  view.settleGhost();
   toast('Map updated with everything you have explored.', 'ok', { label: 'Undo', fn: undoLast });
 }
 
