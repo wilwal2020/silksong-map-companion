@@ -215,6 +215,9 @@ html, body {
   0%   { transform: scale(.5); opacity: 1; box-shadow: 0 0 15px 3px color-mix(in srgb, var(--ok) 80%, transparent); }
   100% { transform: scale(2.7); opacity: 0; box-shadow: 0 0 0 0 transparent; }
 }
+/* a pin marked done while "show done" is off shrinks + fades before it goes */
+.pin.leaving .pin-ico { animation: pin-leave .34s ease-in forwards; }
+@keyframes pin-leave { to { transform: scale(.2); opacity: 0; } }
 .pin-card .card-head { display: flex; gap: 8px; align-items: baseline; }
 .pin-card .card-head .cat { font-family: Cinzel, serif; font-weight: 500; font-size: .85rem; letter-spacing: .03em; color: var(--pc, var(--rose)); }
 .pin-card .note { font-size: .9rem; overflow-wrap: break-word; }
@@ -345,7 +348,8 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 
 @media (prefers-reduced-motion: reduce) {
   .toast, .toast.error, .pin-ico.pin-pop, .pin-ico.pin-flash, .pin-ico.pin-doneburst,
-  .done-burst, .btn:active, .add-pin.active, .add-pin.active .add-pin-ico, .pin-card,
+  .done-burst, .pin.leaving .pin-ico, .btn:active, .add-pin.active,
+  .add-pin.active .add-pin-ico, .pin-card,
   dialog[open], dialog::backdrop, #dlg-pin.from-pin, .attach-fly,
   .ghost-pin { animation: none !important; transition: none !important; }
 }

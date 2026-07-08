@@ -161,13 +161,34 @@ export class PinManager {
     const e = this.pins.get(id);
     if (!e) return;
     this._playIco(id, 'pin-doneburst');
-    const p = this.view.mapToScreen(e.data.x, e.data.y);
+    this._doneRing(e);
+  }
+
+  _doneRing(entry) {
+    const p = this.view.mapToScreen(entry.data.x, entry.data.y);
     const ring = document.createElement('div');
     ring.className = 'done-burst';
     ring.style.left = p.x + 'px';
     ring.style.top = p.y + 'px';
     this.layer.appendChild(ring);
     ring.addEventListener('animationend', () => ring.remove(), { once: true });
+  }
+
+  // fade+shrink the marker out, then run cb (which finally hides it)
+  _animateOut(entry, cb) {
+    if (this.view.reduceMotion) { cb(); return; }
+    const el = entry.el;
+    let fired = false;
+    const finish = () => {
+      if (fired) return;
+      fired = true;
+      el.removeEventListener('animationend', finish);
+      el.classList.remove('leaving');
+      cb();
+    };
+    el.classList.add('leaving');
+    el.addEventListener('animationend', finish);
+    setTimeout(finish, 450);
   }
 
   _playIco(id, cls) {
@@ -413,8 +434,16 @@ export class PinManager {
       d.done = !d.done;
       const justDone = d.done;
       this.handlers.onChange(d);
-      this.update(d);
-      if (justDone) this.flashDone(d.id); // celebrate checking it off
+      if (justDone && !this.showDone) {
+        // it's about to be filtered out — ring, close the card, then fade the
+        // marker out before applyFilter finally removes it (no instant pop)
+        this._doneRing(entry);
+        this._hideCard(entry, true);
+        this._animateOut(entry, () => this.update(d));
+      } else {
+        this.update(d);
+        if (justDone) this.flashDone(d.id); // celebrate checking it off
+      }
     });
     mk('📷', 'Attach / replace the area screenshot (paste after clicking)', () => {
       this.handlers.onRequestAttach(d);
