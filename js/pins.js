@@ -6,6 +6,15 @@ import { categories, catById } from './categories.js';
 // re-export so existing importers keep working
 export { catById };
 
+// is point p inside triangle a-b-c? (sign test)
+function inTriangle(p, a, b, c) {
+  const s = (u, v, w) => (u.x - w.x) * (v.y - w.y) - (v.x - w.x) * (u.y - w.y);
+  const d1 = s(p, a, b), d2 = s(p, b, c), d3 = s(p, c, a);
+  const neg = d1 < 0 || d2 < 0 || d3 < 0;
+  const pos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(neg && pos);
+}
+
 export class PinManager {
   constructor(layer, view, handlers) {
     this.layer = layer;
@@ -21,6 +30,7 @@ export class PinManager {
     this.suppressHover = false; // don't open cards (e.g. while placing a pin)
     this.lastPlacedId = null;  // just-placed pin, excluded from paste-attach
     this._stickyCard = null;
+    this._hoverCardEntry = null; // pin whose card is open from a plain hover
 
     document.addEventListener('pointerdown', e => {
       this.lastPlacedId = null; // any click means the user has moved on
@@ -29,6 +39,33 @@ export class PinManager {
         this._hideCard(this._stickyCardPin, true);
       }
     });
+
+    // a hover card stays open while the pointer is over the pin, over the
+    // card, or inside the triangle bridging the two — so a diagonal move
+    // toward a card button never drops it
+    document.addEventListener('pointermove', e => this._trackHover(e.clientX, e.clientY));
+  }
+
+  _trackHover(x, y) {
+    this._lastX = x; this._lastY = y;
+    const entry = this._hoverCardEntry;
+    if (!entry || !entry.card || this._stickyCard === entry.card) return;
+    if (this._inSafeZone(entry, x, y)) return;
+    this._hideCard(entry);
+    if (this.hoveredId === entry.data.id) this.hoveredId = null;
+  }
+
+  _inSafeZone(entry, x, y) {
+    const pin = entry.el.getBoundingClientRect();
+    if (x >= pin.left - 4 && x <= pin.right + 4 && y >= pin.top - 4 && y <= pin.bottom + 4) return true;
+    const card = entry.card.getBoundingClientRect();
+    const pad = 8;
+    if (x >= card.left - pad && x <= card.right + pad && y >= card.top - pad && y <= card.bottom + pad) return true;
+    // triangle from the pin centre out to the card's near vertical edge
+    const cx = (pin.left + pin.right) / 2, cy = (pin.top + pin.bottom) / 2;
+    const ex = card.left >= cx ? card.left : card.right;
+    return inTriangle({ x, y }, { x: cx, y: cy },
+      { x: ex, y: card.top - pad }, { x: ex, y: card.bottom + pad });
   }
 
   add(data, { select = false, pop = false } = {}) {
@@ -87,12 +124,21 @@ export class PinManager {
 
   // ring flash on a pin (e.g. a screenshot just landed in it)
   flashPin(id) {
+    this._playIco(id, 'pin-flash');
+  }
+
+  // celebratory burst when a pin is checked off
+  flashDone(id) {
+    this._playIco(id, 'pin-doneburst');
+  }
+
+  _playIco(id, cls) {
     const e = this.pins.get(id);
     if (!e) return;
-    e.ico.classList.remove('pin-flash');
+    e.ico.classList.remove(cls);
     void e.ico.offsetWidth; // restart the animation if it's already running
-    e.ico.classList.add('pin-flash');
-    e.ico.addEventListener('animationend', () => e.ico.classList.remove('pin-flash'), { once: true });
+    e.ico.classList.add(cls);
+    e.ico.addEventListener('animationend', () => e.ico.classList.remove(cls), { once: true });
   }
 
   setAwaiting(id) {
@@ -185,12 +231,11 @@ export class PinManager {
       if (!entry.pendingMove) this._showCard(entry, false);
     });
     el.addEventListener('pointerleave', () => {
-      // hide at once — the card's own ::before margin already overlaps the pin,
-      // so a pin→card move keeps :hover true and won't be hidden here
-      if (entry.card && !entry.card.matches(':hover') && !el.matches(':hover')
-          && this._stickyCard !== entry.card) {
-        this._hideCard(entry);
-        if (this.hoveredId === entry.data.id) this.hoveredId = null;
+      // the card's lifetime is governed by the safe-zone tracker; here we only
+      // stop treating this pin as the paste target once we're clear of its zone
+      if (this.hoveredId === entry.data.id
+          && !(entry.card && this._inSafeZone(entry, this._lastX ?? -1, this._lastY ?? -1))) {
+        this.hoveredId = null;
       }
     });
   }
@@ -245,7 +290,8 @@ export class PinManager {
       this._hideCard(this._stickyCardPin, true);
     }
     if (!entry.card) entry.card = this._buildCard(entry);
-    if (sticky) { this._stickyCard = entry.card; this._stickyCardPin = entry; }
+    if (sticky) { this._stickyCard = entry.card; this._stickyCardPin = entry; this._hoverCardEntry = null; }
+    else this._hoverCardEntry = entry; // a plain hover — safe-zone tracker owns it
     this._positionCard(entry);
   }
 
@@ -253,6 +299,7 @@ export class PinManager {
     if (!entry || !entry.card) return;
     if (this._stickyCard === entry.card && !force) return;
     if (this._stickyCard === entry.card) { this._stickyCard = null; this._stickyCardPin = null; }
+    if (this._hoverCardEntry === entry) this._hoverCardEntry = null;
     entry.card.remove();
     entry.card = null;
   }
@@ -321,8 +368,10 @@ export class PinManager {
     };
     mk(d.done ? '↩ undo' : '✓ done', 'Mark this spot as dealt with', () => {
       d.done = !d.done;
+      const justDone = d.done;
       this.handlers.onChange(d);
       this.update(d);
+      if (justDone) this.flashDone(d.id); // celebrate checking it off
     });
     mk('📷', 'Attach / replace the area screenshot (paste after clicking)', () => {
       this.handlers.onRequestAttach(d);
@@ -331,9 +380,8 @@ export class PinManager {
     mk('🗑', 'Delete pin', () => this.handlers.onDelete(d));
     card.appendChild(actions);
 
-    card.addEventListener('pointerleave', () => {
-      if (this._stickyCard !== card) this._hideCard(entry);
-    });
+    // hide is driven by the safe-zone tracker (_trackHover), not a plain
+    // pointerleave, so a diagonal move to a button doesn't drop the card
 
     this.layer.appendChild(card);
     return card;

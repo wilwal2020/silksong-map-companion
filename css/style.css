@@ -196,6 +196,15 @@ html, body {
   35%  { transform: scale(1.32); }
   100% { box-shadow: 0 0 0 15px transparent, 0 0 0 0 transparent; transform: scale(1); }
 }
+/* a green burst when a pin is checked off */
+.pin-ico.pin-doneburst { animation: pin-doneburst .6s cubic-bezier(.2,.85,.3,1.2); }
+@keyframes pin-doneburst {
+  0%   { box-shadow: 0 0 0 2px var(--ok), 0 0 18px 6px color-mix(in srgb, var(--ok) 75%, transparent);
+         transform: scale(1); }
+  30%  { transform: scale(1.4) rotate(-6deg); }
+  55%  { transform: scale(.92) rotate(3deg); }
+  100% { box-shadow: 0 0 0 16px transparent, 0 0 0 0 transparent; transform: scale(1); }
+}
 .pin-card .card-head { display: flex; gap: 8px; align-items: baseline; }
 .pin-card .card-head .cat { font-family: Cinzel, serif; font-weight: 500; font-size: .85rem; letter-spacing: .03em; color: var(--pc, var(--rose)); }
 .pin-card .note { font-size: .9rem; overflow-wrap: break-word; }
@@ -266,6 +275,11 @@ dialog::backdrop { background: rgba(4,5,7,.72); animation: fade-in .2s ease; }
 @keyframes dlg-from-pin {
   from { opacity: 0; transform: translate(var(--fx, 0), var(--fy, 0)) scale(.3); }
 }
+/* out-animation when a dialog is dismissed (added just before .close()) */
+dialog.closing { animation: dlg-out .16s ease-in forwards; }
+dialog.closing::backdrop { animation: fade-out .16s ease forwards; }
+@keyframes dlg-out { to { opacity: 0; transform: translateY(6px) scale(.97); } }
+@keyframes fade-out { to { opacity: 0; } }
 dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; letter-spacing: .04em; color: var(--text); }
 
 #paste-preview {
@@ -320,8 +334,8 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 @keyframes toast-shake { 25% { transform: translateX(-4px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .toast, .toast.error, .pin-ico.pin-pop, .pin-ico.pin-flash, .btn:active,
-  .add-pin.active, .add-pin.active .add-pin-ico, .pin-card,
+  .toast, .toast.error, .pin-ico.pin-pop, .pin-ico.pin-flash, .pin-ico.pin-doneburst,
+  .btn:active, .add-pin.active, .add-pin.active .add-pin-ico, .pin-card,
   dialog[open], dialog::backdrop, #dlg-pin.from-pin, .attach-fly,
   .ghost-pin { animation: none !important; transition: none !important; }
 }

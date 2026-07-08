@@ -56,6 +56,27 @@ function spinner(show, msg) {
 // dock the spinner to the bottom so it clears the floating paste ghost
 function dockSpinner(on) { $('#spinner').classList.toggle('docked', on); }
 
+// close a <dialog> with a brief out-animation instead of snapping shut
+function closeDialog(dlg) {
+  if (typeof dlg === 'string') dlg = $(dlg);
+  if (!dlg || !dlg.open) return;
+  dlg.classList.remove('from-pin');
+  if ((view && view.reduceMotion) || dlg.classList.contains('closing')) {
+    dlg.classList.remove('closing');
+    dlg.close();
+    return;
+  }
+  dlg.classList.add('closing');
+  const finish = () => {
+    dlg.removeEventListener('animationend', finish);
+    clearTimeout(timer);
+    dlg.classList.remove('closing');
+    dlg.close();
+  };
+  const timer = setTimeout(finish, 240);
+  dlg.addEventListener('animationend', finish);
+}
+
 // float the just-pasted screenshot on the map while it's being located
 function showPasteGhost(bitmap) {
   const cw = view.canvas.clientWidth, ch = view.canvas.clientHeight;
@@ -66,8 +87,10 @@ function showPasteGhost(bitmap) {
 }
 
 // a zoom level that frames a pasted rect nicely — so a full-map paste that
-// only covers a corner zooms to that corner instead of the whole world
-function fitRectScale(rect, frac = 0.85) {
+// only covers a corner zooms to that corner instead of the whole world. A
+// low frac leaves comfortable margin around the paste rather than filling
+// the screen edge-to-edge.
+function fitRectScale(rect, frac = 0.6) {
   const cw = view.canvas.clientWidth, ch = view.canvas.clientHeight;
   const s = Math.min(cw * frac / rect.w, ch * frac / rect.h);
   return Math.min(view.maxScale, Math.max(view.minScale, s));
@@ -143,7 +166,7 @@ function undoLast() {
     pins.remove(lastUndo.pinId);
     store.deletePin(lastUndo.pinId);
     if (newPinPending && newPinPending.id === lastUndo.pinId) newPinPending = null;
-    if ($('#dlg-await').open) $('#dlg-await').close();
+    closeDialog('#dlg-await');
   }
   lastUndo = null;
   toast('Undone.', 'ok');
@@ -249,7 +272,7 @@ function openPinEditor(data, isNew) {
 
   return new Promise(resolve => {
     const done = save => {
-      dlg.close();
+      closeDialog(dlg);
       okBtn.removeEventListener('click', onOk);
       cancelBtn.removeEventListener('click', onCancel);
       dlg.removeEventListener('cancel', onDlgCancel);
@@ -511,7 +534,7 @@ async function attachToAwaiting(blob) {
   pins.update(entry.data);
   persistPin(entry.data);
   pins.setAwaiting(null);
-  if ($('#dlg-await').open) $('#dlg-await').close();
+  closeDialog('#dlg-await');
   // let the screenshot fly into the pin before anything else pops up
   await flyImageToPin(blob, entry);
   if (newPinPending && newPinPending.id === entry.data.id) {
@@ -533,7 +556,7 @@ async function attachToAwaiting(blob) {
 function skipAwaitingEnv() {
   const wasNew = newPinPending;
   pins.setAwaiting(null);
-  if ($('#dlg-await').open) $('#dlg-await').close();
+  closeDialog('#dlg-await');
   if (wasNew) {
     newPinPending = null;
     openPinEditor(wasNew, true).then(edit => {
@@ -657,7 +680,7 @@ for (const b of document.querySelectorAll('#dlg-paste button[data-type]')) {
   b.addEventListener('click', async () => {
     const paste = currentPaste;
     currentPaste = null;
-    $('#dlg-paste').close();
+    closeDialog('#dlg-paste');
     if (!paste) return;
     URL.revokeObjectURL(paste.url);
     const type = b.dataset.type;
@@ -935,7 +958,7 @@ function saveCatType() {
     for (const e of pins.pins.values()) if (e.data.cat === catTypeEditing) pins.update(e.data);
     catTypeEditing = null;
     persistCats();
-    $('#dlg-cattype').close();
+    closeDialog('#dlg-cattype');
     renderCatList();
     toast('Pin type updated.', 'ok');
     return;
@@ -1106,8 +1129,8 @@ function buildToolbar() {
   wireOpacitySlider();
   $('#btn-cat-new').addEventListener('click', () => { catTypeCreatedCb = null; openCatTypeDialog(); });
   $('#btn-cattype-save').addEventListener('click', saveCatType);
-  $('#btn-cattype-cancel').addEventListener('click', () => { catTypeCreatedCb = null; $('#dlg-cattype').close(); });
-  $('#dlg-cattype').addEventListener('cancel', e => { e.preventDefault(); catTypeCreatedCb = null; $('#dlg-cattype').close(); });
+  $('#btn-cattype-cancel').addEventListener('click', () => { catTypeCreatedCb = null; closeDialog('#dlg-cattype'); });
+  $('#dlg-cattype').addEventListener('cancel', e => { e.preventDefault(); catTypeCreatedCb = null; closeDialog('#dlg-cattype'); });
   $('#cattype-label').addEventListener('keydown', e => { if (e.key === 'Enter') saveCatType(); });
 
   $('#show-done').addEventListener('change', e => {
@@ -1130,7 +1153,7 @@ function buildToolbar() {
   });
 
   $('#btn-help').addEventListener('click', () => $('#dlg-help').showModal());
-  $('#btn-help-close').addEventListener('click', () => $('#dlg-help').close());
+  $('#btn-help-close').addEventListener('click', () => closeDialog('#dlg-help'));
 
   // start the composited map over (e.g. after misaligned pastes) without
   // touching the pins — their pictures, notes and types all stay. The scale
