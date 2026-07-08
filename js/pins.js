@@ -18,6 +18,7 @@ export class PinManager {
     this.selectedId = null;
     this.awaitingId = null;    // pin waiting for its area screenshot
     this.hoveredId = null;     // pin currently under the pointer (paste target)
+    this.suppressHover = false; // don't open cards (e.g. while placing a pin)
     this.lastPlacedId = null;  // just-placed pin, excluded from paste-attach
     this._stickyCard = null;
 
@@ -156,7 +157,7 @@ export class PinManager {
     el.addEventListener('pointermove', e => {
       if (!dragging) {
         // plain hover: make sure the card is up even if pointerenter was missed
-        if (!entry.pendingMove && !entry.card) this._showCard(entry, false);
+        if (!this.suppressHover && !entry.pendingMove && !entry.card) this._showCard(entry, false);
         return;
       }
       if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) < 5) return;
@@ -171,28 +172,26 @@ export class PinManager {
       dragging = false;
       if (moved) {
         this._beginMoveConfirm(entry, origin);
-      } else {
+      } else if (!this.suppressHover) {
         this.select(entry.data.id);
         this._showCard(entry, true);
       }
     });
 
     el.addEventListener('pointerenter', () => {
-      clearTimeout(entry._leaveTimer);
+      if (this.suppressHover) return;
       this.hoveredId = entry.data.id;
       if (entry.data.id !== this.lastPlacedId) this.lastPlacedId = null; // moved to another pin
       if (!entry.pendingMove) this._showCard(entry, false);
     });
     el.addEventListener('pointerleave', () => {
-      clearTimeout(entry._leaveTimer);
-      entry._leaveTimer = setTimeout(() => {
-        // keep it open if the pointer is back on the pin or over the card
-        if (entry.card && !entry.card.matches(':hover') && !el.matches(':hover')
-            && this._stickyCard !== entry.card) {
-          this._hideCard(entry);
-          if (this.hoveredId === entry.data.id) this.hoveredId = null;
-        }
-      }, 240);
+      // hide at once — the card's own ::before margin already overlaps the pin,
+      // so a pin→card move keeps :hover true and won't be hidden here
+      if (entry.card && !entry.card.matches(':hover') && !el.matches(':hover')
+          && this._stickyCard !== entry.card) {
+        this._hideCard(entry);
+        if (this.hoveredId === entry.data.id) this.hoveredId = null;
+      }
     });
   }
 
@@ -267,7 +266,11 @@ export class PinManager {
     if (x + w + margin > window.innerWidth) x = p.x - w - 24;
     x = Math.max(margin, x);
     y = Math.max(60, Math.min(y, window.innerHeight - card.offsetHeight - margin));
-    card.style.transform = `translate(${x}px, ${y}px)`;
+    // position via left/top so `transform` stays free for the entrance pop,
+    // and grow the card from the side nearest the pin
+    card.style.left = x + 'px';
+    card.style.top = y + 'px';
+    card.style.transformOrigin = (x < p.x ? 'right' : 'left') + ' top';
   }
 
   _buildCard(entry) {

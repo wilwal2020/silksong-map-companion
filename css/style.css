@@ -165,9 +165,10 @@ html, body {
 .pin-card img.env {
   width: 100%; border-radius: 6px; display: block;
   max-height: 62vh; object-fit: contain; background: #000; cursor: zoom-in;
-  animation: env-in .32s ease-out;
 }
-@keyframes env-in { from { opacity: 0; transform: scale(.95); } }
+/* the whole card pops in, quick and snappy, from the side nearest the pin */
+.pin-card { animation: card-pop .12s cubic-bezier(.2,.9,.3,1.3); }
+@keyframes card-pop { from { opacity: 0; transform: scale(.9); } }
 .pin-card .no-env {
   color: var(--text-dim); font-size: .8rem; text-align: center; cursor: pointer;
   border: 1px dashed var(--border); border-radius: 6px; padding: 14px 8px;
@@ -260,6 +261,11 @@ dialog[open] { animation: dlg-in .22s cubic-bezier(.2,.9,.3,1.12); }
 dialog::backdrop { background: rgba(4,5,7,.72); animation: fade-in .2s ease; }
 @keyframes dlg-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
 @keyframes fade-in { from { opacity: 0; } }
+/* a pin's editor grows out of the pin's on-screen spot, then settles centre */
+#dlg-pin.from-pin { animation: dlg-from-pin .28s cubic-bezier(.2,.9,.3,1.08); }
+@keyframes dlg-from-pin {
+  from { opacity: 0; transform: translate(var(--fx, 0), var(--fy, 0)) scale(.3); }
+}
 dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; letter-spacing: .04em; color: var(--text); }
 
 #paste-preview {
@@ -315,8 +321,9 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 
 @media (prefers-reduced-motion: reduce) {
   .toast, .toast.error, .pin-ico.pin-pop, .pin-ico.pin-flash, .btn:active,
-  .add-pin.active, .add-pin.active .add-pin-ico, .pin-card img.env,
-  dialog[open], dialog::backdrop, .attach-fly { animation: none !important; transition: none !important; }
+  .add-pin.active, .add-pin.active .add-pin-ico, .pin-card,
+  dialog[open], dialog::backdrop, #dlg-pin.from-pin, .attach-fly,
+  .ghost-pin { animation: none !important; transition: none !important; }
 }
 
 /* ---------- category sidebar (left) ---------- */
@@ -390,8 +397,13 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 .cat-row:hover .cat-del, .cat-row:hover .cat-edit { opacity: 1; }
 .cat-edit:hover { color: var(--accent-glow); border-color: var(--border-strong); }
 .cat-del:hover { color: var(--rose); border-color: #43272a; }
+/* bigger, taller hit target so the checkbox is hard to miss-click */
+.cat-check-wrap {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  padding: 12px 9px; margin: -12px -5px -12px 0; cursor: pointer;
+}
 .cat-check {
-  width: 18px; height: 18px; flex: none; cursor: pointer; margin: 0;
+  width: 20px; height: 20px; flex: none; cursor: pointer; margin: 0;
   accent-color: var(--pc, var(--accent));
 }
 
@@ -450,19 +462,10 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   50%     { box-shadow: var(--shadow), 0 0 16px 2px color-mix(in srgb, var(--accent-glow) 60%, transparent); }
 }
 @keyframes addpin-ico { 50% { transform: scale(1.16); } }
-/* custom tooltip that sits UNDER the button (never covering it) */
-.add-pin[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute; top: calc(100% + 9px); left: 50%; transform: translateX(-50%);
-  white-space: nowrap; background: var(--panel); color: var(--text);
-  border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px;
-  font-size: .78rem; box-shadow: var(--shadow);
-  opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 30;
-}
-.add-pin[data-tip]:hover::after { opacity: 1; }
-
 body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important; }
-.ghost-pin { z-index: 45; pointer-events: none; opacity: .9; }
+.ghost-pin { z-index: 45; pointer-events: none; opacity: .9; transition: opacity .18s ease; }
+/* fades out while the cursor is over the Cancel button */
+.ghost-pin.ghost-hidden { opacity: 0; }
 .ghost-pin .pin-ico { animation: ghost-pulse 1.1s ease-in-out infinite; }
 @keyframes ghost-pulse { 50% { transform: scale(1.12); } }
 

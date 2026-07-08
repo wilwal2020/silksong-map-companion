@@ -262,6 +262,15 @@ function openPinEditor(data, isNew) {
     okBtn.addEventListener('click', onOk);
     cancelBtn.addEventListener('click', onCancel);
     dlg.addEventListener('cancel', onDlgCancel);
+    // grow the dialog out of the pin it belongs to, then settle to centre
+    if (data.x != null && data.y != null) {
+      const sp = view.mapToScreen(data.x, data.y);
+      dlg.style.setProperty('--fx', (sp.x - window.innerWidth / 2) + 'px');
+      dlg.style.setProperty('--fy', (sp.y - window.innerHeight / 2) + 'px');
+      dlg.classList.add('from-pin');
+    } else {
+      dlg.classList.remove('from-pin');
+    }
     dlg.showModal();
     $('#pin-note').focus();
   });
@@ -785,7 +794,7 @@ function renderCatList() {
       `<span class="cat-name">${c.label}</span>` +
       `<span class="cat-count"></span>` +
       `<span class="cat-del-slot"></span>` +
-      `<input type="checkbox" class="cat-check" title="Show / hide this type"${on ? ' checked' : ''}>`;
+      `<label class="cat-check-wrap"><input type="checkbox" class="cat-check" title="Show / hide this type"${on ? ' checked' : ''}></label>`;
 
     // checkbox toggles visibility for just this type; a manual edit ends the
     // temporary solo and becomes the new base selection
@@ -842,7 +851,7 @@ function toggleSolo(id) {
 
 function wireCatRow(row, id) {
   row.addEventListener('pointerdown', e => {
-    if (e.target.closest('.cat-check, .cat-del, .cat-edit')) return; // let controls work
+    if (e.target.closest('.cat-check-wrap, .cat-del, .cat-edit')) return; // let controls work
     e.preventDefault();
     const list = $('#cat-list');
     const startY = e.clientY;
@@ -967,7 +976,10 @@ let placing = false;
 let ghostPin = null;
 
 function onPlacingMove(e) {
-  if (ghostPin) ghostPin.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+  if (!ghostPin) return;
+  // over the Cancel button the ghost fades out (and smoothly back on leave)
+  ghostPin.classList.toggle('ghost-hidden', !!e.target.closest('#btn-add-pin'));
+  ghostPin.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
 }
 
 function onPlacingClick(e) {
@@ -983,6 +995,7 @@ function onPlacingClick(e) {
 function startPlacing() {
   if (placing) return;
   placing = true;
+  pins.suppressHover = true; // don't pop other pins' cards while placing
   ghostPin = document.createElement('div');
   ghostPin.className = 'pin ghost-pin';
   ghostPin.style.setProperty('--pc', '#e0c37e');
@@ -1003,6 +1016,7 @@ function startPlacing() {
 function stopPlacing() {
   if (!placing) return;
   placing = false;
+  pins.suppressHover = false;
   document.removeEventListener('pointermove', onPlacingMove);
   document.removeEventListener('click', onPlacingClick, true);
   if (ghostPin) { ghostPin.remove(); ghostPin = null; }
