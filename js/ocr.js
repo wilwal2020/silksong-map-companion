@@ -85,28 +85,136 @@ function preprocess(shot) {
   const seen = new Uint8Array(W * H);
   const stack = new Int32Array(W * H);
   const member = new Int32Array(4096);
+  const comps = []; // letter-sized components kept — candidates for crop-OCR
   for (let s = 0; s < bin.length; s++) {
     if (!bin[s] || seen[s]) continue;
     let top = 0, n = 0, overflow = false;
+    let minX = W, maxX = 0, minY = H, maxY = 0;
     stack[top++] = s; seen[s] = 1;
     while (top > 0) {
       const p = stack[--top];
       if (n < member.length) member[n] = p; else overflow = true;
       n++;
-      const x = p % W;
+      const x = p % W, y = (p / W) | 0;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
       if (x > 0 && bin[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack[top++] = p - 1; }
       if (x < W - 1 && bin[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack[top++] = p + 1; }
       if (p >= W && bin[p - W] && !seen[p - W]) { seen[p - W] = 1; stack[top++] = p - W; }
       if (p < W * (H - 1) && bin[p + W] && !seen[p + W]) { seen[p + W] = 1; stack[top++] = p + W; }
     }
-    if (!overflow && n < minSpeck) for (let i = 0; i < n; i++) bin[member[i]] = 0;
+    if (!overflow && n < minSpeck) {
+      for (let i = 0; i < n; i++) bin[member[i]] = 0;
+    } else if (comps.length < 4000) {
+      const w = maxX - minX + 1, h = maxY - minY + 1;
+      // letters, but also whole-label blobs (letters fused with a decorative
+      // underline become one wide component — still worth crop-reading)
+      if (h >= 8 * scale && h <= 50 * scale && w <= h * 20 && n >= h * 1.2) {
+        comps.push({ x0: minX, y0: minY, x1: maxX + 1, y1: maxY + 1 });
+      }
+    }
   }
 
   for (let i = 0, p = 0; p < bin.length; i += 4, p++) {
     d[i] = d[i + 1] = d[i + 2] = bin[p] ? 0 : 255; // text black on white
   }
   ctx.putImageData(id, 0, 0);
-  return { canvas: c, scale };
+  return { canvas: c, scale, comps };
+}
+
+// Second-chance OCR: whole-image recognition regularly skips a perfectly
+// legible label (fickle page segmentation), but the letters are easy to FIND
+// geometrically — letter-sized shapes in a row. Any such chain that the full
+// passes didn't read gets cropped, blown up and OCR'd alone as a single text
+// line, which sidesteps segmentation entirely.
+async function cropOcr(worker, canvas, scale, comps, have) {
+  comps.sort((a, b) => a.x0 - b.x0);
+  const chains = [];
+  for (const c of comps) {
+    const h = c.y1 - c.y0, cy = (c.y0 + c.y1) / 2;
+    let bc = null;
+    for (const ch of chains) {
+      if (Math.abs(cy - ch.cy) <= ch.lh * 0.6 && c.x0 - ch.x1 <= ch.lh * 2 && c.x0 - ch.x1 > -ch.lh) {
+        if (!bc || ch.x1 > bc.x1) bc = ch;
+      }
+    }
+    if (bc) {
+      bc.n++;
+      bc.x1 = Math.max(bc.x1, c.x1);
+      bc.y0 = Math.min(bc.y0, c.y0); bc.y1 = Math.max(bc.y1, c.y1);
+      bc.cy = bc.cy * 0.7 + cy * 0.3; bc.lh = bc.lh * 0.7 + h * 0.3;
+    } else {
+      chains.push({ x0: c.x0, x1: c.x1, y0: c.y0, y1: c.y1, cy, lh: h, n: 1 });
+    }
+  }
+  const cands = chains
+    .filter(ch => (ch.n >= 2 || (ch.x1 - ch.x0) >= ch.lh * 2.5)
+      && (ch.x1 - ch.x0) >= ch.lh * 2 && (ch.y1 - ch.y0) <= ch.lh * 2.2)
+    .sort((a, b) => (b.x1 - b.x0) - (a.x1 - a.x0))
+    .slice(0, 8);
+
+  const out = [];
+  for (const ch of cands) {
+    // already read confidently by a full pass? skip the crop
+    const covered = have.some(w => {
+      if (w.c < 55) return false;
+      const wx0 = w.x0 * scale, wx1 = w.x1 * scale, wy0 = w.y0 * scale, wy1 = w.y1 * scale;
+      const ix = Math.min(ch.x1, wx1) - Math.max(ch.x0, wx0);
+      const iy = Math.min(ch.y1, wy1) - Math.max(ch.y0, wy0);
+      return ix > 0 && iy > 0 && ix * iy > 0.4 * (ch.x1 - ch.x0) * (ch.y1 - ch.y0);
+    });
+    if (covered) continue;
+    const pad = Math.round(ch.lh * 0.6);
+    const bx0 = Math.max(0, ch.x0 - pad), by0 = Math.max(0, ch.y0 - pad);
+    const bw = Math.min(canvas.width, ch.x1 + pad) - bx0;
+    const bh = Math.min(canvas.height, ch.y1 + pad) - by0;
+    if (bw < 12 || bh < 8) continue;
+    const u = Math.max(1, Math.min(3, 48 / ch.lh));
+    const cc = document.createElement('canvas');
+    cc.width = Math.round(bw * u); cc.height = Math.round(bh * u);
+    const cctx = cc.getContext('2d', { willReadFrequently: true });
+    cctx.imageSmoothingEnabled = true;
+    cctx.imageSmoothingQuality = 'high';
+    cctx.drawImage(canvas, bx0, by0, bw, bh, 0, 0, cc.width, cc.height);
+    // strip decorative underline strokes fused to the label: in the lower
+    // part of the crop, whiten horizontal black runs far wider than any
+    // letter stroke ("CHORAL CHAMBERS" read as "CORAL LIAM" through them)
+    {
+      const iid = cctx.getImageData(0, 0, cc.width, cc.height);
+      const px = iid.data;
+      const maxRun = Math.round(ch.lh * u * 1.1);
+      for (let y = Math.round(cc.height * 0.55); y < cc.height; y++) {
+        let run = 0;
+        for (let x = 0; x <= cc.width; x++) {
+          const black = x < cc.width && px[(y * cc.width + x) * 4] < 128;
+          if (black) { run++; continue; }
+          if (run > maxRun) {
+            for (let i = x - run; i < x; i++) {
+              const o = (y * cc.width + i) * 4;
+              px[o] = px[o + 1] = px[o + 2] = 255;
+            }
+          }
+          run = 0;
+        }
+      }
+      cctx.putImageData(iid, 0, 0);
+    }
+    await worker.setParameters({ tessedit_pageseg_mode: '7' }); // single line
+    const { data } = await worker.recognize(cc);
+    console.debug('[silksong-map] crop read:', JSON.stringify((data.text || '').trim()),
+      '@' + Math.round(bx0 / scale) + ',' + Math.round(by0 / scale),
+      (data.words || []).map(w => Math.round(w.confidence)).join(','));
+    for (const w of (data.words || [])) {
+      out.push({
+        t: (w.text || '').replace(/[^A-Za-z']/g, ''),
+        c: w.confidence,
+        crop: true, // read in isolation — trustworthy at lower confidence
+        x0: (bx0 + w.bbox.x0 / u) / scale, y0: (by0 + w.bbox.y0 / u) / scale,
+        x1: (bx0 + w.bbox.x1 / u) / scale, y1: (by0 + w.bbox.y1 / u) / scale,
+      });
+    }
+  }
+  return out;
 }
 
 function norm(s) { return (s || '').toLowerCase().replace(/[^a-z]/g, ''); }
@@ -135,30 +243,35 @@ function words(s) { return ((s || '').toLowerCase().match(/[a-z]{2,}/g) || []).f
 // when the lengths are comparable — "home" inside "mosshome" is NOT a match
 // (that one placed a Halfway Home screenshot at Mosshome), "pilgrims" inside
 // "pilgrim's" is.
-function wordHit(c, l) {
+function wordHit(c, l, allowFrag) {
   if (c === l && l.length >= 3) return 1;
   if (c.length >= 4 && l.length >= 4 && (c.includes(l) || l.includes(c))
       && Math.min(c.length, l.length) / Math.max(c.length, l.length) >= 0.67) return 0.7;
-  // a short OCR fragment that starts a label word is weak but real evidence
-  // ("Bel" from a mangled "Bellway" separates Grand Bellway from Grand Gate)
-  if (c.length >= 3 && l.length > c.length && l.startsWith(c)) return 0.4;
+  // short OCR fragments ("Bel" or "ay" from a mangled "Bellway") are weak
+  // but real evidence — counted only when another word of the label already
+  // matched exactly, so they act as tie-breakers, never as identifications
+  if (allowFrag) {
+    if (c.length >= 3 && l.length > c.length && l.startsWith(c)) return 0.4;
+    if (c.length >= 2 && l.length > c.length && (l.startsWith(c) || l.endsWith(c))) return 0.3;
+  }
   return 0;
 }
 function matchScore(candText, labelName) {
   const cw = words(candText), lw = words(labelName);
   if (!cw.length || !lw.length) return 0;
   if (cw.join('') === lw.join('')) return 1; // exact, ignoring spaces/stopwords
+  const allowFrag = lw.some(l => cw.some(c => c === l && l.length >= 3));
   let matched = 0, strong = false, candHits = 0;
   for (const l of lw) {
     let hit = 0;
     for (const c of cw) {
-      const h = wordHit(c, l);
+      const h = wordHit(c, l, allowFrag);
       hit = Math.max(hit, h);
       if (h === 1 && l.length >= 5) strong = true; // exact long word — not containment
     }
     matched += hit;
   }
-  for (const c of cw) if (lw.some(l => wordHit(c, l) > 0)) candHits++;
+  for (const c of cw) if (lw.some(l => wordHit(c, l, allowFrag) > 0)) candHits++;
   // whole-string similarity as a floor: heavily garbled reads ("tadel Spr"
   // for Citadel Spa) fail word pairing but are unmistakable as a string
   const whole = dice(cw.join(''), lw.join(''));
@@ -174,13 +287,14 @@ function matchScore(candText, labelName) {
 // and vice versa — so run BOTH and union the words (dedupe by overlap).
 async function readLabels(shot) {
   const worker = await getWorker();
-  const { canvas, scale } = preprocess(shot);
+  const { canvas, scale, comps } = preprocess(shot);
   const raw = [];
   for (const psm of ['11', '3']) { // SPARSE_TEXT, then AUTO
     await worker.setParameters({ tessedit_pageseg_mode: psm });
     const { data } = await worker.recognize(canvas);
     raw.push(...(data.words || []));
   }
+  const sizeOk = w => w.t.length >= 2 && (w.y1 - w.y0) >= 6 && (w.y1 - w.y0) <= shot.height * 0.2;
   const mapped = raw
     .map(w => ({
       t: (w.text || '').replace(/[^A-Za-z']/g, ''),
@@ -188,11 +302,14 @@ async function readLabels(shot) {
       x0: w.bbox.x0 / scale, y0: w.bbox.y0 / scale,
       x1: w.bbox.x1 / scale, y1: w.bbox.y1 / scale,
     }))
-    .filter(w => w.t.length >= 2 && (w.y1 - w.y0) >= 6 && (w.y1 - w.y0) <= shot.height * 0.2);
+    .filter(sizeOk);
+  // crop-OCR any geometric text chain the full passes missed
+  mapped.push(...(await cropOcr(worker, canvas, scale, comps, mapped)).filter(sizeOk));
   // union: two reads of the same word overlap heavily — keep the more
-  // confident one
+  // confident one, with a bonus for isolated crop reads (cleaner context:
+  // a full-pass "CORAL" must not beat the crop's correct "CHORAL")
   const all = [];
-  for (const w of mapped.sort((a, b) => b.c - a.c)) {
+  for (const w of mapped.sort((a, b) => (b.c + (b.crop ? 10 : 0)) - (a.c + (a.crop ? 10 : 0)))) {
     const dup = all.some(v => {
       const ix = Math.min(w.x1, v.x1) - Math.max(w.x0, v.x0);
       const iy = Math.min(w.y1, v.y1) - Math.max(w.y0, v.y0);
@@ -203,8 +320,8 @@ async function readLabels(shot) {
     });
     if (!dup) all.push(w);
   }
-  const words = all.filter(w => w.c >= 55);
-  const weak = all.filter(w => w.c >= 25 && w.c < 55);
+  const words = all.filter(w => w.c >= 55 || (w.crop && w.c >= 28));
+  const weak = all.filter(w => w.c >= 25 && !(w.c >= 55 || (w.crop && w.c >= 28)));
 
   // group into lines (similar baseline, horizontally adjacent)
   words.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
@@ -338,7 +455,7 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
     const lw = words(best.lb.name);
     const hitWords = (c.words || []).filter(w => {
       const t = (w.t || '').toLowerCase().replace(/[^a-z]/g, '');
-      return t && lw.some(l => wordHit(t, l) > 0);
+      return t && lw.some(l => wordHit(t, l, true) > 0);
     });
     if (hitWords.length && hitWords.length < (c.words || []).length) {
       const x0 = Math.min(...hitWords.map(w => w.x0)), x1 = Math.max(...hitWords.map(w => w.x1));
