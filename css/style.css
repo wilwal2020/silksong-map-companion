@@ -262,11 +262,15 @@ html, body {
 /* a pin marked done while "show done" is off shrinks + fades before it goes */
 .pin.leaving .pin-ico { animation: pin-leave .34s ease-in forwards; }
 @keyframes pin-leave { to { transform: scale(.2); opacity: 0; } }
-/* full-size env screenshot lightbox */
+/* full-size env screenshot lightbox — a modal <dialog> so it lands in the top
+   layer, above the pin editor modal */
 #lightbox {
-  position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.85);
-  display: flex; align-items: center; justify-content: center; cursor: zoom-out;
+  position: fixed; inset: 0; width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh;
+  margin: 0; border: 0; padding: 0; background: rgba(0,0,0,.85);
+  align-items: center; justify-content: center; cursor: zoom-out;
 }
+#lightbox[open] { display: flex; }
+#lightbox::backdrop { background: transparent; }
 #lightbox img { max-width: 94vw; max-height: 92vh; border-radius: 8px; box-shadow: var(--shadow); }
 
 /* ---------- paste hint ---------- */
@@ -342,6 +346,16 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 .pin-shot { margin: 0 0 14px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 .pin-shot .pc-img { position: relative; background: #000; }
 .pin-shot .pc-img.has-env img.env { display: block; width: 100%; height: 160px; object-fit: cover; cursor: zoom-in; }
+.pin-shot .pc-shot-x {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  width: 28px; height: 28px; border-radius: 50%; padding: 0;
+  border: 1px solid rgba(255,255,255,.28); background: rgba(10,12,16,.66);
+  color: #fff; cursor: pointer; display: grid; place-items: center;
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  transition: background .14s, border-color .14s, transform .14s;
+}
+.pin-shot .pc-shot-x svg { width: 14px; height: 14px; display: block; }
+.pin-shot .pc-shot-x:hover { background: color-mix(in srgb, var(--danger) 62%, rgba(10,12,16,.7)); border-color: var(--rose); transform: scale(1.08); }
 
 .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 .dlg-actions.vertical { flex-direction: column; align-items: stretch; margin-top: 0; }

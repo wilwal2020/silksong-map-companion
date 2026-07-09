@@ -226,13 +226,18 @@ function loadImage(src) {
 }
 
 function showLightbox(url) {
-  const box = document.createElement('div');
+  // one at a time; a modal <dialog> lands in the top layer so it sits above
+  // the pin editor (also a modal dialog) instead of underneath it
+  document.getElementById('lightbox')?.remove();
+  const box = document.createElement('dialog');
   box.id = 'lightbox';
   const img = document.createElement('img');
   img.src = url;
   box.appendChild(img);
-  box.addEventListener('click', () => box.remove());
+  box.addEventListener('click', () => box.close());
+  box.addEventListener('close', () => box.remove());
   document.body.appendChild(box);
+  box.showModal();
 }
 
 // ------------------------------------------------------------- persistence
@@ -290,12 +295,21 @@ function openPinEditor(data, isNew) {
     const cat = catById(selected);
     shot.style.setProperty('--pc', cat.color || '#9e2b25');
     if (data.img) {
-      // the attached area screenshot — cover-cropped preview, click to zoom
+      // the attached area screenshot — cover-cropped preview, click to zoom,
+      // corner ✕ to drop the picture (falls back to the empty well)
       shot.className = 'pin-shot';
-      shot.innerHTML = '<div class="pc-img has-env"><img class="env" alt=""></div>';
+      shot.innerHTML = '<div class="pc-img has-env"><img class="env" alt="">'
+        + '<button type="button" class="pc-shot-x" title="Remove picture" aria-label="Remove picture">'
+        + '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
+        + '</button></div>';
       const img = shot.querySelector('img.env');
       img.src = shotUrl();
       img.addEventListener('click', () => showLightbox(shotUrl()));
+      shot.querySelector('.pc-shot-x').addEventListener('click', () => {
+        data.img = null;
+        if (pins.pins.has(data.id)) { pins.update(data); persistPin(data); }
+        renderShot();
+      });
     } else {
       // no picture yet — the same paste well an empty pin shows, same hover
       shot.className = 'pin-shot';
