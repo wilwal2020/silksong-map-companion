@@ -195,6 +195,10 @@ html, body {
 /* footer bar — wide primary Done + quiet secondary columns */
 .pin-card .pc-acts { display: flex; width: 100%; border-top: 1px solid var(--border); background: rgba(9,11,15,.62); }
 .pin-card .pc-acts button { font: inherit; cursor: pointer; }
+/* round the outer bottom corners so the end buttons follow the card's rounded
+   corners instead of being clipped square (the card is overflow:hidden) */
+.pin-card .pc-acts > :first-child { border-bottom-left-radius: 13px; }
+.pin-card .pc-acts > :last-child { border-bottom-right-radius: 13px; }
 .pin-card .pc-acts svg { width: 16px; height: 16px; display: block; }
 .pin-card .pc-done { position: relative; flex: 1.7; min-width: 0; height: 46px; border: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
   background: linear-gradient(#54c08a, #3fa876); color: #0b130e; font-weight: 700; font-size: .9rem;
