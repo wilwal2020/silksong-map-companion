@@ -162,8 +162,9 @@ html, body {
 
 .pin-card .pc-thread { height: 2px; background: linear-gradient(90deg, transparent, var(--pc, var(--accent)), transparent); }
 
-.pin-card .pc-img { position: relative; aspect-ratio: 320/184; background: #000; }
-.pin-card .pc-img img.env { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; display: block; }
+.pin-card .pc-img { position: relative; background: #000; }
+/* natural aspect so the whole screenshot shows (no crop); tall shots capped */
+.pin-card .pc-img img.env { display: block; width: 100%; height: auto; max-height: 62vh; object-fit: contain; cursor: zoom-in; }
 /* faint gradient under the deck so image -> glass is a soft seam */
 .pin-card .pc-img::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
   background: linear-gradient(180deg, transparent 64%, rgba(6,7,10,.52)); }
@@ -182,7 +183,7 @@ html, body {
 .pin-card .pc-note { font-size: .86rem; line-height: 1.35; color: #efe8d7; text-shadow: 0 1px 4px rgba(0,0,0,.9); overflow-wrap: break-word; }
 
 /* empty state — dashed well with the paste hint (and any note) inside it */
-.pin-card .pc-img.no-env { cursor: pointer; background: repeating-linear-gradient(135deg,#0c1017 0 12px,#0a0d13 12px 24px); transition: box-shadow .16s; }
+.pin-card .pc-img.no-env { aspect-ratio: 320/184; cursor: pointer; background: repeating-linear-gradient(135deg,#0c1017 0 12px,#0a0d13 12px 24px); transition: box-shadow .16s; }
 .pin-card .pc-img.no-env:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 50%, transparent), inset 0 0 26px -10px var(--pc, var(--accent)); }
 .pin-card .pc-well { position: absolute; left: 0; right: 0; top: 0; bottom: 42px; z-index: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; padding: 6px 24px; color: var(--text-dim); }
@@ -198,11 +199,18 @@ html, body {
 .pin-card .pc-acts button { font: inherit; cursor: pointer; }
 .pin-card .pc-acts svg { width: 16px; height: 16px; display: block; }
 .pin-card .pc-done { flex: 1.7; min-width: 0; height: 46px; border: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
-  background: linear-gradient(#54c08a, #3fa876); color: #0b130e; font-weight: 700; font-size: .9rem; transition: filter .13s; }
-.pin-card .pc-done:hover { filter: brightness(1.07); }
-.pin-card .pc-done:active { filter: brightness(.95); }
-.pin-card .pc-done.is-done { background: none; color: var(--text-dim); font-weight: 600; }
-.pin-card .pc-done.is-done:hover { background: rgba(255,255,255,.05); color: var(--text); filter: none; }
+  background: linear-gradient(#54c08a, #3fa876); color: #0b130e; font-weight: 700; font-size: .9rem;
+  transition: background .14s, box-shadow .16s, letter-spacing .16s; }
+.pin-card .pc-done:hover {
+  background: linear-gradient(#69d9a3, #47b884);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.32), 0 0 22px -5px #54c08a;
+  letter-spacing: .02em;
+}
+.pin-card .pc-done:hover svg { transform: scale(1.15); }
+.pin-card .pc-done svg { transition: transform .16s cubic-bezier(.2,.9,.3,1.5); }
+.pin-card .pc-done:active { background: linear-gradient(#3fa876, #379a6b); box-shadow: inset 0 2px 6px rgba(0,0,0,.3); }
+.pin-card .pc-done.is-done { background: none; color: var(--text-dim); font-weight: 600; box-shadow: none; }
+.pin-card .pc-done.is-done:hover { background: rgba(255,255,255,.06); color: var(--text); box-shadow: none; letter-spacing: 0; }
 .pin-card .pc-sec { flex: 1; height: 46px; border: 0; border-left: 1px solid var(--border); background: none; color: var(--text-dim);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; transition: background .13s, color .13s; }
 .pin-card .pc-sec span { font-size: .6rem; letter-spacing: .04em; }
