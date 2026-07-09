@@ -360,7 +360,7 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 /* paste-type chooser — a screenshot hero with the question over it, then two
    side-by-side choice cards */
 #dlg-paste { padding: 0; overflow: hidden; }
-.paste-hero { position: relative; height: 158px; background: #000; }
+.paste-hero { position: relative; height: 200px; background: #000; }
 #paste-preview { display: block; width: 100%; height: 100%; object-fit: cover; }
 .paste-veil { position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(180deg, rgba(7,8,9,.1), rgba(7,8,9,.5) 55%, rgba(7,8,9,.94)); }
@@ -369,7 +369,7 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 .paste-hero-cap p { margin: 2px 0 0; font-size: .8rem; color: #c9c3b2; }
 .paste-body { padding: 15px 18px 16px; }
 .paste-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.paste-opt { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; text-align: left;
+.paste-opt { display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; text-align: center;
   min-height: 104px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
   padding: 15px; color: var(--text); cursor: pointer; font: inherit; transition: border-color .14s, background .14s; }
 .paste-opt:hover { border-color: var(--border-strong); background: #1a1f29; }

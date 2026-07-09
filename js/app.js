@@ -111,6 +111,9 @@ function showPasteGhost(bitmap) {
   const screenW = Math.min(cw * 0.44, ch * 0.5 * ar);
   view.showGhost(bitmap, screenW);
   dockSpinner(true);
+  // a screenshot is on its way in — drop the "paste your first map" prompt now,
+  // not only once it's composited (matching can take a moment)
+  $('#empty-hint').classList.add('hidden');
 }
 
 // a zoom level that frames a pasted rect nicely — so a full-map paste that
@@ -615,6 +618,7 @@ async function handleMapScreenshot(blob) {
   if (!certain(rect)) {
     await view.rejectGhost();
     bitmap.close?.();
+    updateEmptyHint(); // nothing landed — bring the prompt back if still blank
     toast("Couldn't place this screenshot confidently — nothing was revealed. Try one that clearly shows the area name, or a bit more of the map.", 'error');
     return;
   }
@@ -716,6 +720,7 @@ async function handleFullMap(blob) {
   if (!certain(rect)) {
     await view.rejectGhost();
     bitmap.close?.();
+    updateEmptyHint(); // nothing landed — bring the prompt back if still blank
     toast("Couldn't align this map confidently — nothing was changed. Make sure an area name is visible, or zoom out a little more.", 'error');
     return;
   }
