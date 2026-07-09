@@ -893,7 +893,7 @@ function updateCatCounts() {
     if (e.data.done) continue;            // completed pins don't count
     counts[e.data.cat] = (counts[e.data.cat] || 0) + 1;
   }
-  for (const row of $('#cat-list').children) {
+  for (const row of $('#cat-list').querySelectorAll('.cat-row')) {
     const n = counts[row.dataset.id] || 0;
     row.querySelector('.cat-count').textContent = n || '';
   }
@@ -907,7 +907,7 @@ function syncRow(row) {
   if (cb) cb.checked = on;
 }
 function syncAllRows() {
-  for (const row of $('#cat-list').children) syncRow(row);
+  for (const row of $('#cat-list').querySelectorAll('.cat-row')) syncRow(row);
 }
 
 function renderCatList() {
@@ -958,6 +958,17 @@ function renderCatList() {
     wireCatRow(row, c.id);
     list.appendChild(row);
   }
+  // the "New type" button rides at the end of the list, right under the last
+  // category — shaped like a row but set apart (see .cat-new-row)
+  const newBtn = document.createElement('button');
+  newBtn.id = 'btn-cat-new';
+  newBtn.className = 'cat-new-row';
+  newBtn.title = 'Create your own pin type';
+  newBtn.innerHTML =
+    '<span class="cat-new-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>' +
+    '<span class="cat-new-name">New type</span>';
+  newBtn.addEventListener('click', () => { catTypeCreatedCb = null; openCatTypeDialog(); });
+  list.appendChild(newBtn);
   updateCatCounts();
 }
 
@@ -1005,7 +1016,7 @@ function wireCatRow(row, id) {
         return ev.clientY < b.top + b.height / 2;
       });
       if (before) list.insertBefore(row, before);
-      else list.appendChild(row);
+      else list.insertBefore(row, list.querySelector('.cat-new-row')); // stays above "New type"
       // 2) float the row under the cursor — clear the transform first so we
       //    measure the true (untransformed) layout position, no compounding
       row.style.transform = '';
@@ -1280,7 +1291,6 @@ function buildToolbar() {
   $('#btn-add-pin').addEventListener('click', () => placing ? stopPlacing() : startPlacing());
   wireSidebarResize();
   wireOpacitySlider();
-  $('#btn-cat-new').addEventListener('click', () => { catTypeCreatedCb = null; openCatTypeDialog(); });
   $('#btn-cattype-save').addEventListener('click', saveCatType);
   $('#btn-cattype-cancel').addEventListener('click', () => { catTypeCreatedCb = null; closeDialog('#dlg-cattype'); });
   $('#dlg-cattype').addEventListener('cancel', e => { e.preventDefault(); catTypeCreatedCb = null; closeDialog('#dlg-cattype'); });

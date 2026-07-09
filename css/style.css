@@ -511,10 +511,22 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 .mini svg { width: 13px; height: 13px; flex: none; opacity: .85; }
 .mini:hover { background: #1b212c; border-color: #6a3a3b; color: #f1ebdd; box-shadow: 0 0 13px -7px var(--accent-glow); }
-/* New — solid crimson, the primary "create" action */
-.mini.primary { background: linear-gradient(#b2352f, #8f2621); border-color: #a12c26; color: #fbeee0; font-weight: 600; }
-.mini.primary:hover { background: linear-gradient(#c34039, #a12c26); border-color: #a12c26; color: #fff; box-shadow: 0 0 16px -5px var(--accent-glow); }
-.mini.primary svg { opacity: .95; }
+
+/* "New type" — last item in the list, right under the categories; shaped like
+   a row but set apart with a dashed crimson outline so it reads as "add" */
+.cat-new-row {
+  display: flex; align-items: center; gap: 10px; flex: none;
+  margin-top: 2px; padding: 10px 11px; border-radius: 9px;
+  background: rgba(158,43,37,.07); border: 1px dashed #6a3a3b; color: var(--rose);
+  font: inherit; cursor: pointer; text-align: left;
+  transition: background .14s, border-color .14s, color .14s, box-shadow .14s;
+}
+.cat-new-row:hover { background: rgba(158,43,37,.16); border-color: var(--accent); color: #f0c4be;
+  box-shadow: 0 0 16px -6px var(--accent-glow); }
+.cat-new-ico { width: 26px; height: 26px; flex: none; display: grid; place-items: center;
+  border-radius: 7px; border: 1px dashed currentColor; }
+.cat-new-ico svg { width: 15px; height: 15px; display: block; }
+.cat-new-name { flex: 1; font-size: .92rem; font-weight: 600; letter-spacing: .02em; }
 
 #cat-list { flex: 1; overflow-y: auto; padding: 10px 9px 6px; display: flex; flex-direction: column; gap: 8px; }
 
@@ -591,24 +603,24 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 
 /* ---------- add-pin button + placement ---------- */
 
+/* the primary action — big, centred, crimson-forward so it's unmissable */
 .add-pin {
-  position: fixed; left: 50%; top: 56px; transform: translateX(-50%); z-index: 25;
-  display: flex; align-items: center; gap: 7px;
-  background: rgba(21,25,34,.92); color: var(--text); font: inherit; font-size: .85rem;
-  border: 1px solid var(--border-strong); border-radius: 999px; padding: 7px 16px; cursor: pointer;
-  box-shadow: var(--shadow);
-  transition: background .12s, border-color .12s, color .12s;
-}
-.add-pin {
+  position: fixed; left: 50%; top: 58px; transform: translateX(-50%); z-index: 25;
+  display: flex; align-items: center; gap: 10px;
+  background: linear-gradient(160deg, #2c161a, #171a24); color: #f3ede0;
+  font: inherit; font-size: 1rem; font-weight: 600; letter-spacing: .02em;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 72%, transparent); border-radius: 999px;
+  padding: 11px 26px; cursor: pointer; white-space: nowrap;
+  box-shadow: var(--shadow), 0 0 22px -5px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.06);
   transition: background .14s, border-color .14s, color .14s, box-shadow .18s, transform .1s;
 }
 .add-pin:hover {
-  background: #232b3d; border-color: var(--accent);
+  background: linear-gradient(160deg, #3c1a1f, #1c2130); border-color: var(--accent-glow);
   transform: translateX(-50%) translateY(-1px);
-  box-shadow: var(--shadow), 0 0 16px -2px var(--accent-glow);
+  box-shadow: var(--shadow), 0 0 28px -3px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.09);
 }
 .add-pin:active { transform: translateX(-50%) translateY(1px) scale(.97); }
-.add-pin .add-pin-ico { font-size: 1rem; line-height: 1; transition: transform .18s cubic-bezier(.2,.9,.3,1.4); }
+.add-pin .add-pin-ico { font-size: 1.3rem; line-height: 1; transition: transform .18s cubic-bezier(.2,.9,.3,1.4); }
 .add-pin:hover .add-pin-ico { transform: translateY(-1px) rotate(-9deg) scale(1.12); }
 .add-pin.active {
   background: var(--accent-soft); border-color: var(--accent); color: var(--rose);
