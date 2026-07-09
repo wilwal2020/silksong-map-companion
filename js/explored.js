@@ -157,6 +157,19 @@ export class Explored {
     this._changed();
   }
 
+  // has anything been pasted? cheap: downscale the composite and look for any
+  // opaque pixel. Called on change (paste/clear/undo/load), never per-frame.
+  isBlank() {
+    const s = 64;
+    const c = document.createElement('canvas');
+    c.width = s; c.height = s;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(this.canvas, 0, 0, s, s);
+    const d = x.getImageData(0, 0, s, s).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] !== 0) return false;
+    return true;
+  }
+
   _changed() { if (this.onChange) this.onChange(); }
 
   async toBlob() {

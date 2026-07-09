@@ -53,6 +53,12 @@
   <canvas id="map-canvas"></canvas>
   <div id="pin-layer"></div>
 
+  <div id="empty-hint">
+    <div class="eh-key">Ctrl+V</div>
+    <h2>Paste your first map screenshot</h2>
+    <p>Snip your in-game map with <span class="kbd">Shift + Win + S</span>, then paste it here to reveal it.</p>
+  </div>
+
   <div id="paste-hint">
     <div class="hint-key">Ctrl+V</div>
     <div id="hint-text">paste a screenshot of your in-game map</div>
@@ -139,15 +145,23 @@
 <dialog id="dlg-help">
   <h2>How it works</h2>
   <ol class="help-steps">
-    <li><b>In game:</b> open your map at the spot you want to remember and take a screenshot <span class="kbd">Win+Shift+S</span> works great — snip just the map area.</li>
-    <li><b>Here:</b> press <span class="kbd">Ctrl+V</span> and choose <i>Map screenshot</i>. The site finds where it belongs, reveals exactly the rooms shown in your screenshot, and drops a pin on your player marker — all automatic. If it isn't confident enough it reveals nothing and asks for a wider screenshot. <span class="kbd">Ctrl+Z</span> undoes the last paste.</li>
-    <li><b>In game:</b> screenshot what's actually there (the door, the NPC, the ledge you can't reach) and just paste it — it attaches to the new pin automatically, or hit <i>Skip</i>.</li>
-    <li>Pick a category (locked door, needs ability, vendor&hellip;), write a short note, and drag the pin if it isn't exactly on the spot. Hovering the pin now shows your screenshot.</li>
-    <li>When you finally come back and deal with it — open the pin and hit <b>✓ done</b>.</li>
-    <li>Zoom your in-game map all the way out, screenshot it and paste as <i>Full map</i> to update everything you've explored in one go.</li>
+    <li><b>Snip your in-game map.</b> Open the map, press <span class="kbd">Shift + Win + S</span>, and drag a box around the part you want. Then paste it here with <span class="kbd">Ctrl+V</span>.</li>
+    <li><b>Keep at least one area name in the shot.</b> The site reads the printed area name to work out where your screenshot belongs — if no name is visible, it can't place it.
+      <figure class="help-fig">
+        <img src="assets/help-location.png" alt="A map screenshot with the area name Craw Lake visible in the corner">
+        <figcaption>“Craw Lake” is in frame — that name is what anchors the placement.</figcaption>
+      </figure>
+    </li>
+    <li><b>Equip the Compass for automatic pins.</b> With the Compass, your player marker shows on the map, so a pin drops on your exact spot automatically. Without it the area is still revealed — you just drag the pin into place yourself.
+      <figure class="help-fig compass">
+        <img src="assets/help-compass.png" alt="The Compass item">
+        <figcaption>The Compass — recommended for automatic pin placement.</figcaption>
+      </figure>
+    </li>
+    <li>Pick a category, add a note and a picture of the spot, and you're done. Hovering the pin shows your screenshot; open it and hit <b>✓ done</b> once you've dealt with it.</li>
+    <li>Zoomed all the way out, screenshot the whole map and paste as <i>Update your map</i> to refresh everything at once. <span class="kbd">Ctrl+Z</span> undoes the last paste.</li>
   </ol>
-  <p class="help-note"><b>Clear map</b> erases only the revealed map (your pins, their pictures and notes all stay) — handy for rebuilding the map from fresh screenshots. <b>Reset</b> erases everything.</p>
-  <p class="help-note">Everything is stored in this browser only — nothing is uploaded. Use <b>Export</b> now and then to keep a backup file.</p>
+  <p class="help-note"><b>Clear map</b> erases only the revealed map (pins, pictures and notes stay). <b>Reset</b> erases everything. Everything is stored in this browser only — use <b>Export</b> now and then for a backup.</p>
   <div class="dlg-actions">
     <button id="btn-help-close" class="btn primary">Got it</button>
   </div>

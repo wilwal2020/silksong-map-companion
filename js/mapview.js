@@ -48,6 +48,20 @@ export class MapView {
     this.requestRender();
   }
 
+  // keep the world in view: the map can't be dragged fully off-screen. When the
+  // map is bigger than the viewport it must cover it (no black gaps); when it's
+  // smaller it stays inside. A modest overscroll margin keeps panning from
+  // feeling like it hits a wall.
+  _clampView() {
+    const vw = this.canvas.clientWidth, vh = this.canvas.clientHeight;
+    const mw = this.map.width * this.scale, mh = this.map.height * this.scale;
+    const mx = Math.min(vw, mw) * 0.3, my = Math.min(vh, mh) * 0.3;
+    const loX = Math.min(0, vw - mw) - mx, hiX = Math.max(0, vw - mw) + mx;
+    const loY = Math.min(0, vh - mh) - my, hiY = Math.max(0, vh - mh) + my;
+    this.ox = Math.min(hiX, Math.max(loX, this.ox));
+    this.oy = Math.min(hiY, Math.max(loY, this.oy));
+  }
+
   screenToMap(px, py) {
     return { x: (px - this.ox) / this.scale, y: (py - this.oy) / this.scale };
   }
@@ -307,6 +321,7 @@ export class MapView {
     const dpr = window.devicePixelRatio || 1;
     this.canvas.width = this.canvas.clientWidth * dpr;
     this.canvas.height = this.canvas.clientHeight * dpr;
+    this._clampView();
     this.requestRender();
   }
 
@@ -331,6 +346,7 @@ export class MapView {
       } else {
         this.ox += dx;
         this.oy += dy;
+        this._clampView();
       }
       this.requestRender();
     });
@@ -359,6 +375,7 @@ export class MapView {
         this.ox = e.clientX - (e.clientX - this.ox) * k;
         this.oy = e.clientY - (e.clientY - this.oy) * k;
         this.scale = ns;
+        this._clampView();
       }
       this.requestRender();
     }, { passive: false });

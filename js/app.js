@@ -1196,6 +1196,11 @@ function wireSidebarResize() {
   });
 }
 
+// show the big "paste your first map" prompt only while nothing's revealed yet
+function updateEmptyHint() {
+  $('#empty-hint').classList.toggle('hidden', !explored.isBlank());
+}
+
 function applyMapOpacity(pct) {
   $('#map-canvas').style.opacity = pct / 100;
   $('.op-val').textContent = pct + '%';
@@ -1333,7 +1338,7 @@ async function init() {
     },
   });
 
-  explored.onChange = () => { view.requestRender(); saveFog(); };
+  explored.onChange = () => { view.requestRender(); saveFog(); updateEmptyHint(); };
   view.onViewChanged = () => { pins.syncPositions(); saveView(); };
 
   // restore saved state
@@ -1373,6 +1378,7 @@ async function init() {
 
   buildToolbar();
   loadLabels(); // warm the area-name table for OCR matching
+  updateEmptyHint();
 
   if (!savedFog && !(await store.getMeta('helped'))) {
     $('#dlg-help').showModal();
