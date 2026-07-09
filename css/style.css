@@ -179,16 +179,17 @@ html, body {
 .pin-card .pc-cat { font-family: Cinzel, serif; font-size: .72rem; letter-spacing: .09em; text-transform: uppercase; font-weight: 600; color: var(--text); }
 .pin-card .pc-note { font-size: .86rem; line-height: 1.35; color: #efe8d7; text-shadow: 0 1px 4px rgba(0,0,0,.9); overflow-wrap: break-word; }
 
-/* empty state — dashed well with the paste hint (and any note) inside it */
-.pin-card .pc-img.no-env { aspect-ratio: 320/184; cursor: pointer; background: repeating-linear-gradient(135deg,#0c1017 0 12px,#0a0d13 12px 24px); transition: box-shadow .16s; }
-.pin-card .pc-img.no-env:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 50%, transparent), inset 0 0 26px -10px var(--pc, var(--accent)); }
-.pin-card .pc-well { position: absolute; inset: 0; z-index: 1;
+/* empty state — dashed well with the paste hint (and any note) inside it.
+   shared by the pin card and the editor dialog's picture slot (.pin-shot) */
+.pin-card .pc-img.no-env, .pin-shot .pc-img.no-env { aspect-ratio: 320/184; cursor: pointer; background: repeating-linear-gradient(135deg,#0c1017 0 12px,#0a0d13 12px 24px); transition: box-shadow .16s; }
+.pin-card .pc-img.no-env:hover, .pin-shot .pc-img.no-env:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 50%, transparent), inset 0 0 26px -10px var(--pc, var(--accent)); }
+.pin-card .pc-well, .pin-shot .pc-well { position: absolute; inset: 0; z-index: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; padding: 6px 24px; color: var(--text-dim); }
 .pin-card .pc-well-note { font-size: .88rem; line-height: 1.4; color: var(--text); overflow-wrap: break-word; }
-.pin-card .pc-well .wc { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; border: 1px dashed #39424f; transition: border-color .16s, color .16s; }
-.pin-card .pc-img.no-env:hover .wc { border-color: color-mix(in srgb, var(--pc, var(--accent)) 60%, transparent); color: var(--text); }
-.pin-card .pc-well .wt { font-size: .8rem; line-height: 1.5; }
-.pin-card .pc-well .wt b { color: var(--text); font-weight: 600; }
+.pin-card .pc-well .wc, .pin-shot .pc-well .wc { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; border: 1px dashed #39424f; transition: border-color .16s, color .16s; }
+.pin-card .pc-img.no-env:hover .wc, .pin-shot .pc-img.no-env:hover .wc { border-color: color-mix(in srgb, var(--pc, var(--accent)) 60%, transparent); color: var(--text); }
+.pin-card .pc-well .wt, .pin-shot .pc-well .wt { font-size: .8rem; line-height: 1.5; }
+.pin-card .pc-well .wt b, .pin-shot .pc-well .wt b { color: var(--text); font-weight: 600; }
 .pc-kbd { font-family: ui-monospace, Consolas, monospace; font-size: .72rem; border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; color: var(--text); background: var(--panel-2); }
 
 /* footer bar — wide primary Done + quiet secondary columns */
@@ -335,6 +336,12 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   width: 100%; max-height: 200px; object-fit: contain;
   border-radius: 8px; background: #000; margin-bottom: 14px; display: block;
 }
+
+/* the editor's picture slot: the attached screenshot (cover-cropped) or, when
+   there's none, the same "no picture yet" paste well an empty pin shows */
+.pin-shot { margin: 0 0 14px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.pin-shot .pc-img { position: relative; background: #000; }
+.pin-shot .pc-img.has-env img.env { display: block; width: 100%; height: 160px; object-fit: cover; cursor: zoom-in; }
 
 .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 .dlg-actions.vertical { flex-direction: column; align-items: stretch; margin-top: 0; }

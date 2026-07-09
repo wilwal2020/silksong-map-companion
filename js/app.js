@@ -3,7 +3,7 @@ import { MapView } from './mapview.js';
 import { store } from './store.js';
 import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT } from './match.js';
 import { ocrLocate, loadLabels } from './ocr.js';
-import { PinManager } from './pins.js';
+import { PinManager, SVG } from './pins.js';
 import {
   categories, catById, customCategories, currentOrder, isCustom,
   setCustomCategories, addCustomCategory, removeCustomCategory, updateCustomCategory, setOrder,
@@ -264,11 +264,58 @@ $('#dlg-await').addEventListener('cancel', e => { e.preventDefault(); skipAwaiti
 
 // ------------------------------------------------------------- pin editing
 
+// while the pin editor is open, its empty picture slot claims a paste (set in
+// openPinEditor, read by routePaste) so Ctrl+V fills it just like an empty pin
+let pinEditorAttach = null;
+
 function openPinEditor(data, isNew) {
   const dlg = $('#dlg-pin');
   $('#pin-dlg-title').textContent = isNew ? 'New pin — what is here?' : 'Edit pin';
   const cats = $('#pin-cats');
   let selected = data.cat || 'other';
+
+  const shot = $('#pin-shot');
+  // reuse the pin's cached object URL (pins.update revokes/recreates it) so we
+  // don't leak or double-decode the blob
+  function shotUrl() {
+    if (!data.img) return null;
+    const entry = pins.pins.get(data.id);
+    if (entry) {
+      if (!entry.imgUrl) entry.imgUrl = URL.createObjectURL(data.img);
+      return entry.imgUrl;
+    }
+    return URL.createObjectURL(data.img);
+  }
+  function renderShot() {
+    const cat = catById(selected);
+    shot.style.setProperty('--pc', cat.color || '#9e2b25');
+    if (data.img) {
+      // the attached area screenshot — cover-cropped preview, click to zoom
+      shot.className = 'pin-shot';
+      shot.innerHTML = '<div class="pc-img has-env"><img class="env" alt=""></div>';
+      const img = shot.querySelector('img.env');
+      img.src = shotUrl();
+      img.addEventListener('click', () => showLightbox(shotUrl()));
+    } else {
+      // no picture yet — the same paste well an empty pin shows, same hover
+      shot.className = 'pin-shot';
+      shot.innerHTML =
+        '<div class="pc-img no-env">'
+        + '<div class="pc-well">'
+        + `<span class="wc">${SVG.camBig}</span>`
+        + '<span class="wt"><b>No picture yet</b><br>'
+        + 'Paste with <span class="pc-kbd">Ctrl</span> <span class="pc-kbd">V</span></span>'
+        + '</div></div>';
+    }
+  }
+  renderShot();
+  // a Ctrl+V while the editor is open lands here (via routePaste)
+  pinEditorAttach = blob => {
+    data.img = blob;
+    if (pins.pins.has(data.id)) { pins.update(data); persistPin(data); }
+    renderShot();
+    toast('Screenshot attached.', 'ok');
+  };
 
   function renderCats() {
     cats.innerHTML = '';
@@ -281,6 +328,7 @@ function openPinEditor(data, isNew) {
         selected = c.id;
         cats.querySelectorAll('.cat-btn').forEach(x => x.classList.remove('on'));
         b.classList.add('on');
+        shot.style.setProperty('--pc', c.color || '#9e2b25');
       });
       cats.appendChild(b);
     }
@@ -299,6 +347,7 @@ function openPinEditor(data, isNew) {
 
   return new Promise(resolve => {
     const done = save => {
+      pinEditorAttach = null;
       closeDialog(dlg);
       okBtn.removeEventListener('click', onOk);
       cancelBtn.removeEventListener('click', onCancel);
@@ -674,6 +723,11 @@ async function handleFullMap(blob) {
 let currentPaste = null; // { blob, url } while the type chooser is open
 
 function routePaste(blob) {
+  // the pin editor's empty picture slot takes a paste straight away
+  if (pinEditorAttach && document.querySelector('#dlg-pin[open] #pin-shot .no-env')) {
+    pinEditorAttach(blob);
+    return;
+  }
   // don't intercept pastes while choosing a pin type / editing a custom type
   if (document.querySelector('#dlg-pin[open], #dlg-cattype[open]')) return;
   // only a pin explicitly waiting for its picture (its 📷 button) takes a

@@ -7,7 +7,7 @@ import { categories, catById } from './categories.js';
 export { catById };
 
 // inline action-row icons (crisp at any size, currentColor-tinted)
-const SVG = {
+export const SVG = {
   check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.4l3.2 3.2L13 4.6"/></svg>',
   undo: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4L3 6.6l3 2.6"/><path d="M3 6.6h6.2a3.4 3.4 0 0 1 0 6.8H6"/></svg>',
   cam: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.2h2.2l1-1.4h3.6l1 1.4H14v7.2H2z"/><circle cx="8" cy="8.6" r="2.4"/></svg>',
