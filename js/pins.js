@@ -6,6 +6,16 @@ import { categories, catById } from './categories.js';
 // re-export so existing importers keep working
 export { catById };
 
+// inline action-row icons (crisp at any size, currentColor-tinted)
+const SVG = {
+  check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.4l3.2 3.2L13 4.6"/></svg>',
+  undo: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4L3 6.6l3 2.6"/><path d="M3 6.6h6.2a3.4 3.4 0 0 1 0 6.8H6"/></svg>',
+  cam: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.2h2.2l1-1.4h3.6l1 1.4H14v7.2H2z"/><circle cx="8" cy="8.6" r="2.4"/></svg>',
+  pen: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2.6l2 2L6 12l-2.6.6L4 10z"/></svg>',
+  trash: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5h9M6.5 4.5V3h3v1.5M5 4.5l.6 8h4.8l.6-8"/></svg>',
+  camBig: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h3l1.4-2h7.2L16 8h5v11H3z"/><circle cx="12" cy="13" r="3.4"/></svg>',
+};
+
 // convex hull (Andrew's monotone chain) of a set of points
 function convexHull(pts) {
   pts = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
@@ -391,66 +401,104 @@ export class PinManager {
     card.className = 'pin-card';
     card.style.setProperty('--pc', cat.color || '#9e2b25');
 
+    const thread = document.createElement('div');
+    thread.className = 'pc-thread';
+    card.appendChild(thread);
+
+    // the screenshot area (or, when empty, a dashed well with the paste hint)
+    const imgWrap = document.createElement('div');
+    imgWrap.className = 'pc-img';
     if (d.img) {
       if (!entry.imgUrl) entry.imgUrl = URL.createObjectURL(d.img);
       const img = document.createElement('img');
       img.className = 'env';
       img.src = entry.imgUrl;
+      img.alt = '';
       img.addEventListener('load', () => this._positionCard(entry));
       img.addEventListener('click', () => this.handlers.onLightbox(entry.imgUrl));
-      card.appendChild(img);
+      imgWrap.appendChild(img);
     } else {
-      const no = document.createElement('div');
-      no.className = 'no-env';
-      no.textContent = 'No area screenshot yet — paste one right here (Ctrl+V) while hovering.';
-      // hovering this square makes the pin an explicit paste target; the id
-      // is read back via a live :hover query at paste time (event-based
-      // tracking went stale when the card moved under a zoom/pan)
-      no.dataset.pinId = d.id;
-      card.appendChild(no);
+      // the whole image square is the paste target; routePaste reads
+      // .pin-card .no-env:hover + dataset.pinId at paste time
+      imgWrap.classList.add('no-env');
+      imgWrap.dataset.pinId = d.id;
+      const well = document.createElement('div');
+      well.className = 'pc-well';
+      if (d.note) {
+        const wn = document.createElement('div');
+        wn.className = 'pc-well-note';
+        wn.textContent = d.note;
+        well.appendChild(wn);
+      }
+      const wc = document.createElement('span');
+      wc.className = 'wc';
+      wc.innerHTML = SVG.camBig;
+      const wt = document.createElement('span');
+      wt.className = 'wt';
+      wt.innerHTML = `<b>${d.note ? 'Add a picture' : 'No picture yet'}</b><br>`
+        + 'Hover here and press <span class="pc-kbd">Ctrl</span> <span class="pc-kbd">V</span>';
+      well.append(wc, wt);
+      imgWrap.appendChild(well);
     }
 
+    // the frosted deck: category always; the note too when there's a screenshot
+    const deck = document.createElement('div');
+    deck.className = 'pc-deck';
     const head = document.createElement('div');
-    head.className = 'card-head';
-    head.innerHTML = `<span class="cat">${cat.icon} ${cat.label}</span>`;
-    card.appendChild(head);
+    head.className = 'pc-head';
+    const ico = document.createElement('span');
+    ico.className = 'pc-ico';
+    ico.textContent = cat.icon;
+    const catName = document.createElement('span');
+    catName.className = 'pc-cat';
+    catName.textContent = cat.label;
+    head.append(ico, catName);
+    deck.appendChild(head);
+    if (d.img && d.note) {
+      const note = document.createElement('div');
+      note.className = 'pc-note';
+      note.textContent = d.note;
+      deck.appendChild(note);
+    }
+    imgWrap.appendChild(deck);
+    card.appendChild(imgWrap);
 
-    const note = document.createElement('div');
-    note.className = 'note';
-    note.textContent = d.note || '';
-    card.appendChild(note);
-
-    const actions = document.createElement('div');
-    actions.className = 'card-actions';
-    const mk = (label, title, fn) => {
-      const b = document.createElement('button');
-      b.className = 'btn';
-      b.textContent = label;
-      b.title = title;
-      b.addEventListener('click', fn);
-      actions.appendChild(b);
-    };
-    mk(d.done ? '↩ undo' : '✓ done', 'Mark this spot as dealt with', () => {
+    // footer bar: wide primary Done + quiet Replace / Edit / Delete
+    const acts = document.createElement('div');
+    acts.className = 'pc-acts';
+    const done = document.createElement('button');
+    done.className = 'pc-done' + (d.done ? ' is-done' : '');
+    done.innerHTML = (d.done ? SVG.undo : SVG.check)
+      + `<span>${d.done ? 'Undo' : 'Done'}</span>`;
+    done.addEventListener('click', () => {
       d.done = !d.done;
       const justDone = d.done;
       this.handlers.onChange(d);
       if (justDone && !this.showDone) {
-        // it's about to be filtered out — ring, close the card, then fade the
-        // marker out before applyFilter finally removes it (no instant pop)
+        // about to be filtered out — ring, close the card, then fade the
+        // marker out before applyFilter removes it (no instant pop)
         this._doneRing(entry);
         this._hideCard(entry, true);
         this._animateOut(entry, () => this.update(d));
       } else {
         this.update(d);
-        if (justDone) this.flashDone(d.id); // celebrate checking it off
+        if (justDone) this.flashDone(d.id);
       }
     });
-    mk('📷', 'Attach / replace the area screenshot (paste after clicking)', () => {
-      this.handlers.onRequestAttach(d);
-    });
-    mk('✎', 'Edit category & note', () => this.handlers.onEdit(d));
-    mk('🗑', 'Delete pin', () => this.handlers.onDelete(d));
-    card.appendChild(actions);
+    acts.appendChild(done);
+    const sec = (icon, label, title, fn, del) => {
+      const b = document.createElement('button');
+      b.className = 'pc-sec' + (del ? ' del' : '');
+      b.title = title;
+      b.setAttribute('aria-label', title);
+      b.innerHTML = icon + `<span>${label}</span>`;
+      b.addEventListener('click', fn);
+      acts.appendChild(b);
+    };
+    sec(SVG.cam, 'Replace', 'Attach or replace the area screenshot', () => this.handlers.onRequestAttach(d));
+    sec(SVG.pen, 'Edit', 'Edit category & note', () => this.handlers.onEdit(d));
+    sec(SVG.trash, 'Delete', 'Delete pin', () => this.handlers.onDelete(d), true);
+    card.appendChild(acts);
 
     // hide is driven by the safe-zone tracker (_trackHover), not a plain
     // pointerleave, so a diagonal move to a button doesn't drop the card

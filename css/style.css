@@ -149,36 +149,66 @@ html, body {
   border-radius: 6px; padding: 1px 4px;
 }
 
-/* hover / detail card */
+/* hover / detail card — "frosted deck": screenshot-led, label + note ride a
+   blurred shelf over the image, wide primary Done in a footer bar */
 .pin-card {
-  position: absolute; z-index: 20; width: 330px;
-  background: var(--panel); border: 1px solid var(--border);
-  border-left: 2px solid var(--pc, var(--accent)); border-radius: 0;
-  box-shadow: var(--shadow);
-  padding: 10px; pointer-events: auto;
-  display: flex; flex-direction: column; gap: 8px;
+  position: absolute; z-index: 20; width: 320px;
+  background: #0b0e14; border: 1px solid rgba(232,227,212,.09);
+  border-radius: 14px; overflow: hidden; pointer-events: auto;
+  box-shadow: 0 20px 46px rgba(0,0,0,.62);
+  animation: card-pop .12s cubic-bezier(.2,.9,.3,1.3);
 }
-/* invisible margin so a slight overshoot still counts as hovering the card */
-.pin-card::before {
-  content: ""; position: absolute; inset: -12px; z-index: -1;
-}
-.pin-card img.env {
-  width: 100%; border-radius: 6px; display: block;
-  max-height: 62vh; object-fit: contain; background: #000; cursor: zoom-in;
-}
-/* the whole card pops in, quick and snappy, from the side nearest the pin */
-.pin-card { animation: card-pop .12s cubic-bezier(.2,.9,.3,1.3); }
 @keyframes card-pop { from { opacity: 0; transform: scale(.9); } }
-.pin-card .no-env {
-  color: var(--text-dim); font-size: .8rem; text-align: center; cursor: pointer;
-  border: 1px dashed var(--border); border-radius: 6px; padding: 14px 8px;
-  transition: border-color .16s, color .16s, background .16s, box-shadow .16s;
+
+.pin-card .pc-thread { height: 2px; background: linear-gradient(90deg, transparent, var(--pc, var(--accent)), transparent); }
+
+.pin-card .pc-img { position: relative; aspect-ratio: 320/184; background: #000; }
+.pin-card .pc-img img.env { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; display: block; }
+/* faint gradient under the deck so image -> glass is a soft seam */
+.pin-card .pc-img::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: linear-gradient(180deg, transparent 64%, rgba(6,7,10,.52)); }
+
+/* the frosted shelf carrying category (+ note over a screenshot) */
+.pin-card .pc-deck {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  padding: 9px 13px 10px; display: flex; flex-direction: column; gap: 3px;
+  background: rgba(9,12,18,.42); backdrop-filter: blur(10px) saturate(1.1); -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  border-top: 1px solid rgba(232,227,212,.13); box-shadow: 0 -6px 16px rgba(0,0,0,.3);
 }
-.pin-card .no-env:hover {
-  border-color: var(--pc, var(--accent)); border-style: solid; color: var(--text);
-  background: color-mix(in srgb, var(--pc, var(--accent)) 12%, transparent);
-  box-shadow: inset 0 0 22px -8px var(--pc, var(--accent)), 0 0 11px -5px var(--pc, var(--accent));
-}
+.pin-card .pc-head { display: flex; align-items: center; gap: 8px; }
+.pin-card .pc-ico { width: 19px; height: 19px; border-radius: 5px; flex: none; display: grid; place-items: center; font-size: 11px; line-height: 1;
+  background: color-mix(in srgb, var(--pc, var(--accent)) 34%, transparent); border: 1px solid color-mix(in srgb, var(--pc, var(--accent)) 55%, transparent); }
+.pin-card .pc-cat { font-family: Cinzel, serif; font-size: .72rem; letter-spacing: .09em; text-transform: uppercase; font-weight: 600; color: var(--text); }
+.pin-card .pc-note { font-size: .86rem; line-height: 1.35; color: #efe8d7; text-shadow: 0 1px 4px rgba(0,0,0,.9); overflow-wrap: break-word; }
+
+/* empty state — dashed well with the paste hint (and any note) inside it */
+.pin-card .pc-img.no-env { cursor: pointer; background: repeating-linear-gradient(135deg,#0c1017 0 12px,#0a0d13 12px 24px); transition: box-shadow .16s; }
+.pin-card .pc-img.no-env:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 50%, transparent), inset 0 0 26px -10px var(--pc, var(--accent)); }
+.pin-card .pc-well { position: absolute; left: 0; right: 0; top: 0; bottom: 42px; z-index: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; padding: 6px 24px; color: var(--text-dim); }
+.pin-card .pc-well-note { font-size: .88rem; line-height: 1.4; color: var(--text); overflow-wrap: break-word; }
+.pin-card .pc-well .wc { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; border: 1px dashed #39424f; transition: border-color .16s, color .16s; }
+.pin-card .pc-img.no-env:hover .wc { border-color: color-mix(in srgb, var(--pc, var(--accent)) 60%, transparent); color: var(--text); }
+.pin-card .pc-well .wt { font-size: .8rem; line-height: 1.5; }
+.pin-card .pc-well .wt b { color: var(--text); font-weight: 600; }
+.pc-kbd { font-family: ui-monospace, Consolas, monospace; font-size: .72rem; border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; color: var(--text); background: var(--panel-2); }
+
+/* footer bar — wide primary Done + quiet secondary columns */
+.pin-card .pc-acts { display: flex; width: 100%; border-top: 1px solid var(--border); background: rgba(9,11,15,.62); }
+.pin-card .pc-acts button { font: inherit; cursor: pointer; }
+.pin-card .pc-acts svg { width: 16px; height: 16px; display: block; }
+.pin-card .pc-done { flex: 1.7; min-width: 0; height: 46px; border: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: linear-gradient(#54c08a, #3fa876); color: #0b130e; font-weight: 700; font-size: .9rem; transition: filter .13s; }
+.pin-card .pc-done:hover { filter: brightness(1.07); }
+.pin-card .pc-done:active { filter: brightness(.95); }
+.pin-card .pc-done.is-done { background: none; color: var(--text-dim); font-weight: 600; }
+.pin-card .pc-done.is-done:hover { background: rgba(255,255,255,.05); color: var(--text); filter: none; }
+.pin-card .pc-sec { flex: 1; height: 46px; border: 0; border-left: 1px solid var(--border); background: none; color: var(--text-dim);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; transition: background .13s, color .13s; }
+.pin-card .pc-sec span { font-size: .6rem; letter-spacing: .04em; }
+.pin-card .pc-sec:hover { background: rgba(255,255,255,.055); color: var(--text); }
+.pin-card .pc-sec.del:hover { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--rose); }
+.pin-card .pc-done:focus-visible, .pin-card .pc-sec:focus-visible { outline: 2px solid #e0c37e; outline-offset: -2px; }
 
 /* a pasted screenshot flying from where it dropped into its pin */
 .attach-fly {
@@ -218,13 +248,6 @@ html, body {
 /* a pin marked done while "show done" is off shrinks + fades before it goes */
 .pin.leaving .pin-ico { animation: pin-leave .34s ease-in forwards; }
 @keyframes pin-leave { to { transform: scale(.2); opacity: 0; } }
-.pin-card .card-head { display: flex; gap: 8px; align-items: baseline; }
-.pin-card .card-head .cat { font-family: Cinzel, serif; font-weight: 500; font-size: .85rem; letter-spacing: .03em; color: var(--pc, var(--rose)); }
-.pin-card .note { font-size: .9rem; overflow-wrap: break-word; }
-.pin-card .note:empty { display: none; }
-.pin-card .card-actions { display: flex; gap: 7px; margin-top: 2px; }
-.pin-card .card-actions .btn { padding: 8px 13px; font-size: .92rem; }
-
 /* full-size env screenshot lightbox */
 #lightbox {
   position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.85);
