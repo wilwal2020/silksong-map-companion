@@ -1199,6 +1199,44 @@ function wireSidebarResize() {
 // show the big "paste your first map" prompt only while nothing's revealed yet
 function updateEmptyHint() {
   $('#empty-hint').classList.toggle('hidden', !explored.isBlank());
+  positionEmptyHint();
+}
+
+// anchor the empty prompt to the map's centre so it pans/zooms with the map
+// instead of floating fixed on screen
+function positionEmptyHint() {
+  const el = $('#empty-hint');
+  if (!el || el.classList.contains('hidden')) return;
+  const s = view.mapToScreen(mapImage.width / 2, mapImage.height / 2);
+  el.style.left = s.x + 'px';
+  el.style.top = s.y + 'px';
+}
+
+// the help dialog is a one-at-a-time stepper (Back / Next, Next -> "Got it"
+// on the last slide closes it)
+let helpGoto = () => {};
+function wireHelpStepper() {
+  const dlg = $('#dlg-help');
+  const slides = [...dlg.querySelectorAll('.help-slide')];
+  const back = $('#help-back'), next = $('#help-next'), dotsWrap = $('#help-dots');
+  dotsWrap.innerHTML = slides.map(() => '<span class="help-dot"></span>').join('');
+  const dots = [...dotsWrap.children];
+  let i = 0;
+  helpGoto = n => {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle('on', k === i));
+    dots.forEach((d, k) => d.classList.toggle('on', k === i));
+    back.disabled = i === 0;
+    next.textContent = i === slides.length - 1 ? 'Got it' : 'Next';
+    dlg.scrollTop = 0;
+  };
+  back.addEventListener('click', () => helpGoto(i - 1));
+  next.addEventListener('click', () => i === slides.length - 1 ? closeDialog(dlg) : helpGoto(i + 1));
+  dots.forEach((d, k) => d.addEventListener('click', () => helpGoto(k)));
+}
+function openHelp() {
+  helpGoto(0);
+  $('#dlg-help').showModal();
 }
 
 function applyMapOpacity(pct) {
@@ -1262,8 +1300,8 @@ function buildToolbar() {
     e.target.value = '';
   });
 
-  $('#btn-help').addEventListener('click', () => $('#dlg-help').showModal());
-  $('#btn-help-close').addEventListener('click', () => closeDialog('#dlg-help'));
+  $('#btn-help').addEventListener('click', openHelp);
+  wireHelpStepper();
 
   // start the composited map over (e.g. after misaligned pastes) without
   // touching the pins — their pictures, notes and types all stay. The scale
@@ -1339,7 +1377,7 @@ async function init() {
   });
 
   explored.onChange = () => { view.requestRender(); saveFog(); updateEmptyHint(); };
-  view.onViewChanged = () => { pins.syncPositions(); saveView(); };
+  view.onViewChanged = () => { pins.syncPositions(); positionEmptyHint(); saveView(); };
 
   // restore saved state
   learnedScale = (await store.getMeta('scale')) || null;
@@ -1381,7 +1419,7 @@ async function init() {
   updateEmptyHint();
 
   if (!savedFog && !(await store.getMeta('helped'))) {
-    $('#dlg-help').showModal();
+    openHelp();
     store.putMeta('helped', true);
   }
 

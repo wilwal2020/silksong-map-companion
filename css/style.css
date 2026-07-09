@@ -288,7 +288,8 @@ html, body {
   border-radius: 6px; padding: 3px 8px; font-weight: 600; color: var(--text);
 }
 
-/* big centred prompt shown while nothing has been pasted yet */
+/* big prompt shown while nothing has been pasted yet — anchored to the map's
+   centre (left/top set in JS from the view transform) so it pans with the map */
 #empty-hint {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
   z-index: 9; pointer-events: none; text-align: center; max-width: 420px; padding: 0 24px;
@@ -422,11 +423,24 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 #pin-note:focus { outline: none; border-color: var(--accent); }
 
+/* help: a one-slide-at-a-time stepper with Back / Next + dots */
 #dlg-help { max-height: 88vh; overflow-y: auto; }
-.help-steps { padding-left: 20px; display: flex; flex-direction: column; gap: 12px; font-size: .88rem; line-height: 1.45; }
-.help-note { color: var(--text-dim); font-size: .82rem; }
-/* example screenshots inside a help step */
-.help-fig { margin: 8px 0 2px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #0a0d13; }
+.help-slides { min-height: 150px; }
+.help-slide { display: none; }
+.help-slide.on { display: block; animation: help-in .18s ease; }
+@keyframes help-in { from { opacity: 0; transform: translateX(7px); } }
+.help-eyebrow { display: inline-block; font-family: Cinzel, serif; font-size: .66rem; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--text-dim); margin-bottom: 7px; }
+.help-eyebrow.tip { color: var(--rose); }
+.help-slide h2 { margin: 0 0 8px; }
+.help-slide p { font-size: .9rem; line-height: 1.5; color: var(--text); margin: 0; }
+.help-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.help-nav .btn:disabled { opacity: .35; cursor: default; }
+.help-dots { display: flex; gap: 7px; }
+.help-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); cursor: pointer; transition: background .14s, transform .14s; }
+.help-dot.on { background: var(--accent); transform: scale(1.25); }
+/* example screenshots inside a help slide */
+.help-fig { margin: 10px 0 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #0a0d13; }
 .help-fig img { display: block; width: 100%; height: auto; }
 .help-fig figcaption { padding: 7px 11px; font-size: .78rem; color: var(--text-dim); }
 .help-fig.compass { display: flex; align-items: center; gap: 13px; padding: 11px; }
@@ -563,9 +577,8 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 #cat-bar-resize:hover { background: linear-gradient(90deg, transparent, var(--accent-soft)); }
 
-/* keep the paste hints clear of the sidebar (offset by ~half its width) */
+/* keep the bottom paste pill clear of the sidebar (offset by ~half its width) */
 #paste-hint { margin-left: 174px; }
-#empty-hint { margin-left: 174px; }
 
 /* ---------- add-pin button + placement ---------- */
 
@@ -648,5 +661,5 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 
 @media (max-width: 720px) {
   #cat-bar { width: 240px; }
-  #paste-hint, #empty-hint { margin-left: 120px; }
+  #paste-hint { margin-left: 120px; }
 }

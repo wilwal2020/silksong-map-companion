@@ -143,27 +143,35 @@
 
 <!-- help -->
 <dialog id="dlg-help">
-  <h2>How it works</h2>
-  <ol class="help-steps">
-    <li><b>Snip your in-game map.</b> Open the map, press <span class="kbd">Shift + Win + S</span>, and drag a box around the part you want. Then paste it here with <span class="kbd">Ctrl+V</span>.</li>
-    <li><b>Keep at least one area name in the shot.</b> The site reads the printed area name to work out where your screenshot belongs — if no name is visible, it can't place it.
+  <div class="help-slides">
+    <section class="help-slide" data-step="1">
+      <span class="help-eyebrow">Step 1</span>
+      <h2>Snip your map</h2>
+      <p>Open your in-game map, press <span class="kbd">Shift + Win + S</span>, and box it. Paste here with <span class="kbd">Ctrl+V</span>.</p>
+    </section>
+    <section class="help-slide" data-step="2">
+      <span class="help-eyebrow">Step 2</span>
+      <h2>Keep an area name in the shot</h2>
+      <p>The site reads the printed area name to place your screenshot — no name in frame, no placement.</p>
       <figure class="help-fig">
         <img src="assets/help-location.png" alt="A map screenshot with the area name Craw Lake visible in the corner">
-        <figcaption>“Craw Lake” is in frame — that name is what anchors the placement.</figcaption>
+        <figcaption>“Craw Lake” is in frame — that name anchors it.</figcaption>
       </figure>
-    </li>
-    <li><b>Equip the Compass for automatic pins.</b> With the Compass, your player marker shows on the map, so a pin drops on your exact spot automatically. Without it the area is still revealed — you just drag the pin into place yourself.
+    </section>
+    <section class="help-slide" data-step="3">
+      <span class="help-eyebrow tip">Tip</span>
+      <h2>Equip the Compass</h2>
+      <p>With the Compass your marker shows on the map, so pins drop on your exact spot automatically.</p>
       <figure class="help-fig compass">
         <img src="assets/help-compass.png" alt="The Compass item">
-        <figcaption>The Compass — recommended for automatic pin placement.</figcaption>
+        <figcaption>Recommended for automatic pin placement.</figcaption>
       </figure>
-    </li>
-    <li>Pick a category, add a note and a picture of the spot, and you're done. Hovering the pin shows your screenshot; open it and hit <b>✓ done</b> once you've dealt with it.</li>
-    <li>Zoomed all the way out, screenshot the whole map and paste as <i>Update your map</i> to refresh everything at once. <span class="kbd">Ctrl+Z</span> undoes the last paste.</li>
-  </ol>
-  <p class="help-note"><b>Clear map</b> erases only the revealed map (pins, pictures and notes stay). <b>Reset</b> erases everything. Everything is stored in this browser only — use <b>Export</b> now and then for a backup.</p>
-  <div class="dlg-actions">
-    <button id="btn-help-close" class="btn primary">Got it</button>
+    </section>
+  </div>
+  <div class="help-nav">
+    <button id="help-back" class="btn">Back</button>
+    <div class="help-dots" id="help-dots"></div>
+    <button id="help-next" class="btn primary">Next</button>
   </div>
 </dialog>
 
