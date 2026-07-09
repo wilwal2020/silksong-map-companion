@@ -366,8 +366,10 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
    there's none, the same "no picture yet" paste well an empty pin shows */
 .pin-shot { margin: 0 0 14px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 /* fixed height so the slot is the same size whether or not there's an image
-   (overrides the shared no-env aspect-ratio; the pin card keeps its own) */
+   (the pin card keeps its own aspect-ratio; here the ratio is dropped so the
+   empty well fills the full width at the fixed height) */
 .pin-shot .pc-img { position: relative; background: #000; height: 160px; }
+.pin-shot .pc-img.no-env { aspect-ratio: auto; }
 .pin-shot .pc-img.has-env img.env { display: block; width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; }
 .pin-shot .pc-shot-x {
   position: absolute; top: 8px; right: 8px; z-index: 2;
