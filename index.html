@@ -66,14 +66,27 @@
 
 <!-- paste type chooser -->
 <dialog id="dlg-paste">
-  <h2>What did you paste?</h2>
-  <img id="paste-preview" alt="pasted screenshot preview">
-  <div class="dlg-actions vertical">
-    <button class="btn primary" data-type="map">📍 Map screenshot — reveal this area &amp; add a pin</button>
-    <button class="btn" data-type="full">🗺 Full map — update everything I've explored</button>
-    <button class="btn subtle" data-type="cancel">Cancel</button>
+  <div class="paste-hero">
+    <img id="paste-preview" alt="pasted screenshot preview">
+    <div class="paste-veil"></div>
+    <div class="paste-hero-cap">
+      <h2>What did you paste?</h2>
+      <p>Choose how to use this screenshot</p>
+    </div>
   </div>
-  <p class="paste-tip">To add a picture to an existing pin, hover the pin, click its <b>📷</b> button, then paste.</p>
+  <div class="paste-body">
+    <div class="paste-opts">
+      <button class="paste-opt hot" data-type="map">
+        <span class="po-ico">📍</span>
+        <span class="po-ttl">Reveal this area, and pin your location</span>
+      </button>
+      <button class="paste-opt" data-type="full">
+        <span class="po-ico bone">🗺</span>
+        <span class="po-ttl">Update your map</span>
+      </button>
+    </div>
+    <button class="paste-cancel" data-type="cancel">Cancel</button>
+  </div>
 </dialog>
 
 <!-- step 2: waiting for the area screenshot for a pin -->

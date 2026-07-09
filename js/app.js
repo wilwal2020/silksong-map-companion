@@ -439,13 +439,21 @@ async function applyMapPlacement(bitmap, rect, marker) {
   pins.lastPlacedId = data.id; // don't let a paste right after placing attach to it
   persistPin(data);
 
-  // ask for the spot's picture right away — a paste now attaches it to this
-  // pin; Skip (or Esc) goes straight to choosing the type
-  newPinPending = data;
-  pins.setAwaiting(data.id);
-  showAwaitDialog('Pin placed — add a picture of the spot?',
-    'Screenshot what is actually there in game and paste it here (<span class="kbd">Ctrl+V</span>) — or skip.',
-    'Skip');
+  // straight to the editor — its picture slot takes the paste, so there's no
+  // separate "add a picture" step
+  const edit = await openPinEditor(data, true);
+  if (edit) {
+    data.cat = edit.cat;
+    data.note = edit.note;
+    pins.update(data);
+    persistPin(data);
+  }
+  // no player marker found means the pin is only a guess at the area's centre
+  // — tell them to drag it onto where they actually are
+  if (!marker) {
+    toast("Couldn't find your player — drag the pin onto your actual spot.",
+      'error', { label: 'Got it', fn: () => {} });
+  }
 }
 
 // Read the area name(s) first — reliable even when the surrounding area is

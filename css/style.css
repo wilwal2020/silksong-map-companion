@@ -336,10 +336,31 @@ dialog.closing::backdrop { animation: fade-out .16s ease forwards; }
 @keyframes fade-out { to { opacity: 0; } }
 dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; letter-spacing: .04em; color: var(--text); }
 
-#paste-preview {
-  width: 100%; max-height: 200px; object-fit: contain;
-  border-radius: 8px; background: #000; margin-bottom: 14px; display: block;
-}
+/* paste-type chooser — a screenshot hero with the question over it, then two
+   side-by-side choice cards */
+#dlg-paste { padding: 0; overflow: hidden; }
+.paste-hero { position: relative; height: 158px; background: #000; }
+#paste-preview { display: block; width: 100%; height: 100%; object-fit: cover; }
+.paste-veil { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(7,8,9,.1), rgba(7,8,9,.5) 55%, rgba(7,8,9,.94)); }
+.paste-hero-cap { position: absolute; left: 20px; right: 20px; bottom: 13px; }
+.paste-hero-cap h2 { margin: 0; }
+.paste-hero-cap p { margin: 2px 0 0; font-size: .8rem; color: #c9c3b2; }
+.paste-body { padding: 15px 18px 16px; }
+.paste-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.paste-opt { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; text-align: left;
+  min-height: 104px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 15px; color: var(--text); cursor: pointer; font: inherit; transition: border-color .14s, background .14s; }
+.paste-opt:hover { border-color: var(--border-strong); background: #1a1f29; }
+.paste-opt.hot { border-color: var(--accent); background: rgba(158,43,37,.10); }
+.paste-opt.hot:hover { border-color: var(--accent-glow); background: rgba(158,43,37,.16); }
+.po-ico { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; font-size: 19px; line-height: 1;
+  background: rgba(158,43,37,.16); border: 1px solid rgba(158,43,37,.4); }
+.po-ico.bone { background: var(--panel); border-color: var(--border-strong); }
+.po-ttl { font-weight: 500; font-size: .9rem; line-height: 1.3; }
+.paste-cancel { display: block; margin: 12px auto 0; background: transparent; border: 0; color: var(--text-dim);
+  font: inherit; font-size: .82rem; cursor: pointer; padding: 6px; transition: color .14s; }
+.paste-cancel:hover { color: var(--text); }
 
 /* the editor's picture slot: the attached screenshot (cover-cropped) or, when
    there's none, the same "no picture yet" paste well an empty pin shows */
@@ -358,9 +379,6 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 .pin-shot .pc-shot-x:hover { background: color-mix(in srgb, var(--danger) 62%, rgba(10,12,16,.7)); border-color: var(--rose); transform: scale(1.08); }
 
 .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
-.dlg-actions.vertical { flex-direction: column; align-items: stretch; margin-top: 0; }
-.dlg-actions.vertical .btn { text-align: left; padding: 10px 14px; font-size: .9rem; }
-.paste-tip { margin: 12px 0 0; font-size: .78rem; line-height: 1.45; color: var(--text-dim); }
 
 #pin-cats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 12px; }
 .cat-btn {
