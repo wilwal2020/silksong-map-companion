@@ -460,8 +460,9 @@ export class PinManager {
       note.textContent = d.note;
       deck.appendChild(note);
     }
-    imgWrap.appendChild(deck);
     card.appendChild(imgWrap);
+    // the deck rides below the screenshot so the whole image stays visible
+    card.appendChild(deck);
 
     // footer bar: wide primary Done + quiet Replace / Edit / Delete
     const acts = document.createElement('div');

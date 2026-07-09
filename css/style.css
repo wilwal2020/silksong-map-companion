@@ -165,16 +165,13 @@ html, body {
 .pin-card .pc-img { position: relative; background: #000; }
 /* natural aspect so the whole screenshot shows (no crop); tall shots capped */
 .pin-card .pc-img img.env { display: block; width: 100%; height: auto; max-height: 62vh; object-fit: contain; cursor: zoom-in; }
-/* faint gradient under the deck so image -> glass is a soft seam */
-.pin-card .pc-img::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
-  background: linear-gradient(180deg, transparent 64%, rgba(6,7,10,.52)); }
 
-/* the frosted shelf carrying category (+ note over a screenshot) */
+/* the shelf carrying category (+ note) — sits below the screenshot so the
+   whole image stays visible (was overlaid, which cropped the bottom) */
 .pin-card .pc-deck {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
   padding: 9px 13px 10px; display: flex; flex-direction: column; gap: 3px;
-  background: rgba(9,12,18,.42); backdrop-filter: blur(10px) saturate(1.1); -webkit-backdrop-filter: blur(10px) saturate(1.1);
-  border-top: 1px solid rgba(232,227,212,.13); box-shadow: 0 -6px 16px rgba(0,0,0,.3);
+  background: rgba(9,12,18,.92);
+  border-top: 1px solid rgba(232,227,212,.11); box-shadow: 0 -6px 16px rgba(0,0,0,.28);
 }
 .pin-card .pc-head { display: flex; align-items: center; gap: 8px; }
 .pin-card .pc-ico { width: 19px; height: 19px; border-radius: 5px; flex: none; display: grid; place-items: center; font-size: 11px; line-height: 1;
@@ -185,7 +182,7 @@ html, body {
 /* empty state — dashed well with the paste hint (and any note) inside it */
 .pin-card .pc-img.no-env { aspect-ratio: 320/184; cursor: pointer; background: repeating-linear-gradient(135deg,#0c1017 0 12px,#0a0d13 12px 24px); transition: box-shadow .16s; }
 .pin-card .pc-img.no-env:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 50%, transparent), inset 0 0 26px -10px var(--pc, var(--accent)); }
-.pin-card .pc-well { position: absolute; left: 0; right: 0; top: 0; bottom: 42px; z-index: 1;
+.pin-card .pc-well { position: absolute; inset: 0; z-index: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; padding: 6px 24px; color: var(--text-dim); }
 .pin-card .pc-well-note { font-size: .88rem; line-height: 1.4; color: var(--text); overflow-wrap: break-word; }
 .pin-card .pc-well .wc { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; border: 1px dashed #39424f; transition: border-color .16s, color .16s; }
@@ -198,19 +195,27 @@ html, body {
 .pin-card .pc-acts { display: flex; width: 100%; border-top: 1px solid var(--border); background: rgba(9,11,15,.62); }
 .pin-card .pc-acts button { font: inherit; cursor: pointer; }
 .pin-card .pc-acts svg { width: 16px; height: 16px; display: block; }
-.pin-card .pc-done { flex: 1.7; min-width: 0; height: 46px; border: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
+.pin-card .pc-done { position: relative; overflow: hidden; flex: 1.7; min-width: 0; height: 46px; border: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
   background: linear-gradient(#54c08a, #3fa876); color: #0b130e; font-weight: 700; font-size: .9rem;
-  transition: background .14s, box-shadow .16s, letter-spacing .16s; }
+  transition: background .16s, box-shadow .18s, letter-spacing .16s, color .16s; }
+/* a light sweep that glides across on hover */
+.pin-card .pc-done::before { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,.55) 48%, transparent 66%);
+  transform: translateX(-120%); transition: transform .5s cubic-bezier(.3,.7,.3,1); }
+.pin-card .pc-done > * { position: relative; z-index: 1; }
 .pin-card .pc-done:hover {
-  background: linear-gradient(#69d9a3, #47b884);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.32), 0 0 22px -5px #54c08a;
-  letter-spacing: .02em;
+  background: linear-gradient(#e7f6ec, #bfead2);
+  color: #0a3a22;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.7), inset 0 1px 0 rgba(255,255,255,.9), 0 0 26px -4px #6fdca6;
+  letter-spacing: .05em;
 }
-.pin-card .pc-done:hover svg { transform: scale(1.15); }
-.pin-card .pc-done svg { transition: transform .16s cubic-bezier(.2,.9,.3,1.5); }
-.pin-card .pc-done:active { background: linear-gradient(#3fa876, #379a6b); box-shadow: inset 0 2px 6px rgba(0,0,0,.3); }
+.pin-card .pc-done:hover::before { transform: translateX(120%); }
+.pin-card .pc-done:hover svg { transform: scale(1.18) rotate(-3deg); }
+.pin-card .pc-done svg { transition: transform .18s cubic-bezier(.2,.9,.3,1.5); }
+.pin-card .pc-done:active { background: linear-gradient(#3fa876, #379a6b); color: #0b130e; box-shadow: inset 0 2px 6px rgba(0,0,0,.3); }
 .pin-card .pc-done.is-done { background: none; color: var(--text-dim); font-weight: 600; box-shadow: none; }
 .pin-card .pc-done.is-done:hover { background: rgba(255,255,255,.06); color: var(--text); box-shadow: none; letter-spacing: 0; }
+.pin-card .pc-done.is-done::before { display: none; }
 .pin-card .pc-sec { flex: 1; height: 46px; border: 0; border-left: 1px solid var(--border); background: none; color: var(--text-dim);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; transition: background .13s, color .13s; }
 .pin-card .pc-sec span { font-size: .6rem; letter-spacing: .04em; }
