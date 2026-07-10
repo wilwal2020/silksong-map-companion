@@ -302,7 +302,7 @@ export class PinManager {
     });
     el.addEventListener('pointermove', e => {
       if (!down) {
-        if (!this.suppressHover && !entry.card) this._showCard(entry, false);
+        if (!this.suppressHover && !entry.pendingMove && !entry.card) this._showCard(entry, false);
         return;
       }
       if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) >= 5) moved = true;
@@ -496,7 +496,7 @@ export class PinManager {
     if (entry.moveEl) { entry.moveEl.remove(); entry.moveEl = null; }
     if (from) this._lastMove = { id: entry.data.id, from };
     this.handlers.onChange(entry.data);
-    this._syncMoveHandles();
+    this.deselect();   // confirming the spot drops the selection (no lingering handle)
   }
 
   _cancelMove(entry) {
