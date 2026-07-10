@@ -269,7 +269,7 @@ export class PinManager {
       e.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
       if (e.card) this._positionCard(e);
       if (e.moveEl) this._positionMoveConfirm(e);
-      if (e.moveHandle) this._positionMoveHandle(e);
+      if (e.moveHandle && !e._freezeHandle) this._positionMoveHandle(e);
     }
   }
 
@@ -359,16 +359,24 @@ export class PinManager {
 
   _wireMoveHandle(entry, h) {
     let sx = 0, sy = 0, startX = 0, startY = 0, active = false, moved = false;
-    let offX = 0, offY = 0, glideStart = 0, last = null;
+    let offX = 0, offY = 0, glideStart = 0, last = null, covered = false;
     const GLIDE = 190;                          // ms for the pin to rise under the cursor
     const ease = t => 1 - Math.pow(1 - t, 3);   // easeOutCubic
 
-    // put the pin under the cursor, closing the grab-time gap as the glide runs
+    const cover = () => {                        // the pin now stands over the handle
+      if (covered) return;
+      covered = true; h.classList.add('covered');
+    };
+
+    // put the pin under the cursor, closing the grab-time gap as the glide runs.
+    // the handle itself is frozen (syncPositions skips it) so it stays put and
+    // the pin rises up over it, rather than the handle sliding away
     const apply = e => {
       const t = glideStart ? ease(Math.min(1, (performance.now() - glideStart) / GLIDE)) : 1;
       entry.data.x = sx + ((e.clientX - startX) - offX * t) / this.view.scale;
       entry.data.y = sy + ((e.clientY - startY) - offY * t) / this.view.scale;
       this.syncPositions();
+      if (t > 0.6) cover();
     };
     const tick = () => {
       if (!active || !glideStart) return;
@@ -379,18 +387,20 @@ export class PinManager {
 
     h.addEventListener('pointerdown', e => {
       e.stopPropagation(); e.preventDefault();
-      active = true; moved = false; last = e;
+      active = true; moved = false; covered = false; last = e;
       startX = e.clientX; startY = e.clientY;
-      sx = entry.data.x; sy = entry.data.y;   // where the move started (for ✗ / undo)
+      sx = entry.data.x; sy = entry.data.y;   // where the move started (for undo)
       // the handle floats above the pin — glide the pin up so it ends directly
-      // under the cursor, so letting go leaves it right where you can grab again
+      // under the cursor, and freeze the handle so the pin rises over it
       const p = this.view.mapToScreen(sx, sy);
       offX = p.x - startX; offY = p.y - startY;
+      entry._freezeHandle = true;
+      entry.el.classList.add('moving');       // lift the pin above the handle
       try { h.setPointerCapture(e.pointerId); } catch {}
       h.classList.add('dragging');
       this._hideCard(entry, true);
       if (Math.hypot(offX, offY) > 1) { glideStart = performance.now(); requestAnimationFrame(tick); }
-      else glideStart = 0;
+      else { glideStart = 0; cover(); }
     });
     h.addEventListener('pointermove', e => {
       if (!active) return;
@@ -402,26 +412,43 @@ export class PinManager {
       if (!active) return;
       active = false; glideStart = 0; last = null;
       try { h.releasePointerCapture(e.pointerId); } catch {}
-      h.classList.remove('dragging');
       if (moved) {
-        this._beginMoveConfirm(entry, { x: sx, y: sy });
+        // drop it here: commit straight away (no confirm step) and remember the
+        // origin for Ctrl+Z, then rebuild a fresh handle so it can move again
+        this._lastMove = { id: entry.data.id, from: { x: sx, y: sy } };
+        entry._freezeHandle = false;
+        entry.el.classList.remove('moving');
+        this.handlers.onChange(entry.data);
+        this._hideMoveHandle(entry);
+        this._syncMoveHandles();
       } else {
-        // only the pick-up glide happened, no drag — ease the pin back home
-        entry.data.x = sx; entry.data.y = sy;
-        this._glidePinBack(entry);
+        // a pick-up with no real drag — glide the pin back and restore the handle
+        this._returnPin(entry, { x: sx, y: sy });
       }
     });
   }
 
-  // ease a pin (and its move handle) to its current data position with a
-  // one-shot CSS transition — used when a handle grab is released without a drag
-  _glidePinBack(entry) {
-    const els = [entry.el, entry.moveHandle].filter(Boolean);
-    for (const el of els) el.style.transition = 'transform .18s cubic-bezier(.2,.8,.25,1)';
-    this.syncPositions();
-    const clear = () => { for (const el of els) el.style.transition = ''; };
-    entry.el.addEventListener('transitionend', clear, { once: true });
-    setTimeout(clear, 260);
+  // ease a picked-up pin back to a target position, then rebuild its handle —
+  // used when a handle grab is released without an actual drag
+  _returnPin(entry, to) {
+    const fromX = entry.data.x, fromY = entry.data.y;
+    const restore = () => {
+      entry._freezeHandle = false;
+      entry.el.classList.remove('moving');
+      this._hideMoveHandle(entry);
+      this._syncMoveHandles();
+    };
+    if (this.view.reduceMotion) { entry.data.x = to.x; entry.data.y = to.y; this.syncPositions(); restore(); return; }
+    const start = performance.now(), DUR = 150;
+    const ease = t => 1 - Math.pow(1 - t, 3);
+    const step = () => {
+      const t = ease(Math.min(1, (performance.now() - start) / DUR));
+      entry.data.x = fromX + (to.x - fromX) * t;
+      entry.data.y = fromY + (to.y - fromY) * t;
+      this.syncPositions();
+      if (t < 1) requestAnimationFrame(step); else restore();
+    };
+    requestAnimationFrame(step);
   }
 
   // ---- move confirmation (✓ keep / ✗ put back) ----------------------------
@@ -701,11 +728,32 @@ export class PinManager {
       // animation runs against a reflowing card, which reads as choppy
       if (entry.data.img && !entry.imgUrl) entry.imgUrl = URL.createObjectURL(entry.data.img);
       if (entry.imgUrl) { try { const im = new Image(); im.src = entry.imgUrl; await im.decode(); } catch {} }
-      if (entry.card) this._refreshCard(entry, { animateImg: true });
+      if (entry.card) { this._refreshCard(entry, { animateImg: true }); this._celebrateImage(entry); }
     } else {
       this.update(entry.data);
     }
     this.applyFilter();
     this.handlers.onPinsChanged?.();
+  }
+
+  // a satisfying landing when a picture drops into an open card: the pin marker
+  // flashes its ring, the card gives an accent-glow pulse, and a light sweeps
+  // once across the fresh screenshot
+  _celebrateImage(entry) {
+    this.flashPin(entry.data.id);
+    if (this.view.reduceMotion) return;
+    const card = entry.card;
+    if (!card) return;
+    card.classList.add('env-landed');
+    card.addEventListener('animationend', () => card.classList.remove('env-landed'), { once: true });
+    const imgWrap = card.querySelector('.pc-img.has-env');
+    if (imgWrap) {
+      const shine = document.createElement('div');
+      shine.className = 'env-shine';
+      imgWrap.appendChild(shine);
+      const drop = () => shine.remove();
+      shine.addEventListener('animationend', drop, { once: true });
+      setTimeout(drop, 900);
+    }
   }
 }

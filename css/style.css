@@ -148,6 +148,12 @@ html, body {
 .move-handle svg { width: 17px; height: 17px; display: block; }
 .move-handle:hover { border-color: #fff; }
 .move-handle.dragging { cursor: grabbing; border-color: #fff; box-shadow: 0 4px 14px rgba(0,0,0,.8), 0 0 16px -2px var(--pc, var(--accent)); }
+/* while dragging, the handle holds still and the pin rises over it; once
+   covered it fades out (kept in the DOM so it keeps the pointer capture) */
+.move-handle.covered { opacity: 0; }
+/* a pin being moved floats above its (frozen) handle so it covers it */
+.pin.moving { z-index: 12; }
+.pin.moving .pin-ico { cursor: grabbing; }
 
 /* move confirmation: filled ✓ keep / ✗ put back, floating above the pin */
 .move-confirm {
@@ -219,6 +225,22 @@ html, body {
 }
 .pin-card img.env.env-insert { animation: env-insert .42s cubic-bezier(.2,.85,.25,1) both; will-change: transform, opacity, filter; }
 .pin-card.no-pop { animation: none; }
+
+/* paste flair: as a screenshot lands, the whole card gives one accent-glow
+   pulse and a diagonal light sweeps across the new picture */
+@keyframes env-landed {
+  0%   { box-shadow: 0 20px 46px rgba(0,0,0,.62), 0 0 0 0 transparent; }
+  28%  { box-shadow: 0 20px 46px rgba(0,0,0,.62), 0 0 26px 2px color-mix(in srgb, var(--pc, var(--accent)) 72%, transparent); }
+  100% { box-shadow: 0 20px 46px rgba(0,0,0,.62), 0 0 0 0 transparent; }
+}
+.pin-card.no-pop.env-landed { animation: env-landed .62s ease-out; border-color: color-mix(in srgb, var(--pc, var(--accent)) 50%, rgba(232,227,212,.09)); }
+.env-shine { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+.env-shine::before {
+  content: ""; position: absolute; top: -20%; bottom: -20%; width: 55%; left: -70%;
+  background: linear-gradient(105deg, transparent, rgba(255,255,255,.34) 45%, rgba(255,255,255,.05) 62%, transparent);
+  transform: skewX(-12deg); animation: env-shine .6s cubic-bezier(.3,.7,.25,1) .08s both;
+}
+@keyframes env-shine { to { left: 165%; } }
 
 /* the shelf carrying category (+ note) — sits below the screenshot so the
    whole image stays visible (was overlaid, which cropped the bottom) */
