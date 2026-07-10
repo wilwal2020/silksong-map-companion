@@ -283,14 +283,21 @@ export class PinManager {
 
   _wire(entry) {
     const el = entry.el;
-    let downX = 0, downY = 0, moved = false, down = false;
+    let downX = 0, downY = 0, moved = false, down = false, dragging = false, sx = 0, sy = 0;
 
-    // the pin itself is no longer draggable — a plain click selects it, which
-    // reveals the move handle; dragging the pin does nothing
+    // a plain click selects the pin (revealing the move handle). The pin isn't
+    // draggable on its own EXCEPT while a move is pending its ✓/✗ — then the
+    // handle is gone and you nudge the pin directly by grabbing it
     el.addEventListener('pointerdown', e => {
       e.stopPropagation();
-      down = true; moved = false;
+      down = true; moved = false; dragging = false;
       downX = e.clientX; downY = e.clientY;
+      if (entry.pendingMove) {
+        dragging = true;
+        sx = entry.data.x; sy = entry.data.y;
+        entry.el.classList.add('moving');
+        this._hideMoveConfirm(entry);        // tuck the buttons away while dragging
+      }
       try { el.setPointerCapture(e.pointerId); } catch {}
     });
     el.addEventListener('pointermove', e => {
@@ -299,12 +306,23 @@ export class PinManager {
         return;
       }
       if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) >= 5) moved = true;
+      if (dragging && moved) {
+        entry.data.x = sx + (e.clientX - downX) / this.view.scale;
+        entry.data.y = sy + (e.clientY - downY) / this.view.scale;
+        this.syncPositions();
+      }
     });
     el.addEventListener('pointerup', e => {
       if (!down) return;
       down = false;
       try { el.releasePointerCapture(e.pointerId); } catch {}
-      if (moved || this.suppressHover) return; // a drag on the pin is ignored
+      if (dragging) {
+        dragging = false;
+        entry.el.classList.remove('moving');
+        this._showMoveConfirm(entry);        // let go → the ✓/✗ pops back up
+        return;
+      }
+      if (moved || this.suppressHover) return; // a stray drag on a settled pin is ignored
       this.select(entry.data.id);
       this._showCard(entry, true);
     });
@@ -413,14 +431,11 @@ export class PinManager {
       active = false; glideStart = 0; last = null;
       try { h.releasePointerCapture(e.pointerId); } catch {}
       if (moved) {
-        // drop it here: commit straight away (no confirm step) and remember the
-        // origin for Ctrl+Z, then rebuild a fresh handle so it can move again
-        this._lastMove = { id: entry.data.id, from: { x: sx, y: sy } };
+        // let go → pop the ✓/✗ confirm. From here the handle is gone; you nudge
+        // the pin directly until you keep (✓) or put it back (✗, to this origin)
         entry._freezeHandle = false;
         entry.el.classList.remove('moving');
-        this.handlers.onChange(entry.data);
-        this._hideMoveHandle(entry);
-        this._syncMoveHandles();
+        this._beginMoveConfirm(entry, { x: sx, y: sy });
       } else {
         // a pick-up with no real drag — glide the pin back and restore the handle
         this._returnPin(entry, { x: sx, y: sy });
@@ -522,6 +537,20 @@ export class PinManager {
     if (!entry.moveEl) return;
     const p = this.view.mapToScreen(entry.data.x, entry.data.y);
     entry.moveEl.style.transform = `translate(${p.x}px, ${p.y}px)`;
+  }
+
+  // hide/re-pop the ✓/✗ while the pin is being nudged directly (pending move)
+  _hideMoveConfirm(entry) {
+    if (entry.moveEl) entry.moveEl.style.display = 'none';
+  }
+
+  _showMoveConfirm(entry) {
+    if (!entry.moveEl) { if (entry.pendingMove) this._beginMoveConfirm(entry, entry.pendingMove); return; }
+    entry.moveEl.style.display = '';
+    this._positionMoveConfirm(entry);
+    entry.moveEl.style.animation = 'none';
+    void entry.moveEl.offsetWidth;           // replay the fade-in pop
+    entry.moveEl.style.animation = '';
   }
 
   // ---- hover / detail card ------------------------------------------------
