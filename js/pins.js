@@ -14,6 +14,9 @@ export const SVG = {
   pen: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2.6l2 2L6 12l-2.6.6L4 10z"/></svg>',
   trash: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5h9M6.5 4.5V3h3v1.5M5 4.5l.6 8h4.8l.6-8"/></svg>',
   camBig: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h3l1.4-2h7.2L16 8h5v11H3z"/><circle cx="12" cy="13" r="3.4"/></svg>',
+  move: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg>',
+  mcCheck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"/></svg>',
+  mcCross: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
 };
 
 // convex hull (Andrew's monotone chain) of a set of points
@@ -68,11 +71,19 @@ export class PinManager {
 
     document.addEventListener('pointerdown', e => {
       this.lastPlacedId = null; // any click means the user has moved on
-      if (this._stickyCard && !this._stickyCard.contains(e.target)
-          && !e.target.closest('.pin')) {
+      const onPin = e.target.closest('.pin');
+      const onMoveUI = e.target.closest('.move-confirm, .move-handle');
+      // interacting anywhere off the pin / move UI (a button, the map, a
+      // paste elsewhere) abandons an unconfirmed move and drops the selection
+      if (!onPin && !onMoveUI) {
+        this.cancelPendingMove();
+        if (this.selectedId) this.deselect();
+      }
+      if (this._stickyCard && !this._stickyCard.contains(e.target) && !onPin) {
         this._hideCard(this._stickyCardPin, true);
       }
     });
+    this._lastMove = null; // { id, from } — last confirmed move, for Ctrl+Z
 
     // a hover card stays open while the pointer is over the pin, over the
     // card, or inside the triangle bridging the two — so a diagonal move
@@ -111,7 +122,7 @@ export class PinManager {
     const ico = document.createElement('span');
     ico.className = 'pin-ico';
     el.appendChild(ico);
-    const entry = { data, el, ico, card: null, imgUrl: null, moveEl: null, pendingMove: null };
+    const entry = { data, el, ico, card: null, imgUrl: null, moveEl: null, moveHandle: null, pendingMove: null };
     this.pins.set(data.id, entry);
     this.layer.appendChild(el);
     this._decorate(entry);
@@ -143,10 +154,12 @@ export class PinManager {
     if (entry.imgUrl) URL.revokeObjectURL(entry.imgUrl);
     if (entry.card) entry.card.remove();
     if (entry.moveEl) entry.moveEl.remove();
+    if (entry.moveHandle) entry.moveHandle.remove();
     entry.el.remove();
     this.pins.delete(id);
     if (this.selectedId === id) this.selectedId = null;
     if (this.awaitingId === id) this.awaitingId = null;
+    if (this._lastMove && this._lastMove.id === id) this._lastMove = null;
     this.handlers.onPinsChanged?.();
   }
 
@@ -155,8 +168,16 @@ export class PinManager {
   }
 
   select(id) {
+    if (this.selectedId !== id) this.cancelPendingMove();
     this.selectedId = id;
     for (const [pid, e] of this.pins) e.el.classList.toggle('selected', pid === id);
+    this._syncMoveHandles();
+  }
+
+  deselect() {
+    this.selectedId = null;
+    for (const e of this.pins.values()) e.el.classList.remove('selected');
+    this._syncMoveHandles();
   }
 
   // ring flash on a pin (e.g. a screenshot just landed in it)
@@ -236,6 +257,7 @@ export class PinManager {
       const visible = this.filter.has(e.data.cat) && (this.showDone || !e.data.done);
       e.el.style.display = visible ? '' : 'none';
       if (e.moveEl) e.moveEl.style.display = visible ? '' : 'none';
+      if (e.moveHandle) e.moveHandle.style.display = visible ? '' : 'none';
       if (!visible && e.card) this._hideCard(e, true);
     }
   }
@@ -246,6 +268,7 @@ export class PinManager {
       e.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
       if (e.card) this._positionCard(e);
       if (e.moveEl) this._positionMoveConfirm(e);
+      if (e.moveHandle) this._positionMoveHandle(e);
     }
   }
 
@@ -259,38 +282,30 @@ export class PinManager {
 
   _wire(entry) {
     const el = entry.el;
-    let downX = 0, downY = 0, moved = false, dragging = false, origin = null;
+    let downX = 0, downY = 0, moved = false, down = false;
 
+    // the pin itself is no longer draggable — a plain click selects it, which
+    // reveals the move handle; dragging the pin does nothing
     el.addEventListener('pointerdown', e => {
       e.stopPropagation();
-      dragging = true; moved = false;
-      // keep the original spot across repeated nudges while a move is pending
-      origin = entry.pendingMove || { x: entry.data.x, y: entry.data.y };
+      down = true; moved = false;
       downX = e.clientX; downY = e.clientY;
-      el.setPointerCapture(e.pointerId);
+      try { el.setPointerCapture(e.pointerId); } catch {}
     });
     el.addEventListener('pointermove', e => {
-      if (!dragging) {
-        // plain hover: make sure the card is up even if pointerenter was missed
-        if (!this.suppressHover && !entry.pendingMove && !entry.card) this._showCard(entry, false);
+      if (!down) {
+        if (!this.suppressHover && !entry.card) this._showCard(entry, false);
         return;
       }
-      if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) < 5) return;
-      moved = true;
-      this._hideCard(entry);
-      const m = this.view.screenToMap(e.clientX, e.clientY);
-      entry.data.x = m.x; entry.data.y = m.y;
-      this.syncPositions();
+      if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) >= 5) moved = true;
     });
-    el.addEventListener('pointerup', () => {
-      if (!dragging) return;
-      dragging = false;
-      if (moved) {
-        this._beginMoveConfirm(entry, origin);
-      } else if (!this.suppressHover) {
-        this.select(entry.data.id);
-        this._showCard(entry, true);
-      }
+    el.addEventListener('pointerup', e => {
+      if (!down) return;
+      down = false;
+      try { el.releasePointerCapture(e.pointerId); } catch {}
+      if (moved || this.suppressHover) return; // a drag on the pin is ignored
+      this.select(entry.data.id);
+      this._showCard(entry, true);
     });
 
     el.addEventListener('pointerenter', () => {
@@ -309,18 +324,79 @@ export class PinManager {
     });
   }
 
+  // ---- move handle: appears on the selected pin, drag it to reposition -----
+
+  _syncMoveHandles() {
+    for (const [pid, e] of this.pins) {
+      const show = pid === this.selectedId && !e.pendingMove && e.el.style.display !== 'none';
+      if (show) this._showMoveHandle(e); else this._hideMoveHandle(e);
+    }
+  }
+
+  _showMoveHandle(entry) {
+    if (!entry.moveHandle) {
+      const h = document.createElement('div');
+      h.className = 'move-handle';
+      h.title = 'Drag to move this pin';
+      h.innerHTML = SVG.move;
+      this._wireMoveHandle(entry, h);
+      this.layer.appendChild(h);
+      entry.moveHandle = h;
+    }
+    this._positionMoveHandle(entry);
+  }
+
+  _hideMoveHandle(entry) {
+    if (entry.moveHandle) { entry.moveHandle.remove(); entry.moveHandle = null; }
+  }
+
+  _positionMoveHandle(entry) {
+    if (!entry.moveHandle) return;
+    const p = this.view.mapToScreen(entry.data.x, entry.data.y);
+    entry.moveHandle.style.transform = `translate(${p.x}px, ${p.y}px)`;
+  }
+
+  _wireMoveHandle(entry, h) {
+    let sx = 0, sy = 0, startX = 0, startY = 0, active = false, moved = false;
+    h.addEventListener('pointerdown', e => {
+      e.stopPropagation(); e.preventDefault();
+      active = true; moved = false;
+      startX = e.clientX; startY = e.clientY;
+      sx = entry.data.x; sy = entry.data.y;   // where the move started (for ✗ / undo)
+      try { h.setPointerCapture(e.pointerId); } catch {}
+      h.classList.add('dragging');
+      this._hideCard(entry, true);
+    });
+    h.addEventListener('pointermove', e => {
+      if (!active) return;
+      if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
+      moved = true;
+      entry.data.x = sx + (e.clientX - startX) / this.view.scale;
+      entry.data.y = sy + (e.clientY - startY) / this.view.scale;
+      this.syncPositions();
+    });
+    h.addEventListener('pointerup', e => {
+      if (!active) return;
+      active = false;
+      try { h.releasePointerCapture(e.pointerId); } catch {}
+      h.classList.remove('dragging');
+      if (moved) this._beginMoveConfirm(entry, { x: sx, y: sy });
+    });
+  }
+
   // ---- move confirmation (✓ keep / ✗ put back) ----------------------------
 
   _beginMoveConfirm(entry, origin) {
     entry.pendingMove = origin;
+    this._hideMoveHandle(entry);
     if (!entry.moveEl) {
       const wrap = document.createElement('div');
       wrap.className = 'move-confirm';
       const ok = document.createElement('button');
-      ok.className = 'mc-btn mc-ok'; ok.textContent = '✓';
+      ok.className = 'mc-btn mc-ok'; ok.innerHTML = SVG.mcCheck;
       ok.title = 'Keep the new position';
       const no = document.createElement('button');
-      no.className = 'mc-btn mc-no'; no.textContent = '✗';
+      no.className = 'mc-btn mc-no'; no.innerHTML = SVG.mcCross;
       no.title = 'Put it back';
       for (const b of [ok, no]) b.addEventListener('pointerdown', e => e.stopPropagation());
       ok.addEventListener('click', e => { e.stopPropagation(); this._commitMove(entry); });
@@ -333,9 +409,12 @@ export class PinManager {
   }
 
   _commitMove(entry) {
+    const from = entry.pendingMove;
     entry.pendingMove = null;
     if (entry.moveEl) { entry.moveEl.remove(); entry.moveEl = null; }
+    if (from) this._lastMove = { id: entry.data.id, from };
     this.handlers.onChange(entry.data);
+    this._syncMoveHandles();
   }
 
   _cancelMove(entry) {
@@ -344,6 +423,32 @@ export class PinManager {
     if (o) { entry.data.x = o.x; entry.data.y = o.y; }
     if (entry.moveEl) { entry.moveEl.remove(); entry.moveEl = null; }
     this.syncPositions();
+    this._syncMoveHandles();
+  }
+
+  // abandon any unconfirmed move (revert the pin). Called when the user
+  // interacts elsewhere — a button, a paste, a click off the pin.
+  cancelPendingMove() {
+    for (const e of this.pins.values()) if (e.pendingMove) this._cancelMove(e);
+  }
+
+  // Ctrl+Z for pin placement: an unconfirmed move reverts; otherwise the last
+  // confirmed move is put back. Returns true if it handled the undo.
+  undoLastMove() {
+    for (const e of this.pins.values()) {
+      if (e.pendingMove) { this._cancelMove(e); return true; }
+    }
+    if (this._lastMove) {
+      const e = this.pins.get(this._lastMove.id);
+      if (e) {
+        e.data.x = this._lastMove.from.x; e.data.y = this._lastMove.from.y;
+        this.syncPositions();
+        this.handlers.onChange(e.data);
+      }
+      this._lastMove = null;
+      return true;
+    }
+    return false;
   }
 
   _positionMoveConfirm(entry) {

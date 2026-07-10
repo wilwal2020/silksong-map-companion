@@ -31,8 +31,10 @@
 <aside id="cat-bar">
   <div class="cat-bar-head">
     <span class="cat-bar-title">Pin types</span>
-    <button id="btn-cat-all" class="mini" title="Show every type again"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 21 8l-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg><span>All</span></button>
+    <button id="btn-cat-all" class="mini" title="Show every type"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/></svg><span>All</span></button>
+    <button id="btn-cat-none" class="mini" title="Hide every type"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 10.7a2 2 0 0 0 2.8 2.8"/><path d="M9.9 5.3A9.6 9.6 0 0 1 12 5c6.4 0 10 7 10 7a15.4 15.4 0 0 1-3.1 3.9M6.2 6.3A15.3 15.3 0 0 0 2 12s3.6 7 10 7a9.3 9.3 0 0 0 3.9-.8"/></svg><span>Hide all</span></button>
   </div>
+  <p id="solo-hint" class="solo-hint hidden">Showing one type — click it again or <b>All</b> to bring the rest back.</p>
   <div id="cat-list"></div>
   <label class="cat-done-toggle" title="Show pins you've already checked off">
     <span class="cat-done-ico">👁</span>

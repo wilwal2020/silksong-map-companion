@@ -264,7 +264,8 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'
       && !document.querySelector('dialog[open]')) {
     e.preventDefault();
-    undoLast();
+    // a pending or just-confirmed pin move takes priority over a paste undo
+    if (!pins.undoLastMove()) undoLast();
   }
 });
 $('#btn-await-skip').addEventListener('click', () => skipAwaitingEnv());
@@ -450,6 +451,7 @@ async function applyMapPlacement(bitmap, rect, marker) {
     data.note = edit.note;
     pins.update(data);
     persistPin(data);
+    ensureCatVisible(data.cat);
   }
   // no player marker found means the pin is only a guess at the area's centre
   // — tell them to drag it onto where they actually are
@@ -755,6 +757,8 @@ function routePaste(blob) {
     pinEditorAttach(blob);
     return;
   }
+  // pasting abandons any pin move in progress
+  pins.cancelPendingMove();
   // don't intercept pastes while choosing a pin type / editing a custom type
   if (document.querySelector('#dlg-pin[open], #dlg-cattype[open]')) return;
   // only a pin explicitly waiting for its picture (its 📷 button) takes a
@@ -764,13 +768,14 @@ function routePaste(blob) {
     attachToAwaiting(blob);
     return;
   }
-  // ...except when the pointer is on a pin card's empty screenshot square
-  // RIGHT NOW (live :hover check — tracked hover state went stale when the
-  // card moved under a zoom or pan and swallowed unrelated pastes)
-  const hoverSquare = document.querySelector('.pin-card .no-env:hover');
-  const hoverEntry = hoverSquare && pins.pins.get(hoverSquare.dataset.pinId);
-  if (hoverEntry) {
-    const fromRect = hoverSquare.getBoundingClientRect(); // capture before update rebuilds the card
+  // hovering an EMPTY pin (its marker or its open card) attaches the paste to
+  // it directly — a filled pin is left alone so a fresh map screenshot isn't
+  // hijacked by the last pin you looked at
+  const hoverId = pins.pasteTarget();
+  const hoverEntry = hoverId && pins.pins.get(hoverId);
+  if (hoverEntry && !hoverEntry.data.img) {
+    const sq = document.querySelector('.pin-card .no-env');
+    const fromRect = sq ? sq.getBoundingClientRect() : null;
     hoverEntry.data.img = blob;
     pins.update(hoverEntry.data);
     persistPin(hoverEntry.data);
@@ -932,9 +937,9 @@ function renderCatList() {
     // temporary solo and becomes the new base selection
     row.querySelector('.cat-check').addEventListener('change', e => {
       e.stopPropagation();
+      if (soloedId !== null) { e.target.checked = pins.filter.has(c.id); return; } // locked while focused
       if (e.target.checked) pins.filter.add(c.id);
       else pins.filter.delete(c.id);
-      soloReturn = null; soloedId = null;
       row.classList.toggle('off', !e.target.checked);
       pins.applyFilter();
       persistFilter();
@@ -970,6 +975,7 @@ function renderCatList() {
   newBtn.addEventListener('click', () => { catTypeCreatedCb = null; openCatTypeDialog(); });
   list.appendChild(newBtn);
   updateCatCounts();
+  updateSoloUI();
 }
 
 // clicking a row shows only that type; clicking it again restores whatever
@@ -989,6 +995,33 @@ function toggleSolo(id) {
   }
   pins.applyFilter();
   syncAllRows();
+  updateSoloUI();
+  persistFilter();
+}
+
+// reflect single-type focus: highlight the soloed row, show the restore hint,
+// and lock the checkboxes (they mirror the focus, not a manual selection)
+function updateSoloUI() {
+  const list = $('#cat-list');
+  list.classList.toggle('soloing', soloedId !== null);
+  $('#solo-hint').classList.toggle('hidden', soloedId === null);
+  for (const row of list.querySelectorAll('.cat-row')) {
+    const isSolo = soloedId !== null && row.dataset.id === soloedId;
+    row.classList.toggle('solo', isSolo);
+    row.title = isSolo ? 'Showing only this type — click it again to bring the rest back'
+      : (soloedId !== null ? '' : 'Click to show only this type');
+  }
+}
+
+// make sure a category's pins are visible (e.g. after adding a pin to a type
+// that was hidden) — ends any single-type focus and checks the type on
+function ensureCatVisible(catId) {
+  if (soloedId === null && pins.filter.has(catId)) return;
+  if (soloedId !== null) { pins.filter = new Set(soloReturn || pins.filter); soloReturn = null; soloedId = null; }
+  pins.filter.add(catId);
+  pins.applyFilter();
+  syncAllRows();
+  updateSoloUI();
   persistFilter();
 }
 
@@ -1180,13 +1213,16 @@ async function createManualPin(x, y) {
   };
   pins.add(data, { select: true });
   pins.lastPlacedId = data.id;
-  persistPin(data);
   const edit = await openPinEditor(data, true);
   if (edit) {
     data.cat = edit.cat;
     data.note = edit.note;
     pins.update(data);
     persistPin(data);
+    ensureCatVisible(data.cat);
+  } else {
+    // cancelled — the pin was only provisional, so it shouldn't stick around
+    pins.remove(data.id);
   }
 }
 
@@ -1283,6 +1319,15 @@ function buildToolbar() {
     soloReturn = null; soloedId = null;
     pins.applyFilter();
     syncAllRows();
+    updateSoloUI();
+    persistFilter();
+  });
+  $('#btn-cat-none').addEventListener('click', () => {
+    pins.filter.clear();
+    soloReturn = null; soloedId = null;
+    pins.applyFilter();
+    syncAllRows();
+    updateSoloUI();
     persistFilter();
   });
   const tip = emojiKeyboardTip();
@@ -1382,6 +1427,7 @@ async function init() {
       data.note = edit.note;
       pins.update(data);
       persistPin(data);
+      ensureCatVisible(data.cat);
     },
     onDelete: async data => {
       if (!await confirmDialog('This removes the pin and its attached picture.',
