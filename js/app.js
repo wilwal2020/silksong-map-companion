@@ -1267,6 +1267,14 @@ let helpGoto = () => {};
 function wireHelpStepper() {
   const dlg = $('#dlg-help');
   const slides = [...dlg.querySelectorAll('.help-slide')];
+  // an example image that fails to load (e.g. an asset not added yet) hides its
+  // figure rather than showing a broken-image icon — cover both a later error
+  // and one that already failed before this ran
+  for (const img of dlg.querySelectorAll('.help-fig img')) {
+    const hide = () => { const f = img.closest('.help-fig'); if (f) f.style.display = 'none'; };
+    img.addEventListener('error', hide);
+    if (img.complete && img.naturalWidth === 0) hide();
+  }
   const back = $('#help-back'), next = $('#help-next'), dotsWrap = $('#help-dots');
   dotsWrap.innerHTML = slides.map(() => '<span class="help-dot"></span>').join('');
   const dots = [...dotsWrap.children];
