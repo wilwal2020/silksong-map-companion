@@ -72,17 +72,27 @@ export class PinManager {
 
     document.addEventListener('pointerdown', e => {
       this.lastPlacedId = null; // any click means the user has moved on
-      const onPin = e.target.closest('.pin');
-      const onMoveUI = e.target.closest('.move-confirm, .move-handle');
-      // interacting anywhere off the pin / move UI (a button, the map, a
-      // paste elsewhere) abandons an unconfirmed move and drops the selection
-      if (!onPin && !onMoveUI) {
+      if (e.target.closest('.pin, .move-confirm, .move-handle')) return;
+      // Off the pin / move UI this may be a click that dismisses the selection
+      // and an unconfirmed move — or it may be a pan/drag of the map, which must
+      // NOT abandon a move in progress. Defer to pointerup: only a click (little
+      // to no movement) dismisses; a pan leaves the move and selection alone.
+      const sx = e.clientX, sy = e.clientY, target = e.target;
+      const cleanup = () => {
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', cleanup);
+      };
+      const onUp = ev => {
+        cleanup();
+        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) >= 6) return; // a pan — keep everything
         this.cancelPendingMove();
         if (this.selectedId) this.deselect();
-      }
-      if (this._stickyCard && !this._stickyCard.contains(e.target) && !onPin) {
-        this._hideCard(this._stickyCardPin, true);
-      }
+        if (this._stickyCard && !this._stickyCard.contains(target)) {
+          this._hideCard(this._stickyCardPin, true);
+        }
+      };
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', cleanup);
     });
     this._lastMove = null; // { id, from } — last confirmed move, for Ctrl+Z
 
