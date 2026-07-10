@@ -359,30 +359,69 @@ export class PinManager {
 
   _wireMoveHandle(entry, h) {
     let sx = 0, sy = 0, startX = 0, startY = 0, active = false, moved = false;
+    let offX = 0, offY = 0, glideStart = 0, last = null;
+    const GLIDE = 190;                          // ms for the pin to rise under the cursor
+    const ease = t => 1 - Math.pow(1 - t, 3);   // easeOutCubic
+
+    // put the pin under the cursor, closing the grab-time gap as the glide runs
+    const apply = e => {
+      const t = glideStart ? ease(Math.min(1, (performance.now() - glideStart) / GLIDE)) : 1;
+      entry.data.x = sx + ((e.clientX - startX) - offX * t) / this.view.scale;
+      entry.data.y = sy + ((e.clientY - startY) - offY * t) / this.view.scale;
+      this.syncPositions();
+    };
+    const tick = () => {
+      if (!active || !glideStart) return;
+      if (last) apply(last);
+      if (performance.now() - glideStart < GLIDE) requestAnimationFrame(tick);
+      else glideStart = 0;
+    };
+
     h.addEventListener('pointerdown', e => {
       e.stopPropagation(); e.preventDefault();
-      active = true; moved = false;
+      active = true; moved = false; last = e;
       startX = e.clientX; startY = e.clientY;
       sx = entry.data.x; sy = entry.data.y;   // where the move started (for ✗ / undo)
+      // the handle floats above the pin — glide the pin up so it ends directly
+      // under the cursor, so letting go leaves it right where you can grab again
+      const p = this.view.mapToScreen(sx, sy);
+      offX = p.x - startX; offY = p.y - startY;
       try { h.setPointerCapture(e.pointerId); } catch {}
       h.classList.add('dragging');
       this._hideCard(entry, true);
+      if (Math.hypot(offX, offY) > 1) { glideStart = performance.now(); requestAnimationFrame(tick); }
+      else glideStart = 0;
     });
     h.addEventListener('pointermove', e => {
       if (!active) return;
-      if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
-      moved = true;
-      entry.data.x = sx + (e.clientX - startX) / this.view.scale;
-      entry.data.y = sy + (e.clientY - startY) / this.view.scale;
-      this.syncPositions();
+      last = e;
+      if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) >= 4) moved = true;
+      apply(e);
     });
     h.addEventListener('pointerup', e => {
       if (!active) return;
-      active = false;
+      active = false; glideStart = 0; last = null;
       try { h.releasePointerCapture(e.pointerId); } catch {}
       h.classList.remove('dragging');
-      if (moved) this._beginMoveConfirm(entry, { x: sx, y: sy });
+      if (moved) {
+        this._beginMoveConfirm(entry, { x: sx, y: sy });
+      } else {
+        // only the pick-up glide happened, no drag — ease the pin back home
+        entry.data.x = sx; entry.data.y = sy;
+        this._glidePinBack(entry);
+      }
     });
+  }
+
+  // ease a pin (and its move handle) to its current data position with a
+  // one-shot CSS transition — used when a handle grab is released without a drag
+  _glidePinBack(entry) {
+    const els = [entry.el, entry.moveHandle].filter(Boolean);
+    for (const el of els) el.style.transition = 'transform .18s cubic-bezier(.2,.8,.25,1)';
+    this.syncPositions();
+    const clear = () => { for (const el of els) el.style.transition = ''; };
+    entry.el.addEventListener('transitionend', clear, { once: true });
+    setTimeout(clear, 260);
   }
 
   // ---- move confirmation (✓ keep / ✗ put back) ----------------------------
@@ -654,10 +693,18 @@ export class PinManager {
 
   // a paste onto an empty pin: keep the card open and slide the picture in,
   // rather than closing the card and flying the image into the marker
-  insertImage(entry) {
+  async insertImage(entry) {
     this._decorate(entry);
-    if (entry.card) this._refreshCard(entry, { animateImg: true });
-    else this.update(entry.data);
+    if (entry.card) {
+      // decode the picture up front so the card grows to its final height in a
+      // single step — otherwise the image pops in a frame late and the reveal
+      // animation runs against a reflowing card, which reads as choppy
+      if (entry.data.img && !entry.imgUrl) entry.imgUrl = URL.createObjectURL(entry.data.img);
+      if (entry.imgUrl) { try { const im = new Image(); im.src = entry.imgUrl; await im.decode(); } catch {} }
+      if (entry.card) this._refreshCard(entry, { animateImg: true });
+    } else {
+      this.update(entry.data);
+    }
     this.applyFilter();
     this.handlers.onPinsChanged?.();
   }

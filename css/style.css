@@ -210,9 +210,14 @@ html, body {
   font-size: .74rem; font-weight: 600; letter-spacing: .02em; color: #fff;
   background: rgba(120,25,20,.82); border: 1px solid var(--rose); border-radius: 999px; padding: 5px 12px;
 }
-/* a pasted picture sliding into an already-open card (no fly-into-marker) */
-@keyframes env-insert { from { opacity: 0; transform: scale(1.03); } }
-.pin-card img.env.env-insert { animation: env-insert .28s ease; }
+/* a pasted picture settling into an already-open card (no fly-into-marker):
+   rises a touch, comes into focus, and eases to rest for a satisfying drop-in */
+@keyframes env-insert {
+  0%   { opacity: 0; transform: scale(1.05) translateY(7px); filter: blur(7px); }
+  55%  { opacity: 1; }
+  100% { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); }
+}
+.pin-card img.env.env-insert { animation: env-insert .42s cubic-bezier(.2,.85,.25,1) both; will-change: transform, opacity, filter; }
 .pin-card.no-pop { animation: none; }
 
 /* the shelf carrying category (+ note) — sits below the screenshot so the
@@ -518,6 +523,7 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   .done-burst, .pin.leaving .pin-ico, .btn:active, .add-pin.active,
   .add-pin.active .add-pin-ico, .pin-card,
   dialog[open], dialog::backdrop, #dlg-pin.from-pin, .attach-fly,
+  .pin-card img.env.env-insert,
   .ghost-pin { animation: none !important; transition: none !important; }
 }
 
