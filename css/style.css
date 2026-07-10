@@ -137,7 +137,7 @@ html, body {
 
 /* drag handle shown on the selected pin — grab it to reposition the pin */
 .move-handle {
-  position: absolute; left: 0; top: 0; margin: -54px 0 0 -16px;
+  position: absolute; left: 0; top: 0; margin: -54px 0 0 -16px; pointer-events: auto;
   width: 32px; height: 32px; z-index: 9; cursor: grab;
   display: grid; place-items: center; border-radius: 50%; color: var(--text);
   background: radial-gradient(circle at 35% 30%, #2b3242, #12151d 76%);
@@ -189,7 +189,31 @@ html, body {
 
 .pin-card .pc-img { position: relative; background: #000; }
 /* natural aspect so the whole screenshot shows (no crop); tall shots capped */
-.pin-card .pc-img img.env { display: block; width: 100%; height: auto; max-height: 62vh; object-fit: contain; cursor: zoom-in; }
+.pin-card .pc-img img.env { display: block; width: 100%; height: auto; max-height: 62vh; object-fit: contain; cursor: zoom-in; transition: opacity .16s; }
+/* remove-picture ✕ (top-right of the image): hover dims the picture, and it
+   takes two clicks to confirm; a spelled-out hint shows once armed */
+.pin-card .pc-del-img {
+  position: absolute; top: 8px; right: 8px; z-index: 3; padding: 0;
+  width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  border: 1px solid rgba(255,255,255,.28); background: rgba(10,12,16,.62); color: #fff; cursor: pointer;
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  transition: background .14s, border-color .14s, transform .14s;
+}
+.pin-card .pc-del-img svg { width: 14px; height: 14px; display: block; }
+.pin-card .pc-del-img:hover { background: color-mix(in srgb, var(--danger) 62%, rgba(10,12,16,.7)); border-color: var(--rose); }
+.pin-card .pc-img.del-hover img.env { opacity: .4; }
+.pin-card .pc-img.del-armed img.env { opacity: .35; }
+.pin-card .pc-img.del-armed .pc-del-img { background: var(--danger); border-color: var(--rose); transform: scale(1.08); }
+.pin-card .pc-img.del-armed::after {
+  content: "Click again to remove"; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  z-index: 2; pointer-events: none; white-space: nowrap;
+  font-size: .74rem; font-weight: 600; letter-spacing: .02em; color: #fff;
+  background: rgba(120,25,20,.82); border: 1px solid var(--rose); border-radius: 999px; padding: 5px 12px;
+}
+/* a pasted picture sliding into an already-open card (no fly-into-marker) */
+@keyframes env-insert { from { opacity: 0; transform: scale(1.03); } }
+.pin-card img.env.env-insert { animation: env-insert .28s ease; }
+.pin-card.no-pop { animation: none; }
 
 /* the shelf carrying category (+ note) — sits below the screenshot so the
    whole image stays visible (was overlaid, which cropped the bottom) */
@@ -225,7 +249,7 @@ html, body {
 .pin-card .pc-acts > :first-child { border-bottom-left-radius: 13px; }
 .pin-card .pc-acts > :last-child { border-bottom-right-radius: 13px; }
 .pin-card .pc-acts svg { width: 16px; height: 16px; display: block; }
-.pin-card .pc-done { position: relative; flex: 1.7; min-width: 0; height: 46px; border: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
+.pin-card .pc-done { position: relative; flex: 2.7; min-width: 0; height: 46px; border: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
   background: linear-gradient(#54c08a, #3fa876); color: #0b130e; font-weight: 700; font-size: .9rem;
   transition: background .26s ease, box-shadow .26s ease, color .26s ease; }
 /* hover inverts to the dark panel with a green outline + green label */
@@ -572,12 +596,6 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   box-shadow: inset 3px 0 0 var(--pc, var(--accent)), 0 0 0 1px var(--pc, var(--accent)), 0 0 15px -6px var(--pc, var(--accent)); }
 #cat-list.soloing .cat-check-wrap { pointer-events: none; }
 #cat-list.soloing .cat-check { opacity: .35; }
-.solo-hint {
-  margin: 0; padding: 9px 13px; font-size: .74rem; line-height: 1.4;
-  color: var(--text-dim); background: var(--accent-soft);
-  border-bottom: 1px solid var(--border);
-}
-.solo-hint b { color: var(--rose); }
 
 .cat-ico { font-size: 1.3rem; line-height: 1; width: 26px; text-align: center; flex: none; filter: drop-shadow(0 0 4px var(--pc, transparent)); }
 .cat-name { flex: 1; font-size: .92rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

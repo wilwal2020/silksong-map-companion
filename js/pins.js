@@ -17,6 +17,7 @@ export const SVG = {
   move: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg>',
   mcCheck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"/></svg>',
   mcCross: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  xmark: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
 };
 
 // convex hull (Andrew's monotone chain) of a set of points
@@ -514,6 +515,7 @@ export class PinManager {
     const imgWrap = document.createElement('div');
     imgWrap.className = 'pc-img';
     if (d.img) {
+      imgWrap.classList.add('has-env');
       if (!entry.imgUrl) entry.imgUrl = URL.createObjectURL(d.img);
       const img = document.createElement('img');
       img.className = 'env';
@@ -522,6 +524,27 @@ export class PinManager {
       img.addEventListener('load', () => this._positionCard(entry));
       img.addEventListener('click', () => this.handlers.onLightbox(entry.imgUrl));
       imgWrap.appendChild(img);
+      // ✕ to remove the picture — hovering dims the image; it takes two clicks
+      // to confirm, and moving off the image resets the confirmation
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'pc-del-img';
+      del.title = 'Remove this picture';
+      del.setAttribute('aria-label', 'Remove this picture');
+      del.innerHTML = SVG.xmark;
+      let armed = false;
+      del.addEventListener('pointerenter', () => imgWrap.classList.add('del-hover'));
+      del.addEventListener('pointerleave', () => imgWrap.classList.remove('del-hover'));
+      del.addEventListener('click', e => {
+        e.stopPropagation();
+        if (!armed) { armed = true; imgWrap.classList.add('del-armed'); return; }
+        if (entry.imgUrl) { URL.revokeObjectURL(entry.imgUrl); entry.imgUrl = null; }
+        d.img = null;
+        this.handlers.onChange(d);
+        this._refreshCard(entry);
+      });
+      imgWrap.addEventListener('pointerleave', () => { armed = false; imgWrap.classList.remove('del-armed'); });
+      imgWrap.appendChild(del);
     } else {
       // the whole image square is the paste target; routePaste reads
       // .pin-card .no-env:hover + dataset.pinId at paste time
@@ -601,7 +624,6 @@ export class PinManager {
       b.addEventListener('click', fn);
       acts.appendChild(b);
     };
-    sec(SVG.cam, 'Replace', 'Attach or replace the area screenshot', () => this.handlers.onRequestAttach(d));
     sec(SVG.pen, 'Edit', 'Edit category & note', () => this.handlers.onEdit(d));
     sec(SVG.trash, 'Delete', 'Delete pin', () => this.handlers.onDelete(d), true);
     card.appendChild(acts);
@@ -611,5 +633,32 @@ export class PinManager {
 
     this.layer.appendChild(card);
     return card;
+  }
+
+  // rebuild an already-open card in place (e.g. after its picture changed)
+  // without the entrance pop, preserving whether it's sticky or a hover card
+  _refreshCard(entry, { animateImg = false } = {}) {
+    if (!entry.card) return;
+    const wasSticky = this._stickyCard === entry.card;
+    const wasHover = this._hoverCardEntry === entry;
+    entry.card.remove();
+    entry.card = null;
+    const card = this._buildCard(entry);   // appends to the layer
+    card.classList.add('no-pop');
+    if (animateImg) card.querySelector('img.env')?.classList.add('env-insert');
+    entry.card = card;
+    if (wasSticky) { this._stickyCard = card; this._stickyCardPin = entry; }
+    if (wasHover) this._hoverCardEntry = entry;
+    this._positionCard(entry);
+  }
+
+  // a paste onto an empty pin: keep the card open and slide the picture in,
+  // rather than closing the card and flying the image into the marker
+  insertImage(entry) {
+    this._decorate(entry);
+    if (entry.card) this._refreshCard(entry, { animateImg: true });
+    else this.update(entry.data);
+    this.applyFilter();
+    this.handlers.onPinsChanged?.();
   }
 }

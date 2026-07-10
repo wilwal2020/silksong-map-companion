@@ -774,12 +774,10 @@ function routePaste(blob) {
   const hoverId = pins.pasteTarget();
   const hoverEntry = hoverId && pins.pins.get(hoverId);
   if (hoverEntry && !hoverEntry.data.img) {
-    const sq = document.querySelector('.pin-card .no-env');
-    const fromRect = sq ? sq.getBoundingClientRect() : null;
     hoverEntry.data.img = blob;
-    pins.update(hoverEntry.data);
     persistPin(hoverEntry.data);
-    flyImageToPin(blob, hoverEntry, fromRect);
+    // keep the card open and slide the picture into it (no fly-into-marker)
+    pins.insertImage(hoverEntry);
     toast('Screenshot attached.', 'ok');
     return;
   }
@@ -1004,7 +1002,6 @@ function toggleSolo(id) {
 function updateSoloUI() {
   const list = $('#cat-list');
   list.classList.toggle('soloing', soloedId !== null);
-  $('#solo-hint').classList.toggle('hidden', soloedId === null);
   for (const row of list.querySelectorAll('.cat-row')) {
     const isSolo = soloedId !== null && row.dataset.id === soloedId;
     row.classList.toggle('solo', isSolo);
