@@ -508,7 +508,7 @@ function refinePass(cv, tmplBase, aspect, cx2, cy2, twCenter, ks, progressFrom) 
 // because edges are what discriminate one room layout from another — fill
 // overlap alone accepts any roomy neighborhood. A fill sanity check on top
 // rejects placements whose rooms hang over reference void.
-function fillRefine(mask, baseW, baseH, crop, hint, mode) {
+function fillRefine(mask, raw, baseW, baseH, crop, hint, mode) {
   const fill = ensureRefFill();
   const edge = ensureRefEdge();
   const RW = refBitmap.width, RH = refBitmap.height;
@@ -519,16 +519,20 @@ function fillRefine(mask, baseW, baseH, crop, hint, mode) {
       ? [0.985, 1.0, 1.015]
       : [0.93, 0.965, 1.0, 1.035, 1.07];
 
-  // boundary points of the shot's content mask, restricted to the trimmed
-  // crop (skips HUD borders); fill points kept separately for the sanity check
+  // Boundary points of the shot's content mask, restricted to the trimmed
+  // crop (skips HUD borders). Fill points for the sanity check come from the
+  // RAW threshold mask (actual drawn strokes), NOT the enclosure-filled mask:
+  // on wide shots the explored corridors can enclose big unexplored pockets,
+  // and fillEnclosed marks those as "interior" — junk points that land on
+  // reference void and sank a correct 4-name placement below the gate.
   const epts = [], fpts = [];
   for (let y = crop.y + 1; y < crop.y + crop.h - 1; y++) {
     const row = y * baseW;
     for (let x = crop.x + 1; x < crop.x + crop.w - 1; x++) {
       const p = row + x;
+      if (raw[p] && ((x ^ y) & 3) === 0) fpts.push(x, y); // sparse stroke sample
       if (!mask[p]) continue;
       if (!mask[p - 1] || !mask[p + 1] || !mask[p - baseW] || !mask[p + baseW]) epts.push(x, y);
-      else if (((x ^ y) & 3) === 0) fpts.push(x, y); // sparse interior sample
     }
   }
   let estride = 1;
@@ -931,7 +935,7 @@ async function locate(shot, mode, hint) {
     // regions where the screenshot shows only a subset of the reference's
     // rooms. The returned rect covers the full base frame, which IS the
     // full shot (base is just the shot resized) — no coordinate mapping.
-    return fillRefine(mask, baseW, baseH, rect, hint, mode);
+    return fillRefine(mask, raw, baseW, baseH, rect, hint, mode);
   }
 
   const structFrac = structFrac0;

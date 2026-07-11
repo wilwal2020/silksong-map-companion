@@ -130,7 +130,10 @@ export function detectPlayerMarker(shot) {
     const bw = maxX - minX + 1, bh = maxY - minY + 1;
     const fill = area / (bw * bh);
     const aspectOk = bw / bh > 0.4 && bw / bh < 1.4;
-    const sizeOk = area > 120 && area < 6000 && bh < H * 0.25;
+    // the relative height cap assumes a full-frame screenshot — a small
+    // CROPPED shot makes the marker a big fraction of the frame, so allow
+    // up to the marker's plausible absolute size (~30-90px at game zooms)
+    const sizeOk = area > 120 && area < 6000 && bh < Math.max(H * 0.25, 95);
     if (sizeOk && aspectOk && fill > 0.4) {
       if (!bestBlob || area > bestBlob.area) {
         bestBlob = { area, fx: (sx / area) / W, fy: (sy / area) / H, bh };
