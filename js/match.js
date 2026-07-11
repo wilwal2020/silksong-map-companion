@@ -59,6 +59,33 @@ export function locate(shot, mapImage, mode, onProgress, hint = null) {
   return run;
 }
 
+// Sub-pixel polish of an already-applied placement (background pass): given
+// the rect the paste landed on, returns a corrected rect with quality metrics
+// ({ startPx, dPx, moved, dScale, inlier }), or null when there is nothing to
+// align to / no convincing fit. Shares the busy-chain with locate() so it
+// never interleaves with a foreground search.
+export function refinePlacement(shot, mapImage, rect, mode) {
+  const run = busy.then(async () => {
+    const w = await getWorker(mapImage);
+    const copy = await createImageBitmap(shot); // transferred; caller keeps `shot`
+    return new Promise((resolve, reject) => {
+      const onMsg = e => {
+        const m = e.data;
+        if (m.type === 'result') { cleanup(); resolve(m.rect); }
+        else if (m.type === 'error') { cleanup(); reject(new Error(m.message)); }
+      };
+      const cleanup = () => w.removeEventListener('message', onMsg);
+      w.addEventListener('message', onMsg);
+      w.postMessage({
+        type: 'refine', shot: copy, mode,
+        rect: { x: rect.x, y: rect.y, w: rect.w, h: rect.h },
+      }, [copy]);
+    });
+  });
+  busy = run.catch(() => {});
+  return run;
+}
+
 // Find the player marker (the white Hornet icon) in a map screenshot.
 // Returns { fx, fy } as fractions of the screenshot size, or null.
 // Strategy: the marker is the biggest compact near-white blob — room borders

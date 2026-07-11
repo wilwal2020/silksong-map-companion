@@ -1,7 +1,7 @@
 import { Explored } from './explored.js';
 import { MapView } from './mapview.js';
 import { store } from './store.js';
-import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT } from './match.js';
+import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT, refinePlacement } from './match.js';
 import { ocrLocate, loadLabels } from './ocr.js';
 import { PinManager, SVG } from './pins.js';
 import {
@@ -395,6 +395,49 @@ function openPinEditor(data, isNew) {
 
 // ------------------------------------------------------------- paste flows
 
+// Final alignment, in the background: the placement that just landed is good
+// to a couple of pixels / a fraction of a percent of scale (the fast refine
+// paths quantize their search). While the user is already editing the pin, a
+// slower sub-pixel pass aligns the shot's room outlines to the reference
+// exactly; if it finds a meaningfully better fit, the paste is silently
+// re-composited on the corrected rect and its pin carried along. The
+// pre-paste undo snapshot doubles as the base to re-composite from — if
+// anything else touched the composite meanwhile (another paste, an undo, a
+// clear), lastUndo has changed and the correction is dropped. Takes over
+// ownership of `bitmap` and closes it when done.
+async function finalizeAlignment(bitmap, rect, mode, pinId) {
+  const undoRef = lastUndo;
+  try {
+    const r = await refinePlacement(bitmap, mapImage, rect, mode);
+    console.log('[silksong-map] final align:', r && JSON.stringify(
+      r.fail ? r : { moved: r.moved, dScale: r.dScale, startPx: r.startPx, dPx: r.dPx, inlier: r.inlier }));
+    if (window.__ssmc) window.__ssmc.lastAlign = { rect, r }; // debug/testing hook
+    if (!r || r.fail || lastUndo !== undoRef || undoRef === null) return;
+    // apply only a real improvement that is actually visible
+    const worthIt = r.startPx - r.dPx > 0.02
+      && (r.moved > 0.6 || Math.abs(r.dScale) > 0.0015);
+    if (!worthIt) return;
+    explored.restore(undoRef.snap);
+    explored.paste(bitmap, r.x, r.y, r.w, r.h);
+    const entry = pinId && pins.pins.get(pinId);
+    if (entry) {
+      const s = r.w / rect.w;
+      entry.data.x = r.x + (entry.data.x - rect.x) * s;
+      entry.data.y = r.y + (entry.data.y - rect.y) * s;
+      pins.syncPositions();
+      persistPin(entry.data);
+    }
+    // a sub-pixel reference fit is the best scale measurement there is —
+    // but only area screenshots share the one global zoom; a full-map
+    // paste's scale says nothing about it
+    if (mode === 'map') adoptScale({ ...r, refined: true, scaleMeasured: true }, bitmap);
+  } catch (e) {
+    console.warn('[silksong-map] final align failed:', e.message);
+  } finally {
+    bitmap.close?.();
+  }
+}
+
 async function applyMapPlacement(bitmap, rect, marker) {
   if (rect.via === 'ocr' || rect.via === 'label') {
     // OCR/label placements align to the reference map itself — trust them,
@@ -429,7 +472,6 @@ async function applyMapPlacement(bitmap, rect, marker) {
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
   view.settleGhost();   // flash over the composite, then clears itself
-  bitmap.close?.();
 
   const data = {
     id: crypto.randomUUID(),
@@ -442,6 +484,11 @@ async function applyMapPlacement(bitmap, rect, marker) {
   pins.add(data, { select: true, pop: true });
   pins.lastPlacedId = data.id; // don't let a paste right after placing attach to it
   persistPin(data);
+
+  // sub-pixel polish runs in the background while the pin editor is open;
+  // it re-composites (and nudges the pin) if it beats this placement, and
+  // closes the bitmap when done
+  finalizeAlignment(bitmap, rect, 'map', data.id);
 
   // straight to the editor — its picture slot takes the paste, so there's no
   // separate "add a picture" step
@@ -744,8 +791,8 @@ async function handleFullMap(blob) {
   await view.flyGhostTo(rect);
   snapshotForUndo();
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
-  bitmap.close?.();
   view.settleGhost();
+  finalizeAlignment(bitmap, rect, 'full', null); // background; closes the bitmap
   toast('Map updated with everything you have explored.', 'ok', { label: 'Undo', fn: undoLast });
 }
 
@@ -856,6 +903,7 @@ async function importAll(file) {
   await store.clearPins();
   pins.removeAll();
   explored.clear();
+  lastUndo = null; // the old undo snapshot no longer matches anything
   if (data.fog) await explored.loadFromBlob(await dataURLToBlob(data.fog));
 
   setCustomCategories(data.customCats || []);
@@ -1394,6 +1442,7 @@ function buildToolbar() {
     await store.clearMeta();
     pins.removeAll();
     explored.clear();
+    lastUndo = null;
     setCustomCategories([]);
     setOrder([]);
     pins.filter = new Set(categories().map(c => c.id));

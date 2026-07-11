@@ -10,6 +10,8 @@
 //
 // Messages in:  { type:'init', ref: ImageBitmap }
 //               { type:'locate', shot: ImageBitmap, mode: 'map'|'full' }
+//               { type:'refine', shot: ImageBitmap, rect, mode } — sub-pixel
+//               polish of an already-applied placement (background pass)
 // Messages out: { type:'ready' } | { type:'progress', f } |
 //               { type:'result', rect|null } | { type:'error', message }
 
@@ -64,21 +66,31 @@ function ensureRefFill() {
   return refFill;
 }
 
-// reference content BOUNDARIES, dilated ~2px: sparse, structural, and the
-// thing that actually discriminates one room layout from another (fill
-// overlap alone accepts any roomy neighborhood)
-let refEdge = null;
-function ensureRefEdge() {
-  if (refEdge) return refEdge;
+// reference content BOUNDARIES: sparse, structural, and the thing that
+// actually discriminates one room layout from another (fill overlap alone
+// accepts any roomy neighborhood)
+let refEdgeRaw = null;
+function ensureRefEdgeRaw() {
+  if (refEdgeRaw) return refEdgeRaw;
   const fill = ensureRefFill();
   const W = refBitmap.width, H = refBitmap.height;
-  let e = new Uint8Array(W * H);
+  const e = new Uint8Array(W * H);
   for (let p = 0; p < e.length; p++) {
     if (!fill[p]) continue;
     const x = p % W;
     if ((x > 0 && !fill[p - 1]) || (x < W - 1 && !fill[p + 1])
         || (p >= W && !fill[p - W]) || (p < W * (H - 1) && !fill[p + W])) e[p] = 1;
   }
+  refEdgeRaw = e;
+  return refEdgeRaw;
+}
+
+// the same boundaries dilated ~2px — tolerance for the coarse fillRefine
+let refEdge = null;
+function ensureRefEdge() {
+  if (refEdge) return refEdge;
+  const W = refBitmap.width, H = refBitmap.height;
+  let e = new Uint8Array(ensureRefEdgeRaw());
   for (let pass = 0; pass < 2; pass++) {
     const d2 = new Uint8Array(e);
     for (let p = 0; p < e.length; p++) {
@@ -609,6 +621,213 @@ function fillRefine(mask, baseW, baseH, crop, hint, mode) {
   };
 }
 
+// Chamfer distance transform to the nearest reference boundary, full map
+// resolution, 3/4 integer weights (3 units = 1px), clamped at 30px. Built
+// once (~20MB, a couple hundred ms) the first time a precise refine runs.
+let refDT = null;
+function ensureRefDT() {
+  if (refDT) return refDT;
+  const raw = ensureRefEdgeRaw();
+  const W = refBitmap.width, H = refBitmap.height;
+  const CAP = 3 * 30;
+  const dt = new Uint16Array(W * H).fill(CAP);
+  for (let p = 0; p < dt.length; p++) if (raw[p]) dt[p] = 0;
+  for (let y = 0; y < H; y++) {          // forward pass
+    const row = y * W;
+    for (let x = 0; x < W; x++) {
+      const p = row + x;
+      let d = dt[p];
+      if (x > 0 && dt[p - 1] + 3 < d) d = dt[p - 1] + 3;
+      if (y > 0) {
+        if (dt[p - W] + 3 < d) d = dt[p - W] + 3;
+        if (x > 0 && dt[p - W - 1] + 4 < d) d = dt[p - W - 1] + 4;
+        if (x < W - 1 && dt[p - W + 1] + 4 < d) d = dt[p - W + 1] + 4;
+      }
+      dt[p] = d;
+    }
+  }
+  for (let y = H - 1; y >= 0; y--) {     // backward pass
+    const row = y * W;
+    for (let x = W - 1; x >= 0; x--) {
+      const p = row + x;
+      let d = dt[p];
+      if (x < W - 1 && dt[p + 1] + 3 < d) d = dt[p + 1] + 3;
+      if (y < H - 1) {
+        if (dt[p + W] + 3 < d) d = dt[p + W] + 3;
+        if (x < W - 1 && dt[p + W + 1] + 4 < d) d = dt[p + W + 1] + 4;
+        if (x > 0 && dt[p + W - 1] + 4 < d) d = dt[p + W - 1] + 4;
+      }
+      dt[p] = d;
+    }
+  }
+  refDT = dt;
+  return refDT;
+}
+
+// Final sub-pixel alignment of an ALREADY APPLIED placement. The regular
+// refine paths quantize — 3px translation grid, 1.5% scale steps, ~2px
+// dilated edges — which leaves a visible couple-pixel / sub-percent error.
+// This pass minimizes the mean chamfer distance from the screenshot's
+// content boundaries to the nearest reference boundary, coordinate-descending
+// to ~0.1px translation and ~0.03% scale. It runs in the background after
+// the paste has landed, so it can afford the precision.
+async function preciseRefine(shot, rect0, mode) {
+  const cv = await getCV();
+  const baseW = Math.min(1600, shot.width);
+  const baseH = Math.round(shot.height * baseW / shot.width);
+  const { mask } = binaryContentMask(cv, shot, baseW, baseH);
+
+  let crop;
+  if (mode === 'full') {
+    let minX = baseW, maxX = -1, minY = baseH, maxY = -1;
+    for (let y = 0; y < baseH; y++) {
+      const row = y * baseW;
+      for (let x = 0; x < baseW; x++) {
+        if (mask[row + x]) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX - minX < 60 || maxY - minY < 60) return null;
+    crop = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+  } else {
+    crop = {
+      x: Math.round(baseW * 0.06), y: Math.round(baseH * 0.08),
+      w: Math.round(baseW * 0.88), h: Math.round(baseH * 0.84),
+    };
+  }
+
+  // The mask's blur+threshold step dilates strokes outward by ~0.6px, which
+  // would bias the fit toward shrinking the scale. A fractional erosion
+  // (blur + high threshold) cancels that, and smooths boundary jitter too.
+  const em = new cv.Mat(baseH, baseW, cv.CV_8UC1);
+  em.data.set(mask);
+  cv.GaussianBlur(em, em, new cv.Size(3, 3), 0);
+  cv.threshold(em, em, 190, 255, cv.THRESH_BINARY);
+  const bmask = Uint8Array.from(em.data);
+  em.delete();
+
+  // boundary points of the shot's drawn content (the alignment features)
+  const pts = [];
+  for (let y = crop.y + 1; y < crop.y + crop.h - 1; y++) {
+    const row = y * baseW;
+    for (let x = crop.x + 1; x < crop.x + crop.w - 1; x++) {
+      const p = row + x;
+      if (bmask[p] && (!bmask[p - 1] || !bmask[p + 1] || !bmask[p - baseW] || !bmask[p + baseW])) {
+        pts.push(x, y);
+      }
+    }
+  }
+  let stride = 1;
+  while (pts.length / (2 * stride) > 9000) stride++;
+  if (pts.length / (2 * stride) < 300) return { fail: 'pts', n: pts.length / 2 }; // unexplored / nothing to align
+
+  const dt = ensureRefDT();
+  const W = refBitmap.width, H = refBitmap.height;
+  const k0 = rect0.w / baseW;                       // map px per base px, as placed
+  const acx = crop.x + crop.w / 2, acy = crop.y + crop.h / 2;
+  const ax = rect0.x + acx * k0, ay = rect0.y + acy * k0; // scale anchor, map px
+
+  const DMAX = 8; // px clamp — shot-only content (player marker, icons) can't dominate
+  const distAt = (px, py, k, ox, oy) => {
+    const mx = ax + ox + (px - acx) * k;
+    const my = ay + oy + (py - acy) * k;
+    if (mx < 1 || my < 1 || mx >= W - 2 || my >= H - 2) return DMAX;
+    const x0 = mx | 0, y0 = my | 0, fx = mx - x0, fy = my - y0, o = y0 * W + x0;
+    const d = ((dt[o] * (1 - fx) + dt[o + 1] * fx) * (1 - fy)
+             + (dt[o + W] * (1 - fx) + dt[o + W + 1] * fx) * fy) / 3;
+    return d > DMAX ? DMAX : d;
+  };
+  const evalOn = (arr, st, s, ox, oy) => {
+    const k = k0 * s;
+    let sum = 0, inl = 0, m = 0;
+    for (let i = 0; i < arr.length; i += 2 * st) {
+      const d = distAt(arr[i], arr[i + 1], k, ox, oy);
+      m++;
+      sum += d;
+      if (d <= 1.5) inl++;
+    }
+    return { c: sum / m, inl: inl / m };
+  };
+  const evalAt = (s, ox, oy) => evalOn(pts, stride, s, ox, oy);
+  const descend = (arr, st, from, steps, sLo, sHi) => {
+    let b = { ...from, ...evalOn(arr, st, from.s, from.ox, from.oy) };
+    for (const [ts, ss] of steps) {
+      for (let guard = 0; guard < 40; guard++) {
+        let moved = false;
+        for (const [ds, dox, doy] of [[0, ts, 0], [0, -ts, 0], [0, 0, ts], [0, 0, -ts], [ss, 0, 0], [-ss, 0, 0]]) {
+          const s = b.s + ds;
+          if (s < sLo || s > sHi) continue;
+          const r = evalOn(arr, st, s, b.ox + dox, b.oy + doy);
+          if (r.c < b.c - 1e-4) {
+            b = { s, ox: b.ox + dox, oy: b.oy + doy, ...r };
+            moved = true;
+          }
+        }
+        if (!moved) break;
+      }
+    }
+    return b;
+  };
+
+  const start = evalAt(1, 0, 0);
+  // the placement was already verified once — if its boundaries mostly miss
+  // reference structure here, there is nothing trustworthy to align to;
+  // better to leave it than drag it onto the nearest wrong rooms
+  if (start.inl < 0.2 && start.c > 5) return { fail: 'start', c: +start.c.toFixed(3), inl: +start.inl.toFixed(3) };
+
+  let best = { s: 1, ox: 0, oy: 0, ...start };
+  // coarse grid: ±12px translation (covers undoing a stitch nudge), scale ±2.5%
+  for (const s of [0.975, 0.98, 0.985, 0.99, 0.995, 1, 1.005, 1.01, 1.015, 1.02, 1.025]) {
+    for (let oy = -12; oy <= 12; oy += 3) {
+      for (let ox = -12; ox <= 12; ox += 3) {
+        const r = evalAt(s, ox, oy);
+        if (r.c < best.c) best = { s, ox, oy, ...r };
+      }
+    }
+  }
+  // coordinate descent down to sub-pixel / sub-0.1% scale
+  best = descend(pts, stride, best,
+    [[1.5, 0.004], [0.6, 0.0015], [0.25, 0.0006], [0.1, 0.00025]], 0.97, 1.03);
+
+  // correct placements on real shots land around inl 0.3-0.5 (style mismatch
+  // between the in-game and reference renderings caps it well below 1)
+  if (best.inl < 0.22) return { fail: 'best', c: +best.c.toFixed(3), inl: +best.inl.toFixed(3), s: best.s, ox: best.ox, oy: best.oy }; // never landed convincingly on structure
+
+  // Trimmed rounds: junk points — the player marker, HUD icons, content the
+  // reference draws differently — sit at the DMAX clamp and dilute the cost,
+  // leaving the scale axis especially shallow (two runs from different seeds
+  // disagreed by >1%). Re-descend on only the points that currently land on
+  // reference structure; re-select once so points can (re)join as the fit
+  // sharpens. Descent on the trimmed subset, metrics always on ALL points.
+  for (let round = 0; round < 2; round++) {
+    const kb = k0 * best.s;
+    const sel = [];
+    for (let i = 0; i < pts.length; i += 2 * stride) {
+      if (distAt(pts[i], pts[i + 1], kb, best.ox, best.oy) <= 4) sel.push(pts[i], pts[i + 1]);
+    }
+    if (sel.length / 2 < 200) break;
+    const b = descend(sel, 1, best,
+      [[0.6, 0.0015], [0.25, 0.0006], [0.1, 0.00025]], 0.965, 1.035);
+    const full = evalAt(b.s, b.ox, b.oy);
+    best = { s: b.s, ox: b.ox, oy: b.oy, ...full };
+  }
+  const k = k0 * best.s;
+  return {
+    x: ax + best.ox - acx * k,
+    y: ay + best.oy - acy * k,
+    w: baseW * k,
+    h: baseH * k,
+    via: 'precise',
+    startPx: +start.c.toFixed(3),   // mean boundary distance before…
+    dPx: +best.c.toFixed(3),        // …and after, in map px
+    inlier: +best.inl.toFixed(3),
+    moved: +Math.hypot(best.ox, best.oy).toFixed(2),
+    dScale: +(best.s - 1).toFixed(5),
+  };
+}
+
 // After a ladder search, walk the scale in shrinking sub-percent steps —
 // the ladder's 2-3% quantization leaves multi-pixel edge error on big pastes.
 function polishScale(cv, tmplBase, aspect, fine, progressFrom) {
@@ -894,6 +1113,10 @@ self.onmessage = async e => {
       self.postMessage({ type: 'ready' });
     } else if (msg.type === 'locate') {
       const rect = await locate(msg.shot, msg.mode, msg.hint || null);
+      msg.shot.close?.();
+      self.postMessage({ type: 'result', rect });
+    } else if (msg.type === 'refine') {
+      const rect = await preciseRefine(msg.shot, msg.rect, msg.mode);
       msg.shot.close?.();
       self.postMessage({ type: 'result', rect });
     }
