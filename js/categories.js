@@ -2,15 +2,11 @@
 // persisted display order. Each category carries a colour so pins read
 // clearly against the map and types stay distinguishable.
 
+// deliberately small — the point is that users create their own types
 export const BUILTIN = [
   { id: 'door',    icon: '🔒', label: 'Locked door',                 color: '#e0655e' },
-  { id: 'wall',    icon: '🧱', label: 'Breakable / suspicious wall', color: '#c9a45c' },
-  { id: 'ability', icon: '🕷️', label: 'Need ability / tool',         color: '#a78bfa' },
-  { id: 'item',    icon: '✨', label: 'Item / collectible',          color: '#e6c86e' },
   { id: 'npc',     icon: '👤', label: 'NPC / quest',                 color: '#6cc1e0' },
   { id: 'vendor',  icon: '💰', label: 'Vendor',                      color: '#6fce9b' },
-  { id: 'bench',   icon: '🪑', label: 'Bench',                       color: '#9aa7bd' },
-  { id: 'boss',    icon: '💀', label: 'Boss / danger',               color: '#d0483f' },
   { id: 'other',   icon: '❓', label: 'Other',                       color: '#9aa0b0' },
 ];
 

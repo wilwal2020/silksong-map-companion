@@ -66,6 +66,31 @@ function ensureRefFill() {
   return refFill;
 }
 
+// the fill mask dilated ~3px, for fillRefine's fill-sanity check ONLY (the
+// edge/boundary masks must stay undilated). Some regions (e.g. Wormways)
+// draw rooms as thin outlines with black interiors — there the undilated
+// fill is a 2px-wide target and a correct placement scored 0.44 against the
+// 0.5 gate; 3px of tolerance lifts correct spots to 0.65+ while genuinely
+// void neighbourhoods stay near 0.3.
+let refFillDil = null;
+function ensureRefFillDil() {
+  if (refFillDil) return refFillDil;
+  const W = refBitmap.width, H = refBitmap.height;
+  let f = new Uint8Array(ensureRefFill());
+  for (let pass = 0; pass < 3; pass++) {
+    const d2 = new Uint8Array(f);
+    for (let p = 0; p < f.length; p++) {
+      if (f[p]) continue;
+      const x = p % W;
+      if ((x > 0 && f[p - 1]) || (x < W - 1 && f[p + 1])
+          || (p >= W && f[p - W]) || (p < W * (H - 1) && f[p + W])) d2[p] = 1;
+    }
+    f = d2;
+  }
+  refFillDil = f;
+  return refFillDil;
+}
+
 // reference content BOUNDARIES: sparse, structural, and the thing that
 // actually discriminates one room layout from another (fill overlap alone
 // accepts any roomy neighborhood)
@@ -508,8 +533,8 @@ function refinePass(cv, tmplBase, aspect, cx2, cy2, twCenter, ks, progressFrom) 
 // because edges are what discriminate one room layout from another — fill
 // overlap alone accepts any roomy neighborhood. A fill sanity check on top
 // rejects placements whose rooms hang over reference void.
-function fillRefine(mask, raw, baseW, baseH, crop, hint, mode) {
-  const fill = ensureRefFill();
+function fillRefine(mask, raw, baseW, baseH, crop, hint, mode, exclude = []) {
+  const fill = ensureRefFillDil();
   const edge = ensureRefEdge();
   const RW = refBitmap.width, RH = refBitmap.height;
   const kMap0 = hint.rect.w / baseW; // predicted map px per shot-base px
@@ -525,14 +550,29 @@ function fillRefine(mask, raw, baseW, baseH, crop, hint, mode) {
   // on wide shots the explored corridors can enclose big unexplored pockets,
   // and fillEnclosed marks those as "interior" — junk points that land on
   // reference void and sank a correct 4-name placement below the gate.
+  // fill-sanity points must be MAP ink only: strokes inside an excluded box
+  // (a matched area-name label, the player marker) are overlay ink drawn on
+  // the map — they land on reference void even at the correct spot, and on a
+  // small cropped shot they dominate the strokes and sink fillOv below the
+  // gate at the right placement (test28: tiny Wormways crop, marker = 29% of
+  // frame height). Label text stays in the EDGE points (it lines up with the
+  // reference's own label text), but the marker leaves those too: it exists
+  // nowhere on the reference, so its edges only pull the search off target.
+  const inBox = (x, y, list) => {
+    for (const b of list) if (x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1) return true;
+    return false;
+  };
+  const exMarker = exclude.filter(b => b.kind === 'marker');
   const epts = [], fpts = [];
   for (let y = crop.y + 1; y < crop.y + crop.h - 1; y++) {
     const row = y * baseW;
     for (let x = crop.x + 1; x < crop.x + crop.w - 1; x++) {
       const p = row + x;
-      if (raw[p] && ((x ^ y) & 3) === 0) fpts.push(x, y); // sparse stroke sample
+      if (raw[p] && ((x ^ y) & 3) === 0 && !inBox(x, y, exclude)) fpts.push(x, y); // sparse stroke sample
       if (!mask[p]) continue;
-      if (!mask[p - 1] || !mask[p + 1] || !mask[p - baseW] || !mask[p + baseW]) epts.push(x, y);
+      if (!mask[p - 1] || !mask[p + 1] || !mask[p - baseW] || !mask[p + baseW]) {
+        if (!inBox(x, y, exMarker)) epts.push(x, y);
+      }
     }
   }
   let estride = 1;
@@ -568,20 +608,42 @@ function fillRefine(mask, raw, baseW, baseH, crop, hint, mode) {
   };
 
   let best = null;
-  const samples = [];
+  const cands = [];
   for (let ki = 0; ki < ks.length; ki++) {
     const k = kMap0 * ks[ki];
     const bx = cx - baseW * k / 2, by = cy - baseH * k / 2;
     for (let dy = -R; dy <= R; dy += step) {
       for (let dx = -R; dx <= R; dx += step) {
         const ov = edgeOvAt(bx + dx, by + dy, k);
-        samples.push(ov);
+        cands.push({ ov, X0: bx + dx, Y0: by + dy, k, ki });
         if (!best || ov > best.ov) best = { ov, X0: bx + dx, Y0: by + dy, k, ki };
       }
     }
     self.postMessage({ type: 'progress', f: 0.9 * (ki + 1) / ks.length });
   }
   if (!best) return null;
+
+  // In corridor-dense regions the dilated edge mask is near chance-level
+  // everywhere, so the top EDGE candidate can sit over reference void while
+  // the correct spot scores marginally lower (test28: wrong local max ov
+  // 0.628 / fillOv 0.43 vs correct spot fillOv 0.7). When the winner fails
+  // fill sanity, fall back through the spatially-distinct runners-up that
+  // score nearly as well and take the first that passes.
+  let rerank = null;
+  if (fillOvAt(best.X0, best.Y0, best.k) < 0.5) {
+    cands.sort((a, b) => b.ov - a.ov);
+    const picked = [];
+    for (const c of cands) {
+      if (c.ov < best.ov - 0.1 || picked.length >= 60) break;
+      if (picked.some(p => p.ki === c.ki && Math.abs(p.X0 - c.X0) < 9 && Math.abs(p.Y0 - c.Y0) < 9)) continue;
+      c.fillOv = fillOvAt(c.X0, c.Y0, c.k);
+      picked.push(c);
+      // candidates arrive in descending ov, so the first passer wins
+      if (c.fillOv >= 0.5) { best = c; break; }
+    }
+    if (hint.debug) rerank = picked.map(c => ({ ov: +c.ov.toFixed(3), fillOv: +c.fillOv.toFixed(3), dx: Math.round(c.X0), dy: Math.round(c.Y0), ki: c.ki }));
+  }
+
   // 1px polish around the coarse best
   for (let dy = -3; dy <= 3; dy++) {
     for (let dx = -3; dx <= 3; dx++) {
@@ -608,7 +670,7 @@ function fillRefine(mask, raw, baseW, baseH, crop, hint, mode) {
   // calibrated on real shots: correct placements score ov 0.46-0.52 with
   // lift 0.30-0.37; wrong-neighborhood placements 0.25-0.38 with lift ≤0.17
   if (best.ov < (mode === 'full' ? 0.4 : 0.45) || lift < 0.25 || fillOv < 0.5) {
-    return hint.debug ? { fail: true, ov: +best.ov.toFixed(3), refFrac: +refFrac.toFixed(3), lift: +lift.toFixed(3), fillOv: +fillOv.toFixed(3), k: +best.k.toFixed(4), ki: best.ki, nE: eN } : null;
+    return hint.debug ? { fail: true, ov: +best.ov.toFixed(3), refFrac: +refFrac.toFixed(3), lift: +lift.toFixed(3), fillOv: +fillOv.toFixed(3), k: +best.k.toFixed(4), ki: best.ki, nE: eN, rerank } : null;
   }
 
   return {
@@ -931,11 +993,17 @@ async function locate(shot, mode, hint) {
       // caller so it can keep the OCR placement instead of distrusting it
       return { sparse: true };
     }
+    // overlay-ink boxes (matched labels, player marker) come in shot px;
+    // bring them into base px for fillRefine's fill-sanity sampling
+    const bf = baseW / shot.width;
+    const exclude = (hint.exclude || []).map(b => ({
+      x0: b.x0 * bf, y0: b.y0 * bf, x1: b.x1 * bf, y1: b.y1 * bf, kind: b.kind,
+    }));
     // one-sided fill overlap instead of edge correlation: robust in dense
     // regions where the screenshot shows only a subset of the reference's
     // rooms. The returned rect covers the full base frame, which IS the
     // full shot (base is just the shot resized) — no coordinate mapping.
-    return fillRefine(mask, raw, baseW, baseH, rect, hint, mode);
+    return fillRefine(mask, raw, baseW, baseH, rect, hint, mode, exclude);
   }
 
   const structFrac = structFrac0;

@@ -486,9 +486,16 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 .cat-btn .cb-ico { font-size: 1.05rem; filter: drop-shadow(0 0 4px var(--pc, transparent)); }
 .cat-btn.on { border-color: var(--pc, var(--accent)); background: color-mix(in srgb, var(--pc, var(--accent)) 15%, transparent); }
-.cat-btn-new { background: transparent; border-style: dashed; color: var(--text-dim); }
-.cat-btn-new:hover { border-color: var(--accent); color: var(--rose); }
-.cat-btn-new .cb-ico { filter: none; }
+/* "New type…" inside the pin editor — a full-width row styled exactly like
+   the sidebar's .cat-new-row so it clearly reads as "add your own" */
+.cat-btn-new {
+  grid-column: 1 / -1; gap: 10px; padding: 10px 11px;
+  background: rgba(158,43,37,.07); border: 1px dashed #6a3a3b; border-radius: 9px;
+  color: var(--rose);
+  transition: background .14s, border-color .14s, color .14s, box-shadow .14s;
+}
+.cat-btn-new:hover { background: rgba(158,43,37,.16); border-color: var(--accent); color: #f0c4be;
+  box-shadow: 0 0 16px -6px var(--accent-glow); }
 
 #pin-note {
   width: 100%; background: var(--panel-2); border: 1px solid var(--border);
@@ -496,11 +503,13 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 #pin-note:focus { outline: none; border-color: var(--accent); }
 
-/* help: a one-slide-at-a-time stepper with Back / Next + dots */
+/* help: a one-slide-at-a-time stepper with Back / Next + dots. All slides
+   share one grid cell so the dialog is always as tall as the tallest slide —
+   the Back / Next buttons never move between steps */
 #dlg-help { max-height: 88vh; overflow-y: auto; }
-.help-slides { min-height: 150px; }
-.help-slide { display: none; }
-.help-slide.on { display: block; animation: help-in .18s ease; }
+.help-slides { display: grid; min-height: 150px; }
+.help-slide { grid-area: 1 / 1; visibility: hidden; }
+.help-slide.on { visibility: visible; animation: help-in .18s ease; }
 @keyframes help-in { from { opacity: 0; transform: translateX(7px); } }
 .help-eyebrow { display: inline-block; font-family: Cinzel, serif; font-size: .66rem; letter-spacing: .14em;
   text-transform: uppercase; color: var(--text-dim); margin-bottom: 7px; }
@@ -519,11 +528,11 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 .help-fig.compass { display: flex; align-items: center; gap: 13px; padding: 11px; }
 .help-fig.compass img { width: 60px; height: auto; flex: none; }
 .help-fig.compass figcaption { padding: 0; }
-/* two example screenshots shown side by side */
+/* two example screenshots shown side by side — letterboxed (never cropped) */
 .help-pair { display: flex; gap: 10px; margin-top: 10px; align-items: stretch; }
 .help-pair .help-fig { flex: 1; min-width: 0; margin: 0; display: flex; flex-direction: column; }
-.help-pair .help-fig img { width: 100%; height: 96px; object-fit: cover; }
-.help-pair .help-fig.icon img { object-fit: contain; padding: 12px; background: #0a0d13; }
+.help-pair .help-fig img { width: 100%; height: 118px; object-fit: contain; background: #0a0d13; }
+.help-pair .help-fig.icon img { padding: 12px; }
 .help-pair .help-fig figcaption { padding: 6px 9px; margin-top: auto; }
 /* the two paste-type options as a compact numbered list */
 .help-list { margin: 10px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
@@ -688,8 +697,8 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 #cat-bar-resize:hover { background: linear-gradient(90deg, transparent, var(--accent-soft)); }
 
-/* keep the bottom paste pill clear of the sidebar (offset by ~half its width) */
-#paste-hint { margin-left: 174px; }
+/* the bottom paste pill stays at true viewport centre so it lines up with the
+   centred Add-pin button above it (the sidebar leaves the centre clear) */
 
 /* ---------- add-pin button + placement ---------- */
 
@@ -770,7 +779,18 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
   margin: 7px 0 0; font-size: .76rem; line-height: 1.4; color: var(--text-dim);
 }
 
+/* the emoji-keyboard tip in the new-type dialog — a proper callout with key
+   chips, so "you can use any emoji" is impossible to miss */
+.field-hint.emoji-tip {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 12px; padding: 9px 12px;
+  font-size: .82rem; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent); border-radius: 8px;
+}
+.field-hint.emoji-tip .emoji-tip-ico { font-size: 1.25rem; line-height: 1; flex: none; }
+.field-hint.emoji-tip .kbd { color: var(--text); font-weight: 600; }
+
 @media (max-width: 720px) {
   #cat-bar { width: 240px; }
-  #paste-hint { margin-left: 120px; }
 }

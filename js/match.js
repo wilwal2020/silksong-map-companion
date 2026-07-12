@@ -136,7 +136,7 @@ export function detectPlayerMarker(shot) {
     const sizeOk = area > 120 && area < 6000 && bh < Math.max(H * 0.25, 95);
     if (sizeOk && aspectOk && fill > 0.4) {
       if (!bestBlob || area > bestBlob.area) {
-        bestBlob = { area, fx: (sx / area) / W, fy: (sy / area) / H, bh };
+        bestBlob = { area, fx: (sx / area) / W, fy: (sy / area) / H, bh, minX, minY, maxX, maxY };
       }
     }
   }
@@ -147,6 +147,12 @@ export function detectPlayerMarker(shot) {
     // marker height in ORIGINAL screenshot pixels — the marker is drawn on
     // the map, so its size reveals the in-game zoom level
     h: bestBlob.bh / scale,
+    // bounding box in ORIGINAL screenshot pixels — the marker is overlay ink,
+    // not map content, so matchers can exclude it from content checks
+    box: {
+      x0: bestBlob.minX / scale, y0: bestBlob.minY / scale,
+      x1: (bestBlob.maxX + 1) / scale, y1: (bestBlob.maxY + 1) / scale,
+    },
   };
 }
 

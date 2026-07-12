@@ -405,6 +405,7 @@ async function readLabels(shot) {
   return lines.map(l => ({
     text: l.text,
     words: l.words,
+    x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1,
     cx: (l.x0 + l.x1) / 2,
     cy: (l.y0 + l.y1) / 2,
     h: l.y1 - l.y0,
@@ -553,5 +554,15 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
     scaleSource,
     via: 'ocr',
     names: uniq.map(m => m.lb.name),
+    // shot-px boxes of the matched name lines. Label text (and its decorative
+    // underline, hence the downward padding) is ink drawn ON the map, not map
+    // content — content verifiers can exclude it from their checks
+    textBoxes: uniq.map(m => {
+      const lh = Math.max(1, m.c.y1 - m.c.y0);
+      return {
+        x0: m.c.x0 - lh * 0.3, y0: m.c.y0 - lh * 0.2,
+        x1: m.c.x1 + lh * 0.3, y1: m.c.y1 + lh,
+      };
+    }),
   };
 }

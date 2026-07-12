@@ -350,10 +350,13 @@ function openPinEditor(data, isNew) {
       });
       cats.appendChild(b);
     }
-    // inline "create a new type" — opens the type dialog on top and selects it
+    // inline "create a new type" — opens the type dialog on top and selects
+    // it; styled like the sidebar's "New type" row so it reads as "add"
     const add = document.createElement('button');
     add.className = 'cat-btn cat-btn-new';
-    add.innerHTML = `<span class="cb-ico">＋</span><span>New type…</span>`;
+    add.innerHTML =
+      '<span class="cat-new-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>'
+      + '<span class="cat-new-name">New type…</span>';
     add.addEventListener('click', () => {
       catTypeCreatedCb = cat => { selected = cat.id; renderCats(); };
       openCatTypeDialog();
@@ -510,7 +513,7 @@ async function applyMapPlacement(bitmap, rect, marker) {
 
 // Read the area name(s) first — reliable even when the surrounding area is
 // unexplored (black). Returns a plausible rect or null (then we shape-match).
-async function tryOcr(bitmap, full, scaleHint) {
+async function tryOcr(bitmap, full, scaleHint, markerBox = null) {
   let r = null;
   try {
     spinner(true, 'Reading the area name…');
@@ -521,6 +524,18 @@ async function tryOcr(bitmap, full, scaleHint) {
     return null;
   }
   if (!r || !plausible(r)) return null;
+
+  // overlay ink (matched name labels, the player marker) is drawn ON the map,
+  // not part of it — the content verifier must not demand it lands on rooms.
+  // On a small cropped shot these overlays dominate the drawn strokes and,
+  // uncorrected, sank a perfectly placed shot below the fill-sanity gate.
+  // 'text' still aligns with the reference's own label text, so it only
+  // leaves the fill check; the marker exists nowhere on the reference, so
+  // its edges are noise for the position search too
+  const exclude = [
+    ...(r.textBoxes || []).map(b => ({ ...b, kind: 'text' })),
+    ...(markerBox ? [{ ...markerBox, kind: 'marker' }] : []),
+  ];
 
   // OCR gives identity + a rough spot, but its bounding boxes are only
   // approximate (dropped words, names cut off at the edge) — snap the
@@ -538,7 +553,7 @@ async function tryOcr(bitmap, full, scaleHint) {
     const sparseResult = () =>
       (r.names?.length >= 2 || r.score >= 0.72) ? { ...r, ratio: 0.4 } : null;
 
-    let snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread });
+    let snapped = await locate(bitmap, mapImage, mode, prog, { rect: r, spread, exclude });
     let usedSpread = spread;
     if (snapped && snapped.sparse) return sparseResult();
     if (!snapped) {
@@ -547,8 +562,8 @@ async function tryOcr(bitmap, full, scaleHint) {
       // window and keep the scale pinned; without a trusted scale, widen
       // the scale band instead (stale save, resolution change).
       const retry = scaleTrusted
-        ? { rect: r, spread: 'narrow', wideWindow: true }
-        : { rect: r, spread: 'wide' };
+        ? { rect: r, spread: 'narrow', wideWindow: true, exclude }
+        : { rect: r, spread: 'wide', exclude };
       if (!(spread === retry.spread && !retry.wideWindow)) {
         spinner(true, scaleTrusted ? 'Searching a wider area…' : 'Searching nearby scales…');
         snapped = await locate(bitmap, mapImage, mode, prog, retry);
@@ -625,7 +640,7 @@ async function handleMapScreenshot(blob) {
 
   showPasteGhost(bitmap); // float it on the map while we work out where it goes
 
-  let rect = await tryOcr(bitmap, false, markerScale);
+  let rect = await tryOcr(bitmap, false, markerScale, marker && marker.box);
 
   if (!rect) {
     // fall back to shape matching. Every screenshot is at the same in-game
@@ -744,7 +759,7 @@ async function handleFullMap(blob) {
 
   // read area names first — a big zoomed-out map has several, which pins the
   // scale from the distances between them (no per-paste drift)
-  let rect = await tryOcr(bitmap, true, markerScale);
+  let rect = await tryOcr(bitmap, true, markerScale, marker && marker.box);
 
   if (!rect) {
     spinner(true, 'Aligning your map…');
@@ -1363,6 +1378,16 @@ function emojiKeyboardTip() {
     : 'Tip: press Win + . (period) to open the emoji keyboard.';
 }
 
+// the same tip as markup: key chips inside a highlighted callout (used where
+// picking an emoji is the whole point, so it must not be overlooked)
+function emojiKeyboardTipHtml() {
+  const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+  const keys = isMac
+    ? '<span class="kbd">Ctrl</span> + <span class="kbd">Cmd</span> + <span class="kbd">Space</span>'
+    : '<span class="kbd">Win</span> + <span class="kbd">.</span>';
+  return `<span class="emoji-tip-ico">😀</span><span>Pick any emoji as the icon — press ${keys} to open the emoji keyboard.</span>`;
+}
+
 // ----------------------------------------------------------------- toolbar
 
 function buildToolbar() {
@@ -1383,9 +1408,9 @@ function buildToolbar() {
     updateSoloUI();
     persistFilter();
   });
-  const tip = emojiKeyboardTip();
-  $('#pin-note-hint').textContent = tip;
-  $('#cattype-hint').textContent = tip;
+  $('#pin-note-hint').textContent = emojiKeyboardTip();
+  $('#cattype-hint').innerHTML = emojiKeyboardTipHtml();
+  $('#cattype-hint').classList.add('emoji-tip');
   $('#btn-add-pin').addEventListener('click', () => placing ? stopPlacing() : startPlacing());
   wireSidebarResize();
   wireOpacitySlider();

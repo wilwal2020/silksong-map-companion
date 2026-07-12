@@ -25,7 +25,13 @@ function prepPaste(bitmap) {
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const m = Math.min(x, y, W - 1 - x, H - 1 - y);
-        if (m < edge) d[(y * W + x) * 4 + 3] = Math.round(255 * m / edge);
+        // scale the existing alpha, never raise it: a freeform/non-rectangular
+        // snip is transparent (black) outside its shape, and setting alpha
+        // outright resurrected those pixels as a dark vignette around it
+        if (m < edge) {
+          const i = (y * W + x) * 4 + 3;
+          d[i] = Math.round(d[i] * m / edge);
+        }
       }
     }
     ctx.putImageData(img, 0, 0);
