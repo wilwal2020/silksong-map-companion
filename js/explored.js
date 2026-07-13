@@ -95,23 +95,20 @@ function coarseBackground(d, opaque, W, H) {
   return ux.getImageData(0, 0, W, H).data;
 }
 
-// Per-pixel alpha factors (0-255) for the content-halo look: 255 on drawn map
-// content AND inside enclosed rooms, falling linearly to 0 within FADE_PX of
-// them. "Background" is a flood from the border that may only travel over
-// reference VOID: in-game background exists exactly where the world has no
-// rooms, so it can never slip through a doorway opening into a room. What
-// the flood can't reach and sits over reference rooms is then decided by a
-// NEIGHBOURHOOD COLOUR test: explored room fill is tinted a few luminance
-// units above the true background (sampled from the reachable void), while
-// unexplored background over reference rooms is not. Per pixel that delta
-// drowns in noise, but averaged over a ~13px neighbourhood it separates
-// cleanly (Greymoor fill +4.4, unexplored −0.5, noise of the mean ≪ 1).
-// Nothing the user hasn't pasted can appear: only already-pasted pixels are
-// ever kept, and untinted background always fades.
+// Per-pixel keep factor (0-255): 255 on drawn map content — anything notably
+// brighter than the local background tint: room outlines, fills, text, the
+// player marker — falling to 0 within FADE_PX of it. Everything else is
+// background and fades away, so each screenshot's own dark vignette drops to
+// black and abutting/overlapping pastes read as one continuous map.
 //
-// `refShot` (optional, same W×H grid): 1 where the REFERENCE map has content
-// at that pixel's map position.
-function contentFade(d, opaque, W, H, fadePx, refShot = null) {
+// Dark room interiors fade too. That is deliberate: a dark interior is
+// indistinguishable from the black fog it sits in, so blacking it out looks
+// identical — and the bright outline that defines every room's shape is
+// always kept. Trying to tell "explored dark interior" from "unexplored
+// background" by pixel value is unreliable (they are the same colour) and
+// made rooms clear unpredictably; keeping only what is visibly drawn is
+// simple and never wrong.
+function contentFade(d, opaque, W, H, fadePx) {
   const bg = coarseBackground(d, opaque, W, H);
   const md = new ImageData(W, H);
   for (let p = 0; p < W * H; p++) {
@@ -122,7 +119,8 @@ function contentFade(d, opaque, W, H, fadePx, refShot = null) {
       md.data[i] = md.data[i + 1] = md.data[i + 2] = md.data[i + 3] = 255;
     }
   }
-  // close dashed outlines with a small blur + threshold
+  // close dashed outlines with a small blur + threshold so room bodies read
+  // as one shape, not a dotted ring
   const mc = document.createElement('canvas');
   mc.width = W; mc.height = H;
   mc.getContext('2d').putImageData(md, 0, 0);
@@ -132,114 +130,8 @@ function contentFade(d, opaque, W, H, fadePx, refShot = null) {
   bx.filter = 'blur(2px)';
   bx.drawImage(mc, 0, 0);
   const bd = bx.getImageData(0, 0, W, H).data;
-  const mask = new Uint8Array(W * H);
-  for (let p = 0; p < mask.length; p++) if (bd[p * 4 + 3] > 80) mask[p] = 1;
-
-  // flood the reachable background from the border; with a reference it may
-  // only travel over reference void, so it can never slip through a doorway
-  // opening into a room's interior
-  const seen = new Uint8Array(W * H);
-  const q = new Int32Array(W * H);
-  let head = 0, tail = 0;
-  const push = p => {
-    if (seen[p] || mask[p] || (refShot && refShot[p])) return;
-    seen[p] = 1; q[tail++] = p;
-  };
-  for (let x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
-  for (let y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
-  while (head < tail) {
-    const p = q[head++];
-    const x = p % W;
-    if (x > 0) push(p - 1);
-    if (x < W - 1) push(p + 1);
-    if (p >= W) push(p - W);
-    if (p < W * (H - 1)) push(p + W);
-  }
-
-  // keep sources: drawn strokes + whatever the flood couldn't reach…
   const src = new Uint8Array(W * H);
-  for (let p = 0; p < src.length; p++) src[p] = seen[p] ? 0 : 1;
-
-  // …except that, with a reference, unseen OPAQUE regions over reference
-  // rooms must earn it by tint: their neighbourhood-averaged luminance must
-  // sit measurably above the true background (modelled from the reachable
-  // void). Explored room fill does; unexplored background does not.
-  if (refShot) {
-    // background luminance model from reachable-void pixels: 40px block
-    // means, smoothly upsampled (tracks the map's vignette)
-    const B = 40;
-    const bw = Math.ceil(W / B), bh = Math.ceil(H / B);
-    const bsum = new Float64Array(bw * bh);
-    const bcnt = new Uint32Array(bw * bh);
-    let gsum = 0, gcnt = 0;
-    for (let y = 0; y < H; y++) {
-      const by = (y / B) | 0;
-      for (let x = 0; x < W; x++) {
-        const p = y * W + x;
-        if (!seen[p] || !opaque[p]) continue;
-        const i = p * 4;
-        const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
-        bsum[by * bw + ((x / B) | 0)] += lum;
-        bcnt[by * bw + ((x / B) | 0)]++;
-        gsum += lum; gcnt++;
-      }
-    }
-    // no reachable background at all — nothing to compare against, keep all
-    if (gcnt > 200) {
-      const gAvg = gsum / gcnt;
-      const small = new ImageData(bw, bh);
-      for (let bi = 0; bi < bcnt.length; bi++) {
-        const v = Math.max(0, Math.min(255, Math.round(bcnt[bi] > 40 ? bsum[bi] / bcnt[bi] : gAvg)));
-        const i = bi * 4;
-        small.data[i] = small.data[i + 1] = small.data[i + 2] = v;
-        small.data[i + 3] = 255;
-      }
-      const sc = document.createElement('canvas');
-      sc.width = bw; sc.height = bh;
-      sc.getContext('2d').putImageData(small, 0, 0);
-      const uc = document.createElement('canvas');
-      uc.width = W; uc.height = H;
-      const ux = uc.getContext('2d', { willReadFrequently: true });
-      ux.imageSmoothingEnabled = true;
-      ux.drawImage(sc, 0, 0, W, H);
-      const bgl = ux.getImageData(0, 0, W, H).data;
-
-      // luminance delta of the eligible pixels, box-averaged (separable,
-      // weighted so strokes/void/transparent don't dilute the mean)
-      const R2 = 6;
-      const elig = new Uint8Array(W * H);
-      const delta = new Float32Array(W * H);
-      for (let p = 0; p < W * H; p++) {
-        if (seen[p] || mask[p] || !refShot[p] || !opaque[p]) continue;
-        const i = p * 4;
-        elig[p] = 1;
-        delta[p] = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114 - bgl[i];
-      }
-      const hs = new Float32Array(W * H), hc = new Float32Array(W * H);
-      for (let y = 0; y < H; y++) {
-        const row = y * W;
-        let s = 0, n = 0;
-        for (let x = 0; x < Math.min(W, R2 + 1); x++) { if (elig[row + x]) { s += delta[row + x]; n++; } }
-        for (let x = 0; x < W; x++) {
-          hs[row + x] = s; hc[row + x] = n;
-          const add = x + R2 + 1, drop = x - R2;
-          if (add < W && elig[row + add]) { s += delta[row + add]; n++; }
-          if (drop >= 0 && elig[row + drop]) { s -= delta[row + drop]; n--; }
-        }
-      }
-      for (let x = 0; x < W; x++) {
-        let s = 0, n = 0;
-        for (let y = 0; y < Math.min(H, R2 + 1); y++) { s += hs[y * W + x]; n += hc[y * W + x]; }
-        for (let y = 0; y < H; y++) {
-          const p = y * W + x;
-          if (elig[p] && !(n > 0 && s / n > 2)) src[p] = 0; // untinted: fade
-          const add = y + R2 + 1, drop = y - R2;
-          if (add < H) { s += hs[add * W + x]; n += hc[add * W + x]; }
-          if (drop >= 0) { s -= hs[drop * W + x]; n -= hc[drop * W + x]; }
-        }
-      }
-    }
-  }
+  for (let p = 0; p < src.length; p++) if (bd[p * 4 + 3] > 80) src[p] = 1;
 
   const dt = chamferDT(src, W, H, fadePx, false);
   const cap = fadePx * 3;
@@ -248,14 +140,13 @@ function contentFade(d, opaque, W, H, fadePx, refShot = null) {
   return f;
 }
 
-// Prepare a screenshot for compositing: keep content and enclosed room
-// interiors opaque, fade the background halo, and feather the snip edge —
-// by true distance to the nearest transparent pixel, so freeform
-// (non-rectangular) snips get the same soft edge a rectangular one does.
-// `refContent` + `mapRect`: reference content mask (composite resolution)
-// and where this paste lands, so contentFade can tell cut-through-a-room
-// from open-to-the-void at the snip boundary.
-function prepPaste(bitmap, refContent = null, mapRect = null, scale = 1) {
+// Prepare a screenshot for compositing: keep drawn content, fade the
+// background to black, and feather the snip edge — by true distance to the
+// nearest transparent pixel, so freeform (non-rectangular) snips get the
+// same soft edge a rectangular one does. In the faded band the colour is
+// darkened toward black alongside the alpha drop, so the transition reads as
+// clean black instead of a lingering brown vignette tint.
+function prepPaste(bitmap) {
   const W = bitmap.width, H = bitmap.height;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -268,32 +159,20 @@ function prepPaste(bitmap, refContent = null, mapRect = null, scale = 1) {
   for (let p = 0; p < opaque.length; p++) {
     if (d[p * 4 + 3] > 8) opaque[p] = 1; else trans[p] = 1;
   }
-  // resample the reference content mask into shot space
-  let refShot = null;
-  if (refContent && mapRect) {
-    refShot = new Uint8Array(W * H);
-    const kx = mapRect.w * scale / W, ky = mapRect.h * scale / H;
-    const rx0 = mapRect.x * scale, ry0 = mapRect.y * scale;
-    for (let y = 0; y < H; y++) {
-      const my = (ry0 + y * ky) | 0;
-      if (my < 0 || my >= refContent.H) continue;
-      const row = y * W, mrow = my * refContent.W;
-      for (let x = 0; x < W; x++) {
-        const mx = (rx0 + x * kx) | 0;
-        if (mx >= 0 && mx < refContent.W && refContent.m[mrow + mx]) refShot[row + x] = 1;
-      }
-    }
-  }
   const edge = Math.round(Math.min(W, H) * 0.06);
   const rim = edge > 0 ? chamferDT(trans, W, H, edge, true) : null;
-  const fade = contentFade(d, opaque, W, H, FADE_PX, refShot);
+  const fade = contentFade(d, opaque, W, H, FADE_PX);
   const cap = edge * 3;
   for (let p = 0; p < opaque.length; p++) {
-    const i = p * 4 + 3;
-    if (!d[i]) continue;
-    let a = d[i] * fade[p] / 255;
+    const i = p * 4;
+    if (!d[i + 3]) continue;
+    const k = fade[p];
+    d[i] = (d[i] * k / 255) | 0;
+    d[i + 1] = (d[i + 1] * k / 255) | 0;
+    d[i + 2] = (d[i + 2] * k / 255) | 0;
+    let a = d[i + 3] * k / 255;
     if (rim && rim[p] < cap) a = a * rim[p] / cap;
-    d[i] = a | 0;
+    d[i + 3] = a | 0;
   }
   ctx.putImageData(img, 0, 0);
   return c;
@@ -338,37 +217,11 @@ export class Explored {
     this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
     this.ctx.imageSmoothingQuality = 'high';
     this.onChange = null; // set by app for persistence / rerender
-    this.refImage = null; // reference map, set by app; guides the bg fade
-    this._refKeep = null;
-  }
-
-  // The reference map is NEVER displayed — the background fade only uses it
-  // to tell whether a snip edge cuts through a room (keep the sliced room's
-  // interior) or opens to the void (fade). It can never add anything.
-  setReference(img) { this.refImage = img; this._refKeep = null; }
-
-  // lazy reference content mask at composite resolution
-  _refContentMask() {
-    if (this._refKeep || !this.refImage) return this._refKeep;
-    const W = this.canvas.width, H = this.canvas.height;
-    const c = document.createElement('canvas');
-    c.width = W; c.height = H;
-    const x = c.getContext('2d', { willReadFrequently: true });
-    x.imageSmoothingEnabled = true;
-    x.drawImage(this.refImage, 0, 0, W, H);
-    const d = x.getImageData(0, 0, W, H).data;
-    const m = new Uint8Array(W * H);
-    for (let p = 0; p < m.length; p++) {
-      const i = p * 4;
-      if (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114 > 14) m[p] = 1;
-    }
-    this._refKeep = { m, W, H };
-    return this._refKeep;
   }
 
   // composite a screenshot at map-rect (x, y, w, h), newest on top
   paste(bitmap, x, y, w, h) {
-    const p = prepPaste(bitmap, this._refContentMask(), { x, y, w, h }, this.scale);
+    const p = prepPaste(bitmap);
     const s = this.scale;
     this.ctx.drawImage(p, x * s, y * s, w * s, h * s);
     this._changed();
@@ -435,21 +288,25 @@ export class Explored {
     return { ...rect, x: rect.x + best.dx / (f * s), y: rect.y + best.dy / (f * s) };
   }
 
-  // Apply the content-halo fade to the composite as it stands: keeps rooms /
-  // text / markers, fades every screenshot's own background tint away. For
-  // maps built before background fading existed (or after many overlapping
-  // pastes), this removes the visible rectangular seams in one go.
+  // Apply the content fade to the composite as it stands: keeps drawn rooms /
+  // text / markers, fades every screenshot's background to black. For maps
+  // built before background fading existed (or after many overlapping pastes),
+  // this removes the visible rectangular seams in one go.
   cleanBackground() {
     const W = this.canvas.width, H = this.canvas.height;
     const img = this.ctx.getImageData(0, 0, W, H);
     const d = img.data;
     const opaque = new Uint8Array(W * H);
     for (let p = 0; p < opaque.length; p++) if (d[p * 4 + 3] > 8) opaque[p] = 1;
-    const ref = this._refContentMask(); // same resolution as the composite
-    const fade = contentFade(d, opaque, W, H, FADE_PX, ref && ref.m);
+    const fade = contentFade(d, opaque, W, H, FADE_PX);
     for (let p = 0; p < opaque.length; p++) {
-      const i = p * 4 + 3;
-      if (d[i]) d[i] = (d[i] * fade[p] / 255) | 0;
+      const i = p * 4;
+      if (!d[i + 3]) continue;
+      const k = fade[p];
+      d[i] = (d[i] * k / 255) | 0;
+      d[i + 1] = (d[i + 1] * k / 255) | 0;
+      d[i + 2] = (d[i + 2] * k / 255) | 0;
+      d[i + 3] = (d[i + 3] * k / 255) | 0;
     }
     this.ctx.putImageData(img, 0, 0);
     this._changed();
