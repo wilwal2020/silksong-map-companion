@@ -97,17 +97,20 @@ function coarseBackground(d, opaque, W, H) {
 
 // Per-pixel alpha factors (0-255) for the content-halo look: 255 on drawn map
 // content AND inside enclosed rooms, falling linearly to 0 within FADE_PX of
-// them. "Background" is decided by a flood from the void/border through
-// non-content pixels: whatever it can't reach is a room interior and is kept
-// with its fill tint intact.
+// them. "Background" is a flood from the border that may only travel over
+// reference VOID: in-game background exists exactly where the world has no
+// rooms, so it can never slip through a doorway opening into a room. What
+// the flood can't reach and sits over reference rooms is then decided by a
+// NEIGHBOURHOOD COLOUR test: explored room fill is tinted a few luminance
+// units above the true background (sampled from the reachable void), while
+// unexplored background over reference rooms is not. Per pixel that delta
+// drowns in noise, but averaged over a ~13px neighbourhood it separates
+// cleanly (Greymoor fill +4.4, unexplored −0.5, noise of the mean ≪ 1).
+// Nothing the user hasn't pasted can appear: only already-pasted pixels are
+// ever kept, and untinted background always fades.
 //
 // `refShot` (optional, same W×H grid): 1 where the REFERENCE map has content
-// at that pixel's map position. The reference is used ONLY to close cuts:
-// where the snip edge / composite void slices through a room, the flood must
-// not enter (the boundary sits on reference room content), so the sliced
-// room's interior stays kept. It can never keep free-standing background —
-// opaque background over reference rooms is still reachable and fades — and
-// it never adds anything the user hasn't pasted.
+// at that pixel's map position.
 function contentFade(d, opaque, W, H, fadePx, refShot = null) {
   const bg = coarseBackground(d, opaque, W, H);
   const md = new ImageData(W, H);
@@ -129,31 +132,19 @@ function contentFade(d, opaque, W, H, fadePx, refShot = null) {
   bx.filter = 'blur(2px)';
   bx.drawImage(mc, 0, 0);
   const bd = bx.getImageData(0, 0, W, H).data;
+  const mask = new Uint8Array(W * H);
+  for (let p = 0; p < mask.length; p++) if (bd[p * 4 + 3] > 80) mask[p] = 1;
 
-  // walls stop the background flood: drawn content, plus — when the
-  // reference is known — transparent/border pixels that sit on reference
-  // rooms (a cut through a room, not an opening to the void)
-  const wall = new Uint8Array(W * H);
-  for (let p = 0; p < wall.length; p++) {
-    if (bd[p * 4 + 3] > 80) wall[p] = 1;
-    else if (refShot && refShot[p] && !opaque[p]) wall[p] = 1;
-  }
-  if (refShot) {
-    for (let x = 0; x < W; x++) {
-      if (refShot[x]) wall[x] = 1;
-      if (refShot[(H - 1) * W + x]) wall[(H - 1) * W + x] = 1;
-    }
-    for (let y = 0; y < H; y++) {
-      if (refShot[y * W]) wall[y * W] = 1;
-      if (refShot[y * W + W - 1]) wall[y * W + W - 1] = 1;
-    }
-  }
-
-  // flood the reachable background from the border
+  // flood the reachable background from the border; with a reference it may
+  // only travel over reference void, so it can never slip through a doorway
+  // opening into a room's interior
   const seen = new Uint8Array(W * H);
   const q = new Int32Array(W * H);
   let head = 0, tail = 0;
-  const push = p => { if (!seen[p] && !wall[p]) { seen[p] = 1; q[tail++] = p; } };
+  const push = p => {
+    if (seen[p] || mask[p] || (refShot && refShot[p])) return;
+    seen[p] = 1; q[tail++] = p;
+  };
   for (let x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
   for (let y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
   while (head < tail) {
@@ -165,10 +156,91 @@ function contentFade(d, opaque, W, H, fadePx, refShot = null) {
     if (p < W * (H - 1)) push(p + W);
   }
 
-  // everything the flood could NOT reach is content/interior — keep it fully;
-  // reachable background fades out over fadePx
+  // keep sources: drawn strokes + whatever the flood couldn't reach…
   const src = new Uint8Array(W * H);
   for (let p = 0; p < src.length; p++) src[p] = seen[p] ? 0 : 1;
+
+  // …except that, with a reference, unseen OPAQUE regions over reference
+  // rooms must earn it by tint: their neighbourhood-averaged luminance must
+  // sit measurably above the true background (modelled from the reachable
+  // void). Explored room fill does; unexplored background does not.
+  if (refShot) {
+    // background luminance model from reachable-void pixels: 40px block
+    // means, smoothly upsampled (tracks the map's vignette)
+    const B = 40;
+    const bw = Math.ceil(W / B), bh = Math.ceil(H / B);
+    const bsum = new Float64Array(bw * bh);
+    const bcnt = new Uint32Array(bw * bh);
+    let gsum = 0, gcnt = 0;
+    for (let y = 0; y < H; y++) {
+      const by = (y / B) | 0;
+      for (let x = 0; x < W; x++) {
+        const p = y * W + x;
+        if (!seen[p] || !opaque[p]) continue;
+        const i = p * 4;
+        const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+        bsum[by * bw + ((x / B) | 0)] += lum;
+        bcnt[by * bw + ((x / B) | 0)]++;
+        gsum += lum; gcnt++;
+      }
+    }
+    // no reachable background at all — nothing to compare against, keep all
+    if (gcnt > 200) {
+      const gAvg = gsum / gcnt;
+      const small = new ImageData(bw, bh);
+      for (let bi = 0; bi < bcnt.length; bi++) {
+        const v = Math.max(0, Math.min(255, Math.round(bcnt[bi] > 40 ? bsum[bi] / bcnt[bi] : gAvg)));
+        const i = bi * 4;
+        small.data[i] = small.data[i + 1] = small.data[i + 2] = v;
+        small.data[i + 3] = 255;
+      }
+      const sc = document.createElement('canvas');
+      sc.width = bw; sc.height = bh;
+      sc.getContext('2d').putImageData(small, 0, 0);
+      const uc = document.createElement('canvas');
+      uc.width = W; uc.height = H;
+      const ux = uc.getContext('2d', { willReadFrequently: true });
+      ux.imageSmoothingEnabled = true;
+      ux.drawImage(sc, 0, 0, W, H);
+      const bgl = ux.getImageData(0, 0, W, H).data;
+
+      // luminance delta of the eligible pixels, box-averaged (separable,
+      // weighted so strokes/void/transparent don't dilute the mean)
+      const R2 = 6;
+      const elig = new Uint8Array(W * H);
+      const delta = new Float32Array(W * H);
+      for (let p = 0; p < W * H; p++) {
+        if (seen[p] || mask[p] || !refShot[p] || !opaque[p]) continue;
+        const i = p * 4;
+        elig[p] = 1;
+        delta[p] = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114 - bgl[i];
+      }
+      const hs = new Float32Array(W * H), hc = new Float32Array(W * H);
+      for (let y = 0; y < H; y++) {
+        const row = y * W;
+        let s = 0, n = 0;
+        for (let x = 0; x < Math.min(W, R2 + 1); x++) { if (elig[row + x]) { s += delta[row + x]; n++; } }
+        for (let x = 0; x < W; x++) {
+          hs[row + x] = s; hc[row + x] = n;
+          const add = x + R2 + 1, drop = x - R2;
+          if (add < W && elig[row + add]) { s += delta[row + add]; n++; }
+          if (drop >= 0 && elig[row + drop]) { s -= delta[row + drop]; n--; }
+        }
+      }
+      for (let x = 0; x < W; x++) {
+        let s = 0, n = 0;
+        for (let y = 0; y < Math.min(H, R2 + 1); y++) { s += hs[y * W + x]; n += hc[y * W + x]; }
+        for (let y = 0; y < H; y++) {
+          const p = y * W + x;
+          if (elig[p] && !(n > 0 && s / n > 2)) src[p] = 0; // untinted: fade
+          const add = y + R2 + 1, drop = y - R2;
+          if (add < H) { s += hs[add * W + x]; n += hc[add * W + x]; }
+          if (drop >= 0) { s -= hs[drop * W + x]; n -= hc[drop * W + x]; }
+        }
+      }
+    }
+  }
+
   const dt = chamferDT(src, W, H, fadePx, false);
   const cap = fadePx * 3;
   const f = new Uint8Array(W * H);
