@@ -486,16 +486,20 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 .cat-btn .cb-ico { font-size: 1.05rem; filter: drop-shadow(0 0 4px var(--pc, transparent)); }
 .cat-btn.on { border-color: var(--pc, var(--accent)); background: color-mix(in srgb, var(--pc, var(--accent)) 15%, transparent); }
-/* "New type…" inside the pin editor — a full-width row styled exactly like
-   the sidebar's .cat-new-row so it clearly reads as "add your own" */
+/* "New type…" inside the pin editor — same size as the other type buttons,
+   but with the sidebar add-row's dashed-crimson look so it reads as "add" */
 .cat-btn-new {
-  grid-column: 1 / -1; gap: 10px; padding: 10px 11px;
-  background: rgba(158,43,37,.07); border: 1px dashed #6a3a3b; border-radius: 9px;
+  background: rgba(158,43,37,.07); border: 1px dashed #6a3a3b;
   color: var(--rose);
   transition: background .14s, border-color .14s, color .14s, box-shadow .14s;
 }
 .cat-btn-new:hover { background: rgba(158,43,37,.16); border-color: var(--accent); color: #f0c4be;
   box-shadow: 0 0 16px -6px var(--accent-glow); }
+/* shrink the sidebar-sized icon/name to this row's scale (icon sized so the
+   button's height matches its emoji-icon siblings exactly) */
+.cat-btn-new .cat-new-ico { width: 21px; height: 21px; border-radius: 5px; }
+.cat-btn-new .cat-new-ico svg { width: 11px; height: 11px; }
+.cat-btn-new .cat-new-name { font-size: .85rem; font-weight: 500; }
 
 #pin-note {
   width: 100%; background: var(--panel-2); border: 1px solid var(--border);

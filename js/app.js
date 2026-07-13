@@ -1431,6 +1431,24 @@ function buildToolbar() {
     view.requestRender();
   });
 
+  // fade all pasted backgrounds on the current composite (undoable)
+  $('#btn-clean').addEventListener('click', () => {
+    if (explored.isBlank()) { toast('Nothing to clean yet — paste a screenshot first.'); return; }
+    snapshotForUndo();
+    spinner(true, 'Cleaning the map…');
+    // let the spinner paint before the synchronous pixel work blocks the thread
+    setTimeout(() => {
+      try {
+        explored.cleanBackground();
+        toast('Map cleaned — backgrounds faded, rooms and names kept.', 'ok', { label: 'Undo', fn: undoLast });
+      } catch (e) {
+        console.error(e);
+        toast('Cleaning failed: ' + e.message, 'error');
+      }
+      spinner(false);
+    }, 30);
+  });
+
   $('#btn-export').addEventListener('click', exportAll);
   $('#btn-import').addEventListener('click', () => $('#import-file').click());
   $('#import-file').addEventListener('change', e => {

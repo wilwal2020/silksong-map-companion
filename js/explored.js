@@ -3,39 +3,165 @@
 // reference map — you see exactly what you screenshotted, so it can never show
 // more (or less) than what was really on your in-game map.
 //
-// Each new screenshot is composited OPAQUELY on top of the previous ones, with
-// only its outer rim feathered. Opaque means overlapping pastes never let the
-// layers beneath show through, so slightly-misaligned overlaps can't
-// accumulate doubled/ghosted outlines; the newest (best-aligned) paste always
-// wins the overlap, and the feathered rim keeps the seam soft.
+// Compositing look: map CONTENT (room outlines/fills, text, markers) is kept
+// at full opacity while the screenshot's own background tint fades out over a
+// soft halo around the content. Backgrounds are what made seams visible —
+// each screenshot carries a slightly different vignette — so removing them
+// makes overlapping pastes read as one continuous map. The outer edge (rect
+// OR freeform snip shape) is additionally feathered by true distance to the
+// nearest transparent pixel / border.
 
-// Prepare a screenshot for compositing: full opacity in the interior, alpha
-// ramped to zero over a rim margin so the rectangle edge blends into whatever
-// is behind it (fog or an earlier paste).
+import { fillEnclosed } from './match.js';
+
+// how far (px) the background fades out around drawn content
+const FADE_PX = 14;
+
+// Chamfer distance transform (3/4 weights, thirds of a pixel) to the nearest
+// source pixel; capped at capPx. If borderIsSource, outside the canvas also
+// counts as a source (used for the edge feather).
+function chamferDT(source, W, H, capPx, borderIsSource) {
+  const CAP = capPx * 3;
+  const dt = new Uint16Array(W * H);
+  for (let p = 0; p < dt.length; p++) dt[p] = source[p] ? 0 : CAP;
+  const B = borderIsSource ? 0 : CAP;
+  for (let y = 0; y < H; y++) {
+    const row = y * W;
+    for (let x = 0; x < W; x++) {
+      const p = row + x;
+      if (!dt[p]) continue;
+      const l = x > 0 ? dt[p - 1] : B;
+      const u = y > 0 ? dt[p - W] : B;
+      const ul = x > 0 && y > 0 ? dt[p - W - 1] : B;
+      const ur = y > 0 && x < W - 1 ? dt[p - W + 1] : B;
+      const v = Math.min(dt[p], l + 3, u + 3, ul + 4, ur + 4);
+      dt[p] = v > CAP ? CAP : v;
+    }
+  }
+  for (let y = H - 1; y >= 0; y--) {
+    const row = y * W;
+    for (let x = W - 1; x >= 0; x--) {
+      const p = row + x;
+      if (!dt[p]) continue;
+      const r = x < W - 1 ? dt[p + 1] : B;
+      const d2 = y < H - 1 ? dt[p + W] : B;
+      const dl = x > 0 && y < H - 1 ? dt[p + W - 1] : B;
+      const dr = x < W - 1 && y < H - 1 ? dt[p + W + 1] : B;
+      const v = Math.min(dt[p], r + 3, d2 + 3, dl + 4, dr + 4);
+      dt[p] = v > CAP ? CAP : v;
+    }
+  }
+  return dt;
+}
+
+// Coarse local background estimate from OPAQUE pixels only. The plain
+// downscale trick (worker's binaryContentMask) breaks here: transparent
+// regions — a freeform snip's surround, the composite's unexplored void —
+// would drag the estimate toward black and make the background tint itself
+// read as "content".
+function coarseBackground(d, opaque, W, H) {
+  const B = 20;
+  const bw = Math.ceil(W / B), bh = Math.ceil(H / B);
+  const sum = new Float64Array(bw * bh * 3);
+  const cnt = new Uint32Array(bw * bh);
+  for (let y = 0; y < H; y++) {
+    const by = (y / B) | 0;
+    for (let x = 0; x < W; x++) {
+      const p = y * W + x;
+      if (!opaque[p]) continue;
+      const b = by * bw + ((x / B) | 0), i = p * 4;
+      sum[b * 3] += d[i]; sum[b * 3 + 1] += d[i + 1]; sum[b * 3 + 2] += d[i + 2];
+      cnt[b]++;
+    }
+  }
+  let gr = 0, gg = 0, gb = 0, gn = 0;
+  for (let b = 0; b < cnt.length; b++) {
+    if (cnt[b]) { gr += sum[b * 3]; gg += sum[b * 3 + 1]; gb += sum[b * 3 + 2]; gn += cnt[b]; }
+  }
+  if (gn) { gr /= gn; gg /= gn; gb /= gn; }
+  const small = new ImageData(bw, bh);
+  for (let b = 0; b < cnt.length; b++) {
+    const i = b * 4, n = cnt[b];
+    small.data[i] = n ? sum[b * 3] / n : gr;
+    small.data[i + 1] = n ? sum[b * 3 + 1] / n : gg;
+    small.data[i + 2] = n ? sum[b * 3 + 2] / n : gb;
+    small.data[i + 3] = 255;
+  }
+  const sc = document.createElement('canvas');
+  sc.width = bw; sc.height = bh;
+  sc.getContext('2d').putImageData(small, 0, 0);
+  const uc = document.createElement('canvas');
+  uc.width = W; uc.height = H;
+  const ux = uc.getContext('2d', { willReadFrequently: true });
+  ux.imageSmoothingEnabled = true;
+  ux.drawImage(sc, 0, 0, W, H);
+  return ux.getImageData(0, 0, W, H).data;
+}
+
+// Per-pixel alpha factors (0-255) for the content-halo look: 255 on drawn map
+// content, falling linearly to 0 within FADE_PX of it. Content = notably
+// different from the local background tint; dashed outlines are closed and
+// enclosed room interiors filled (same trick the matcher uses) so room bodies
+// stay solid.
+function contentFade(d, opaque, W, H, fadePx) {
+  const bg = coarseBackground(d, opaque, W, H);
+  const md = new ImageData(W, H);
+  for (let p = 0; p < W * H; p++) {
+    if (!opaque[p]) continue;
+    const i = p * 4;
+    const dr = d[i] - bg[i], dg = d[i + 1] - bg[i + 1], db = d[i + 2] - bg[i + 2];
+    if (dr * dr + dg * dg + db * db > 1800) {
+      md.data[i] = md.data[i + 1] = md.data[i + 2] = md.data[i + 3] = 255;
+    }
+  }
+  // close dashed outlines with a small blur + threshold, then fill interiors
+  const mc = document.createElement('canvas');
+  mc.width = W; mc.height = H;
+  mc.getContext('2d').putImageData(md, 0, 0);
+  const bc = document.createElement('canvas');
+  bc.width = W; bc.height = H;
+  const bx = bc.getContext('2d', { willReadFrequently: true });
+  bx.filter = 'blur(1.4px)';
+  bx.drawImage(mc, 0, 0);
+  const bd = bx.getImageData(0, 0, W, H).data;
+  const mask = new Uint8Array(W * H);
+  for (let p = 0; p < mask.length; p++) if (bd[p * 4 + 3] > 80) mask[p] = 255;
+  fillEnclosed(mask, W, H);
+  const dt = chamferDT(mask, W, H, fadePx, false);
+  const cap = fadePx * 3;
+  const f = new Uint8Array(W * H);
+  for (let p = 0; p < f.length; p++) f[p] = 255 - ((255 * dt[p] / cap) | 0);
+  return f;
+}
+
+// Prepare a screenshot for compositing: keep content opaque, fade its
+// background halo, and feather the snip edge — by true distance to the
+// nearest transparent pixel, so freeform (non-rectangular) snips get the
+// same soft edge a rectangular one does.
 function prepPaste(bitmap) {
   const W = bitmap.width, H = bitmap.height;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(bitmap, 0, 0);
-  const edge = Math.round(Math.min(W, H) * 0.06);
-  if (edge > 0) {
-    const img = ctx.getImageData(0, 0, W, H);
-    const d = img.data;
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const m = Math.min(x, y, W - 1 - x, H - 1 - y);
-        // scale the existing alpha, never raise it: a freeform/non-rectangular
-        // snip is transparent (black) outside its shape, and setting alpha
-        // outright resurrected those pixels as a dark vignette around it
-        if (m < edge) {
-          const i = (y * W + x) * 4 + 3;
-          d[i] = Math.round(d[i] * m / edge);
-        }
-      }
-    }
-    ctx.putImageData(img, 0, 0);
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data;
+  const opaque = new Uint8Array(W * H);
+  const trans = new Uint8Array(W * H);
+  for (let p = 0; p < opaque.length; p++) {
+    if (d[p * 4 + 3] > 8) opaque[p] = 1; else trans[p] = 1;
   }
+  const edge = Math.round(Math.min(W, H) * 0.06);
+  const rim = edge > 0 ? chamferDT(trans, W, H, edge, true) : null;
+  const fade = contentFade(d, opaque, W, H, FADE_PX);
+  const cap = edge * 3;
+  for (let p = 0; p < opaque.length; p++) {
+    const i = p * 4 + 3;
+    if (!d[i]) continue;
+    let a = d[i] * fade[p] / 255;
+    if (rim && rim[p] < cap) a = a * rim[p] / cap;
+    d[i] = a | 0;
+  }
+  ctx.putImageData(img, 0, 0);
   return c;
 }
 
@@ -147,6 +273,25 @@ export class Explored {
     }
 
     return { ...rect, x: rect.x + best.dx / (f * s), y: rect.y + best.dy / (f * s) };
+  }
+
+  // Apply the content-halo fade to the composite as it stands: keeps rooms /
+  // text / markers, fades every screenshot's own background tint away. For
+  // maps built before background fading existed (or after many overlapping
+  // pastes), this removes the visible rectangular seams in one go.
+  cleanBackground() {
+    const W = this.canvas.width, H = this.canvas.height;
+    const img = this.ctx.getImageData(0, 0, W, H);
+    const d = img.data;
+    const opaque = new Uint8Array(W * H);
+    for (let p = 0; p < opaque.length; p++) if (d[p * 4 + 3] > 8) opaque[p] = 1;
+    const fade = contentFade(d, opaque, W, H, FADE_PX);
+    for (let p = 0; p < opaque.length; p++) {
+      const i = p * 4 + 3;
+      if (d[i]) d[i] = (d[i] * fade[p] / 255) | 0;
+    }
+    this.ctx.putImageData(img, 0, 0);
+    this._changed();
   }
 
   clear() {
