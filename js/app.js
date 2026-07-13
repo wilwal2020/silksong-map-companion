@@ -1501,6 +1501,7 @@ function buildToolbar() {
 async function init() {
   mapImage = await loadImage('assets/map.png');
   explored = new Explored(mapImage.width, mapImage.height);
+  explored.setReference(mapImage); // guides the background fade (never shown)
   view = new MapView($('#map-canvas'), mapImage, explored);
 
   // category config must be loaded before the filter set is built
