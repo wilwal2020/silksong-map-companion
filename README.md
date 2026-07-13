@@ -1,64 +1,112 @@
 # Silksong Map Companion
 
 A fog-of-war map tracker for **Hollow Knight: Silksong**. The world map starts
-completely hidden — you reveal it with screenshots of your own in-game map, and
-pin the places you want to come back to, each with a screenshot of what's
-actually there.
+completely hidden — you reveal it by pasting screenshots of your own in-game
+map, and drop pins on the places you want to come back to, each with a picture
+of what's actually there.
 
-No accounts, no server: everything runs in your browser and is stored locally.
+No accounts, no server, no build step: everything runs in your browser and is
+stored locally.
 
 ## How to use it
 
-1. **In game:** open your map at a spot you want to remember and screenshot it
-   (`Win+Shift+S` and snip just the map works great).
-2. **On the site:** press `Ctrl+V`. Choose **Map screenshot** — the site
-   auto-locates it on the world map (edge-based image matching, in-browser),
-   shows you the match so you can drag/scroll to adjust, then reveals that
-   region and drops a pin. Drag the pin onto your exact spot.
-3. Pick a **category** (locked door, needs ability, vendor, bench, boss…) and
-   write a short note.
-4. **In game:** screenshot the actual place (the sealed door, the NPC, the
-   ledge you can't reach yet) and paste it as an **Area screenshot**. Hovering
-   the pin now shows it.
-5. Came back and dealt with it? Open the pin and hit **✓ done**.
-6. Zoom your in-game map all the way out and paste it as **Full map** to update
-   everything you've explored in one go — only rooms that are actually drawn on
-   your map get revealed, so unexplored areas stay hidden.
+1. **In game:** open your map and screenshot it (`Shift + Win + S` and snip
+   just the part you care about works great). Keep at least one **area name**
+   ("Bone Bottom", "THE MARROW"…) in frame — the site reads that name to place
+   your screenshot.
+2. **On the site:** press `Ctrl+V` (or drag the image in). A chooser asks what
+   you pasted, with two options:
+   - **📍 Reveal this area, and pin your location** — the site auto-locates the
+     screenshot on the world map, reveals that region, and drops a pin. If your
+     **player marker** is visible (equip the **Compass** in game), the pin lands
+     on your exact spot; otherwise it lands at the area's centre and you drag it
+     into place.
+   - **🗺 Update your map** — for a zoomed-out shot of a large area or the whole
+     world. Reveals everything your map actually shows in one go; only rooms
+     drawn on your in-game map appear, so unexplored areas stay hidden. No pin.
+3. **Fill in the pin.** Pick a **type** (locked door, NPC/quest, vendor, or your
+   own) and write a short note.
+4. **Remember what's there.** With a pin's editor open — or while hovering an
+   empty pin — paste a screenshot of the actual place (the sealed door, the NPC,
+   the ledge you can't reach yet). It's attached to that pin, shown when you open
+   it.
+5. **Came back and dealt with it?** Open the pin and check it off as done.
 
-Filter pins by category from the toolbar, and use **Export** / **Import** to
-back up or move your progress between machines (progress lives in the
-browser's IndexedDB, so clearing site data erases it — export now and then!).
+Pins, the revealed map, and your custom types all persist automatically in the
+browser's IndexedDB. `Ctrl+Z` undoes the last paste (or the last pin move).
+
+## The toolbar
+
+- **📍 Add pin** — drop a pin by hand: click, then click the spot on the map.
+- **Reveal map** — overlay the reference map to check your alignment (a testing
+  aid; it's never part of your saved map).
+- **Clean map** — fade every pasted screenshot's dark background to black so
+  overlapping pastes blend into one seamless map. Room outlines, fills, area
+  names and markers are kept; only the background void fades. Undoable.
+- **Export / Import** — download or restore a full JSON backup (revealed map +
+  all pins with their pictures, notes and custom types). Clearing site data
+  erases everything, so export now and then.
+- **Clear map** — erase the revealed map but keep every pin. Use it after a run
+  of misaligned pastes; the scale calibration resets too and the next paste
+  re-measures it.
+- **Reset** — erase everything (map and pins). Export a backup first.
+
+On the left, the **Pin types** panel filters which pins show (with **All** /
+**Hide all** and a **Show done pins** toggle), and lets you create your own
+types — an emoji icon, a colour, and a name. The **map-opacity** slider dims the
+revealed map while keeping pins fully visible.
 
 ## Running it
 
 It's a static site — no build step.
 
 - Locally: serve the folder with any static server, e.g. `npx serve .` or
-  `python -m http.server`, and open it in a Chromium-based browser or Firefox.
+  `python -m http.server`, then open it in a Chromium-based browser or Firefox.
 - Or use the GitHub Pages deployment of this repo.
 
-The screenshot auto-locating uses a bundled copy of
-[OpenCV.js](https://docs.opencv.org/) (`vendor/opencv.js`), loaded on first
-use — everything works offline.
+Screenshot auto-locating uses a bundled copy of
+[OpenCV.js](https://docs.opencv.org/) (`vendor/opencv.js`), loaded on first use,
+so everything works offline.
 
 ## How the matching works
 
-Three cooperating signals, tried in order:
+Locating a screenshot on the world map uses three cooperating signals:
 
-1. **Area-name labels** — region names ("Bone Bottom", "THE MARROW"…) are
-   drawn at fixed positions and sizes on the map. Text lines are detected in
-   your screenshot and matched against labels auto-extracted from the
-   reference map: one label gives identity, position and scale in a single
-   step (even partially cut-off labels work).
-2. **The player marker** — the white Hornet icon is drawn on the map, so its
-   pixel height reveals the screenshot's scale exactly (~43.8 map px).
+1. **Area-name labels** — region names are drawn at fixed positions and sizes on
+   the map. Text lines are detected in your screenshot and matched against
+   labels auto-extracted from the reference map: one label gives identity,
+   position and scale in a single step (even a partly cut-off name works).
+2. **The player marker** — the white Hornet icon has a known map height
+   (~43.8 map px), so when it's visible it fixes the screenshot's scale exactly.
 3. **Room shapes** — both images are reduced to content masks
    (drawn-vs-background, interiors flood-filled) whose boundaries are
    template-matched multi-scale, coarse-to-fine.
 
-Every result is verified against the room structure and classified into
-three confidence tiers: apply instantly, ask yes/no with a preview, or
-refuse. Ctrl+Z undoes the last paste.
+Every result is verified against the room structure and sorted into confidence
+tiers: apply instantly, ask yes/no with a preview, or refuse. The heavy image
+matching runs in a Web Worker so the UI stays responsive.
+
+## Background fading
+
+When screenshots overlap, each one's dark vignette would otherwise show as
+rectangular seams. On paste — and on demand via **Clean map** — the background
+is faded to black by flooding inward from the screenshot's edge: everything the
+flood can reach is background and fades, everything it can't reach (enclosed
+room interiors, outlines, text, markers) is kept. The full reference map is used
+only to keep the flood from leaking through a doorway and blacking out a room
+interior; it never adds anything you haven't pasted.
+
+## Project layout
+
+- `index.html`, `css/style.css` — shell and styling.
+- `js/app.js` — app wiring: paste routing, toolbar, pins, persistence, tutorial.
+- `js/match.js`, `js/matchworker.js`, `js/ocr.js` — screenshot location
+  (labels, player marker, room-shape matching) and the worker it runs in.
+- `js/explored.js` — the revealed-map canvas, compositing, and background fade.
+- `js/mapview.js`, `js/fog.js` — pan/zoom rendering and the fog overlay.
+- `js/pins.js`, `js/categories.js` — pins and pin types.
+- `js/store.js` — IndexedDB persistence.
+- `vendor/opencv.js` — bundled OpenCV.js.
 
 ## Credits
 
