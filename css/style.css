@@ -146,18 +146,6 @@ html, body {
 .pin.moving { z-index: 12; cursor: grabbing; }
 .pin.moving .pin-ico { cursor: grabbing; }
 
-/* close ✕ on an armed (selected) pin — click it to exit the move/click state */
-.pin-close {
-  position: absolute; left: 0; top: 0; margin: -40px 0 0 8px; padding: 0;
-  width: 26px; height: 26px; z-index: 11; pointer-events: auto; cursor: pointer;
-  display: grid; place-items: center; border-radius: 50%; color: var(--text);
-  background: radial-gradient(circle at 35% 30%, #2b3242, #12151d 76%);
-  border: 1.5px solid var(--pc, var(--accent));
-  box-shadow: 0 2px 9px rgba(0,0,0,.75), 0 0 12px -4px var(--pc, var(--accent));
-  animation: fade-in .14s ease;
-}
-.pin-close svg { width: 12px; height: 12px; display: block; }
-.pin-close:hover { border-color: #fff; color: #fff; }
 @media (prefers-reduced-motion: reduce) {
   /* no pulsing — hold a slightly enlarged "armed" state instead */
   .pin.selected:not(.moving) .pin-ico { animation: none; transform: scale(1.08); }
