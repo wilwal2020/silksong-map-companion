@@ -132,7 +132,7 @@ export class PinManager {
     const ico = document.createElement('span');
     ico.className = 'pin-ico';
     el.appendChild(ico);
-    const entry = { data, el, ico, card: null, imgUrl: null, moveEl: null, pendingMove: null };
+    const entry = { data, el, ico, card: null, imgUrl: null, moveEl: null, closeBtn: null, pendingMove: null };
     this.pins.set(data.id, entry);
     this.layer.appendChild(el);
     this._decorate(entry);
@@ -164,6 +164,7 @@ export class PinManager {
     if (entry.imgUrl) URL.revokeObjectURL(entry.imgUrl);
     if (entry.card) entry.card.remove();
     if (entry.moveEl) entry.moveEl.remove();
+    if (entry.closeBtn) entry.closeBtn.remove();
     entry.el.remove();
     this.pins.delete(id);
     if (this.selectedId === id) this.selectedId = null;
@@ -183,11 +184,13 @@ export class PinManager {
     if (this.selectedId !== id) this.cancelPendingMove();
     this.selectedId = id;
     for (const [pid, e] of this.pins) e.el.classList.toggle('selected', pid === id);
+    this._syncCloseBtns();
   }
 
   deselect() {
     this.selectedId = null;
     for (const e of this.pins.values()) e.el.classList.remove('selected');
+    this._syncCloseBtns();
   }
 
   // ring flash on a pin (e.g. a screenshot just landed in it)
@@ -267,6 +270,7 @@ export class PinManager {
       const visible = this.filter.has(e.data.cat) && (this.showDone || !e.data.done);
       e.el.style.display = visible ? '' : 'none';
       if (e.moveEl) e.moveEl.style.display = visible ? '' : 'none';
+      if (e.closeBtn) e.closeBtn.style.display = visible ? '' : 'none';
       if (!visible && e.card) this._hideCard(e, true);
     }
   }
@@ -277,6 +281,7 @@ export class PinManager {
       e.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
       if (e.card) this._positionCard(e);
       if (e.moveEl) this._positionMoveConfirm(e);
+      if (e.closeBtn) this._positionCloseBtn(e);
     }
   }
 
@@ -307,7 +312,10 @@ export class PinManager {
     });
     el.addEventListener('pointermove', e => {
       if (!down) {
-        if (!this.suppressHover && !entry.pendingMove && !entry.card) this._showCard(entry, false);
+        // hover shows the preview card — but not for the armed pin: while it's
+        // selected it only breathes (with its ✕), no card in the way
+        if (!this.suppressHover && !entry.pendingMove && !entry.card
+            && this.selectedId !== entry.data.id) this._showCard(entry, false);
         return;
       }
       if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) >= 5) {
@@ -315,6 +323,7 @@ export class PinManager {
         if (dragging) {
           entry.el.classList.add('moving');  // lift it and pause the breathing
           this._hideMoveConfirm(entry);      // tuck any ✓/✗ away while dragging
+          this._hideCloseBtn(entry);         // and the ✕ while it's in motion
           this._hideCard(entry, true);       // and drop the card so it's unobstructed
         }
       }
@@ -337,15 +346,17 @@ export class PinManager {
         return;
       }
       if (moved || this.suppressHover) return; // a stray drag on an un-armed pin
+      // a plain click arms the pin for moving (it breathes, with a ✕ to exit)
+      // and deliberately shows NO card, so the map stays clear while you move it
+      this._hideCard(entry, true);
       this.select(entry.data.id);
-      this._showCard(entry, true);
     });
 
     el.addEventListener('pointerenter', () => {
       if (this.suppressHover) return;
       this.hoveredId = entry.data.id;
       if (entry.data.id !== this.lastPlacedId) this.lastPlacedId = null; // moved to another pin
-      if (!entry.pendingMove) this._showCard(entry, false);
+      if (!entry.pendingMove && this.selectedId !== entry.data.id) this._showCard(entry, false);
     });
     el.addEventListener('pointerleave', () => {
       // the card's lifetime is governed by the safe-zone tracker; here we only
@@ -357,10 +368,51 @@ export class PinManager {
     });
   }
 
+  // ---- close ✕: exit the armed "click" state (shown on the selected pin) ----
+
+  _syncCloseBtns() {
+    for (const [pid, e] of this.pins) {
+      const show = pid === this.selectedId && !e.pendingMove && e.el.style.display !== 'none';
+      if (show) this._showCloseBtn(e); else this._hideCloseBtn(e);
+    }
+  }
+
+  _showCloseBtn(entry) {
+    if (!entry.closeBtn) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pin-close';
+      b.title = 'Done — deselect this pin';
+      b.setAttribute('aria-label', 'Deselect pin');
+      b.innerHTML = SVG.xmark;
+      // don't let the press start a pin drag or the off-pin dismiss handler
+      b.addEventListener('pointerdown', e => e.stopPropagation());
+      b.addEventListener('click', e => {
+        e.stopPropagation();
+        this.cancelPendingMove(); // (no-op unless a move was mid-confirm)
+        this.deselect();          // stops the breathing and removes this ✕
+      });
+      this.layer.appendChild(b);
+      entry.closeBtn = b;
+    }
+    this._positionCloseBtn(entry);
+  }
+
+  _hideCloseBtn(entry) {
+    if (entry.closeBtn) { entry.closeBtn.remove(); entry.closeBtn = null; }
+  }
+
+  _positionCloseBtn(entry) {
+    if (!entry.closeBtn) return;
+    const p = this.view.mapToScreen(entry.data.x, entry.data.y);
+    entry.closeBtn.style.transform = `translate(${p.x}px, ${p.y}px)`;
+  }
+
   // ---- move confirmation (✓ keep / ✗ put back) ----------------------------
 
   _beginMoveConfirm(entry, origin) {
     entry.pendingMove = origin;
+    this._syncCloseBtns(); // now pending → the ✕ gives way to the ✓/✗ confirm
     if (!entry.moveEl) {
       const wrap = document.createElement('div');
       wrap.className = 'move-confirm';
@@ -395,6 +447,7 @@ export class PinManager {
     if (o) { entry.data.x = o.x; entry.data.y = o.y; }
     if (entry.moveEl) { entry.moveEl.remove(); entry.moveEl = null; }
     this.syncPositions();
+    this._syncCloseBtns(); // back to armed (not pending) → bring the ✕ back
   }
 
   // abandon any unconfirmed move (revert the pin). Called when the user
@@ -536,12 +589,6 @@ export class PinManager {
       imgWrap.dataset.pinId = d.id;
       const well = document.createElement('div');
       well.className = 'pc-well';
-      if (d.note) {
-        const wn = document.createElement('div');
-        wn.className = 'pc-well-note';
-        wn.textContent = d.note;
-        well.appendChild(wn);
-      }
       const wc = document.createElement('span');
       wc.className = 'wc';
       wc.innerHTML = SVG.camBig;
@@ -553,7 +600,9 @@ export class PinManager {
       imgWrap.appendChild(well);
     }
 
-    // the frosted deck: category always; the note too when there's a screenshot
+    // the frosted deck: category always, plus the note whenever there is one.
+    // The note lives here (not inside the paste square) so it can't overflow
+    // the fixed-size square when the pin has no screenshot yet.
     const deck = document.createElement('div');
     deck.className = 'pc-deck';
     const head = document.createElement('div');
@@ -566,7 +615,7 @@ export class PinManager {
     catName.textContent = cat.label;
     head.append(ico, catName);
     deck.appendChild(head);
-    if (d.img && d.note) {
+    if (d.note) {
       const note = document.createElement('div');
       note.className = 'pc-note';
       note.textContent = d.note;

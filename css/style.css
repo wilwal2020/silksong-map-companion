@@ -145,6 +145,19 @@ html, body {
 /* a pin being dragged rides above everything, under the cursor */
 .pin.moving { z-index: 12; cursor: grabbing; }
 .pin.moving .pin-ico { cursor: grabbing; }
+
+/* close ✕ on an armed (selected) pin — click it to exit the move/click state */
+.pin-close {
+  position: absolute; left: 0; top: 0; margin: -40px 0 0 8px; padding: 0;
+  width: 26px; height: 26px; z-index: 11; pointer-events: auto; cursor: pointer;
+  display: grid; place-items: center; border-radius: 50%; color: var(--text);
+  background: radial-gradient(circle at 35% 30%, #2b3242, #12151d 76%);
+  border: 1.5px solid var(--pc, var(--accent));
+  box-shadow: 0 2px 9px rgba(0,0,0,.75), 0 0 12px -4px var(--pc, var(--accent));
+  animation: fade-in .14s ease;
+}
+.pin-close svg { width: 12px; height: 12px; display: block; }
+.pin-close:hover { border-color: #fff; color: #fff; }
 @media (prefers-reduced-motion: reduce) {
   /* no pulsing — hold a slightly enlarged "armed" state instead */
   .pin.selected:not(.moving) .pin-ico { animation: none; transform: scale(1.08); }
@@ -252,11 +265,13 @@ html, body {
 
 /* empty state — dashed well with the paste hint (and any note) inside it.
    shared by the pin card and the editor dialog's picture slot (.pin-shot) */
-.pin-card .pc-img.no-env, .pin-shot .pc-img.no-env { aspect-ratio: 320/184; cursor: pointer; background: repeating-linear-gradient(135deg,#0c1017 0 12px,#0a0d13 12px 24px); transition: box-shadow .16s; }
+/* min-height (not a rigid aspect-ratio) so the box grows to contain the hint —
+   with an in-flow well below, nothing can spill onto the deck when there's no
+   screenshot. 184px keeps the usual square look when the hint is short. */
+.pin-card .pc-img.no-env, .pin-shot .pc-img.no-env { min-height: 184px; display: flex; cursor: pointer; background: repeating-linear-gradient(135deg,#0c1017 0 12px,#0a0d13 12px 24px); transition: box-shadow .16s; }
 .pin-card .pc-img.no-env:hover, .pin-shot .pc-img.no-env:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 50%, transparent), inset 0 0 26px -10px var(--pc, var(--accent)); }
-.pin-card .pc-well, .pin-shot .pc-well { position: absolute; inset: 0; z-index: 1;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; padding: 6px 24px; color: var(--text-dim); }
-.pin-card .pc-well-note { font-size: .88rem; line-height: 1.4; color: var(--text); overflow-wrap: break-word; }
+.pin-card .pc-well, .pin-shot .pc-well { position: relative; z-index: 1; flex: 1; width: 100%; box-sizing: border-box;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; padding: 12px 24px; color: var(--text-dim); }
 .pin-card .pc-well .wc, .pin-shot .pc-well .wc { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; border: 1px dashed #39424f; transition: border-color .16s, color .16s; }
 .pin-card .pc-img.no-env:hover .wc, .pin-shot .pc-img.no-env:hover .wc { border-color: color-mix(in srgb, var(--pc, var(--accent)) 60%, transparent); color: var(--text); }
 .pin-card .pc-well .wt, .pin-shot .pc-well .wt { font-size: .8rem; line-height: 1.5; }
