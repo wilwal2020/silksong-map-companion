@@ -14,7 +14,6 @@ export const SVG = {
   pen: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2.6l2 2L6 12l-2.6.6L4 10z"/></svg>',
   trash: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5h9M6.5 4.5V3h3v1.5M5 4.5l.6 8h4.8l.6-8"/></svg>',
   camBig: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h3l1.4-2h7.2L16 8h5v11H3z"/><circle cx="12" cy="13" r="3.4"/></svg>',
-  move: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg>',
   mcCheck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"/></svg>',
   mcCross: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   xmark: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
@@ -72,7 +71,7 @@ export class PinManager {
 
     document.addEventListener('pointerdown', e => {
       this.lastPlacedId = null; // any click means the user has moved on
-      if (e.target.closest('.pin, .move-confirm, .move-handle')) return;
+      if (e.target.closest('.pin, .move-confirm')) return;
       // Off the pin / move UI this may be a click that dismisses the selection
       // and an unconfirmed move — or it may be a pan/drag of the map, which must
       // NOT abandon a move in progress. Defer to pointerup: only a click (little
@@ -133,7 +132,7 @@ export class PinManager {
     const ico = document.createElement('span');
     ico.className = 'pin-ico';
     el.appendChild(ico);
-    const entry = { data, el, ico, card: null, imgUrl: null, moveEl: null, moveHandle: null, pendingMove: null };
+    const entry = { data, el, ico, card: null, imgUrl: null, moveEl: null, pendingMove: null };
     this.pins.set(data.id, entry);
     this.layer.appendChild(el);
     this._decorate(entry);
@@ -165,7 +164,6 @@ export class PinManager {
     if (entry.imgUrl) URL.revokeObjectURL(entry.imgUrl);
     if (entry.card) entry.card.remove();
     if (entry.moveEl) entry.moveEl.remove();
-    if (entry.moveHandle) entry.moveHandle.remove();
     entry.el.remove();
     this.pins.delete(id);
     if (this.selectedId === id) this.selectedId = null;
@@ -178,17 +176,18 @@ export class PinManager {
     for (const id of [...this.pins.keys()]) this.remove(id);
   }
 
+  // Selecting a pin "arms" it for moving: it gets the .selected class, which
+  // makes it gently breathe (see CSS) to signal it can now be dragged to a new
+  // spot. There's no separate drag handle — you grab the breathing pin itself.
   select(id) {
     if (this.selectedId !== id) this.cancelPendingMove();
     this.selectedId = id;
     for (const [pid, e] of this.pins) e.el.classList.toggle('selected', pid === id);
-    this._syncMoveHandles();
   }
 
   deselect() {
     this.selectedId = null;
     for (const e of this.pins.values()) e.el.classList.remove('selected');
-    this._syncMoveHandles();
   }
 
   // ring flash on a pin (e.g. a screenshot just landed in it)
@@ -268,7 +267,6 @@ export class PinManager {
       const visible = this.filter.has(e.data.cat) && (this.showDone || !e.data.done);
       e.el.style.display = visible ? '' : 'none';
       if (e.moveEl) e.moveEl.style.display = visible ? '' : 'none';
-      if (e.moveHandle) e.moveHandle.style.display = visible ? '' : 'none';
       if (!visible && e.card) this._hideCard(e, true);
     }
   }
@@ -279,7 +277,6 @@ export class PinManager {
       e.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
       if (e.card) this._positionCard(e);
       if (e.moveEl) this._positionMoveConfirm(e);
-      if (e.moveHandle && !e._freezeHandle) this._positionMoveHandle(e);
     }
   }
 
@@ -295,19 +292,17 @@ export class PinManager {
     const el = entry.el;
     let downX = 0, downY = 0, moved = false, down = false, dragging = false, sx = 0, sy = 0;
 
-    // a plain click selects the pin (revealing the move handle). The pin isn't
-    // draggable on its own EXCEPT while a move is pending its ✓/✗ — then the
-    // handle is gone and you nudge the pin directly by grabbing it
+    // First click on a pin selects it — it starts breathing to show it's now
+    // movable. From then on (while selected, or while a move is pending its
+    // ✓/✗) grabbing the pin and dragging repositions it directly; there's no
+    // separate handle. A drag on an un-selected pin is ignored, so a pin is
+    // never nudged by accident before you've armed it.
     el.addEventListener('pointerdown', e => {
       e.stopPropagation();
-      down = true; moved = false; dragging = false;
+      down = true; moved = false;
       downX = e.clientX; downY = e.clientY;
-      if (entry.pendingMove) {
-        dragging = true;
-        sx = entry.data.x; sy = entry.data.y;
-        entry.el.classList.add('moving');
-        this._hideMoveConfirm(entry);        // tuck the buttons away while dragging
-      }
+      dragging = entry.el.classList.contains('selected') || !!entry.pendingMove;
+      if (dragging) { sx = entry.data.x; sy = entry.data.y; }
       try { el.setPointerCapture(e.pointerId); } catch {}
     });
     el.addEventListener('pointermove', e => {
@@ -315,7 +310,14 @@ export class PinManager {
         if (!this.suppressHover && !entry.pendingMove && !entry.card) this._showCard(entry, false);
         return;
       }
-      if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) >= 5) moved = true;
+      if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) >= 5) {
+        moved = true;
+        if (dragging) {
+          entry.el.classList.add('moving');  // lift it and pause the breathing
+          this._hideMoveConfirm(entry);      // tuck any ✓/✗ away while dragging
+          this._hideCard(entry, true);       // and drop the card so it's unobstructed
+        }
+      }
       if (dragging && moved) {
         entry.data.x = sx + (e.clientX - downX) / this.view.scale;
         entry.data.y = sy + (e.clientY - downY) / this.view.scale;
@@ -326,13 +328,15 @@ export class PinManager {
       if (!down) return;
       down = false;
       try { el.releasePointerCapture(e.pointerId); } catch {}
-      if (dragging) {
-        dragging = false;
+      if (dragging && moved) {
         entry.el.classList.remove('moving');
-        this._showMoveConfirm(entry);        // let go → the ✓/✗ pops back up
+        // a nudge during a pending move just re-pops its ✓/✗; the first drag
+        // off the armed pin opens the confirm, remembering where it started
+        if (entry.pendingMove) this._showMoveConfirm(entry);
+        else this._beginMoveConfirm(entry, { x: sx, y: sy });
         return;
       }
-      if (moved || this.suppressHover) return; // a stray drag on a settled pin is ignored
+      if (moved || this.suppressHover) return; // a stray drag on an un-armed pin
       this.select(entry.data.id);
       this._showCard(entry, true);
     });
@@ -353,134 +357,10 @@ export class PinManager {
     });
   }
 
-  // ---- move handle: appears on the selected pin, drag it to reposition -----
-
-  _syncMoveHandles() {
-    for (const [pid, e] of this.pins) {
-      const show = pid === this.selectedId && !e.pendingMove && e.el.style.display !== 'none';
-      if (show) this._showMoveHandle(e); else this._hideMoveHandle(e);
-    }
-  }
-
-  _showMoveHandle(entry) {
-    if (!entry.moveHandle) {
-      const h = document.createElement('div');
-      h.className = 'move-handle';
-      h.title = 'Drag to move this pin';
-      h.innerHTML = SVG.move;
-      this._wireMoveHandle(entry, h);
-      this.layer.appendChild(h);
-      entry.moveHandle = h;
-    }
-    this._positionMoveHandle(entry);
-  }
-
-  _hideMoveHandle(entry) {
-    if (entry.moveHandle) { entry.moveHandle.remove(); entry.moveHandle = null; }
-  }
-
-  _positionMoveHandle(entry) {
-    if (!entry.moveHandle) return;
-    const p = this.view.mapToScreen(entry.data.x, entry.data.y);
-    entry.moveHandle.style.transform = `translate(${p.x}px, ${p.y}px)`;
-  }
-
-  _wireMoveHandle(entry, h) {
-    let sx = 0, sy = 0, startX = 0, startY = 0, active = false, moved = false;
-    let offX = 0, offY = 0, glideStart = 0, last = null, covered = false;
-    const GLIDE = 190;                          // ms for the pin to rise under the cursor
-    const ease = t => 1 - Math.pow(1 - t, 3);   // easeOutCubic
-
-    const cover = () => {                        // the pin now stands over the handle
-      if (covered) return;
-      covered = true; h.classList.add('covered');
-    };
-
-    // put the pin under the cursor, closing the grab-time gap as the glide runs.
-    // the handle itself is frozen (syncPositions skips it) so it stays put and
-    // the pin rises up over it, rather than the handle sliding away
-    const apply = e => {
-      const t = glideStart ? ease(Math.min(1, (performance.now() - glideStart) / GLIDE)) : 1;
-      entry.data.x = sx + ((e.clientX - startX) - offX * t) / this.view.scale;
-      entry.data.y = sy + ((e.clientY - startY) - offY * t) / this.view.scale;
-      this.syncPositions();
-      if (t > 0.6) cover();
-    };
-    const tick = () => {
-      if (!active || !glideStart) return;
-      if (last) apply(last);
-      if (performance.now() - glideStart < GLIDE) requestAnimationFrame(tick);
-      else glideStart = 0;
-    };
-
-    h.addEventListener('pointerdown', e => {
-      e.stopPropagation(); e.preventDefault();
-      active = true; moved = false; covered = false; last = e;
-      startX = e.clientX; startY = e.clientY;
-      sx = entry.data.x; sy = entry.data.y;   // where the move started (for undo)
-      // the handle floats above the pin — glide the pin up so it ends directly
-      // under the cursor, and freeze the handle so the pin rises over it
-      const p = this.view.mapToScreen(sx, sy);
-      offX = p.x - startX; offY = p.y - startY;
-      entry._freezeHandle = true;
-      entry.el.classList.add('moving');       // lift the pin above the handle
-      try { h.setPointerCapture(e.pointerId); } catch {}
-      h.classList.add('dragging');
-      this._hideCard(entry, true);
-      if (Math.hypot(offX, offY) > 1) { glideStart = performance.now(); requestAnimationFrame(tick); }
-      else { glideStart = 0; cover(); }
-    });
-    h.addEventListener('pointermove', e => {
-      if (!active) return;
-      last = e;
-      if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) >= 4) moved = true;
-      apply(e);
-    });
-    h.addEventListener('pointerup', e => {
-      if (!active) return;
-      active = false; glideStart = 0; last = null;
-      try { h.releasePointerCapture(e.pointerId); } catch {}
-      if (moved) {
-        // let go → pop the ✓/✗ confirm. From here the handle is gone; you nudge
-        // the pin directly until you keep (✓) or put it back (✗, to this origin)
-        entry._freezeHandle = false;
-        entry.el.classList.remove('moving');
-        this._beginMoveConfirm(entry, { x: sx, y: sy });
-      } else {
-        // a pick-up with no real drag — glide the pin back and restore the handle
-        this._returnPin(entry, { x: sx, y: sy });
-      }
-    });
-  }
-
-  // ease a picked-up pin back to a target position, then rebuild its handle —
-  // used when a handle grab is released without an actual drag
-  _returnPin(entry, to) {
-    const fromX = entry.data.x, fromY = entry.data.y;
-    const restore = () => {
-      entry._freezeHandle = false;
-      entry.el.classList.remove('moving');
-      this._hideMoveHandle(entry);
-      this._syncMoveHandles();
-    };
-    if (this.view.reduceMotion) { entry.data.x = to.x; entry.data.y = to.y; this.syncPositions(); restore(); return; }
-    const start = performance.now(), DUR = 150;
-    const ease = t => 1 - Math.pow(1 - t, 3);
-    const step = () => {
-      const t = ease(Math.min(1, (performance.now() - start) / DUR));
-      entry.data.x = fromX + (to.x - fromX) * t;
-      entry.data.y = fromY + (to.y - fromY) * t;
-      this.syncPositions();
-      if (t < 1) requestAnimationFrame(step); else restore();
-    };
-    requestAnimationFrame(step);
-  }
-
   // ---- move confirmation (✓ keep / ✗ put back) ----------------------------
 
   _beginMoveConfirm(entry, origin) {
     entry.pendingMove = origin;
-    this._hideMoveHandle(entry);
     if (!entry.moveEl) {
       const wrap = document.createElement('div');
       wrap.className = 'move-confirm';
@@ -506,7 +386,7 @@ export class PinManager {
     if (entry.moveEl) { entry.moveEl.remove(); entry.moveEl = null; }
     if (from) this._lastMove = { id: entry.data.id, from };
     this.handlers.onChange(entry.data);
-    this.deselect();   // confirming the spot drops the selection (no lingering handle)
+    this.deselect();   // confirming the spot drops the selection, so it stops breathing
   }
 
   _cancelMove(entry) {
@@ -515,7 +395,6 @@ export class PinManager {
     if (o) { entry.data.x = o.x; entry.data.y = o.y; }
     if (entry.moveEl) { entry.moveEl.remove(); entry.moveEl = null; }
     this.syncPositions();
-    this._syncMoveHandles();
   }
 
   // abandon any unconfirmed move (revert the pin). Called when the user

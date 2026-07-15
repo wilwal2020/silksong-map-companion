@@ -134,26 +134,21 @@ html, body {
   border-color: #fff;
   box-shadow: 0 0 0 3px rgba(255,255,255,.28), 0 0 14px -1px var(--pc, var(--accent)), 0 2px 10px rgba(0,0,0,.7);
 }
-
-/* drag handle shown on the selected pin — grab it to reposition the pin */
-.move-handle {
-  position: absolute; left: 0; top: 0; margin: -54px 0 0 -16px; pointer-events: auto;
-  width: 32px; height: 32px; z-index: 9; cursor: grab;
-  display: grid; place-items: center; border-radius: 50%; color: var(--text);
-  background: radial-gradient(circle at 35% 30%, #2b3242, #12151d 76%);
-  border: 1.5px solid var(--pc, var(--accent));
-  box-shadow: 0 2px 10px rgba(0,0,0,.75), 0 0 12px -3px var(--pc, var(--accent));
-  animation: fade-in .14s ease;
+/* a selected pin is "armed" for moving — grab it and drag. It breathes gently
+   to signal that; the breathing pauses while it's actually being dragged. */
+.pin.selected { cursor: grab; }
+.pin.selected:not(.moving) .pin-ico { animation: pin-breathe 1.6s ease-in-out infinite; }
+@keyframes pin-breathe {
+  0%, 100% { transform: scale(1) translateY(0); }
+  50%      { transform: scale(1.13) translateY(-2px); }
 }
-.move-handle svg { width: 17px; height: 17px; display: block; }
-.move-handle:hover { border-color: #fff; }
-.move-handle.dragging { cursor: grabbing; border-color: #fff; box-shadow: 0 4px 14px rgba(0,0,0,.8), 0 0 16px -2px var(--pc, var(--accent)); }
-/* while dragging, the handle holds still and the pin rises over it; once
-   covered it fades out (kept in the DOM so it keeps the pointer capture) */
-.move-handle.covered { opacity: 0; }
-/* a pin being moved floats above its (frozen) handle so it covers it */
-.pin.moving { z-index: 12; }
+/* a pin being dragged rides above everything, under the cursor */
+.pin.moving { z-index: 12; cursor: grabbing; }
 .pin.moving .pin-ico { cursor: grabbing; }
+@media (prefers-reduced-motion: reduce) {
+  /* no pulsing — hold a slightly enlarged "armed" state instead */
+  .pin.selected:not(.moving) .pin-ico { animation: none; transform: scale(1.08); }
+}
 
 /* move confirmation: filled ✓ keep / ✗ put back, floating above the pin */
 .move-confirm {
