@@ -268,18 +268,25 @@ export class MapView {
   // the explored composite changed, so the punched-out reference is stale
   invalidateReveal() { this._revealDirty = true; }
 
-  // Reference map minus everything already explored. Cached: it's a full
-  // map-sized composite, far too expensive to rebuild every frame while
-  // panning — only pastes / clears / cleans dirty it (see invalidateReveal).
+  // What the reference map has that YOUR map doesn't: |reference - explored|.
+  //
+  // Masking by alpha doesn't work — a paste covers its whole rectangle, and
+  // the background fade keeps big dark regions opaque, so "has a pixel here"
+  // is not the same as "visited here". Differencing compares CONTENT instead:
+  // where your map draws the same rooms the reference does, the two cancel to
+  // black; where your map is dark (void, or an area a screenshot covered but
+  // you never explored) there's nothing to subtract, so the reference stays.
+  //
+  // Always computed against the explored map at FULL strength, so turning the
+  // opacity slider down can't corrupt the comparison. Cached — it's a full
+  // map-sized composite; only pastes / clears / cleans dirty it.
   _revealLayer() {
     if (this._revealCache && !this._revealDirty) return this._revealCache;
     const c = this._revealCache || document.createElement('canvas');
     c.width = this.map.width; c.height = this.map.height;   // also clears it
     const x = c.getContext('2d');
     x.drawImage(this.map, 0, 0, c.width, c.height);
-    // punch out the pixels you've already pasted; partly-faded paste edges
-    // erase proportionally, so the two maps meet with a soft seam
-    x.globalCompositeOperation = 'destination-out';
+    x.globalCompositeOperation = 'difference';
     x.drawImage(this.explored.canvas, 0, 0, c.width, c.height);
     x.globalCompositeOperation = 'source-over';
     this._revealCache = c;
@@ -312,14 +319,17 @@ export class MapView {
     ctx.drawImage(this.explored.canvas, 0, 0, this.map.width, this.map.height);
     ctx.globalAlpha = 1;
 
-    // "Reveal map": the reference map with everything you've already explored
-    // punched out of it, so it shows up ONLY in the gaps. Layering the whole
-    // reference under the pastes hides it; layering it over hides the pastes —
-    // masking sidesteps both, leaving exactly the places you haven't visited.
-    // Drawn at full strength (ignores the opacity slider), so turning your own
-    // map down makes the unvisited areas stand out sharply.
+    // "Reveal map": sketch in what you're missing. The layer is the reference
+    // minus your own map, so it's black wherever the two agree — and 'lighten'
+    // only ever brightens, so those black areas leave your pastes untouched.
+    // Under it, a screenshot can cover the whole world without hiding
+    // anything: only the rooms you've actually mapped cancel out, and the ones
+    // you haven't light up. It ignores the opacity slider, so turning your own
+    // map down makes the unvisited places stand out sharply.
     if (this.debugReveal) {
+      ctx.globalCompositeOperation = 'lighten';
       ctx.drawImage(this._revealLayer(), 0, 0, this.map.width, this.map.height);
+      ctx.globalCompositeOperation = 'source-over';
     }
 
     // subtle bounds so you can tell where the world map area is
