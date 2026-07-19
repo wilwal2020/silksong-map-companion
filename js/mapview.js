@@ -4,6 +4,15 @@
 
 const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
+// "Reveal map" mask tuning. INK_LEVEL is a luminance on the 1/6-scale copy of
+// your map: high enough that a dark area a screenshot merely covered stays
+// below it, low enough that a cell catching any room outline clears it.
+// DILATE_* widen the mask well past your actual pixels — that slack is what
+// keeps slightly misaligned pastes from glowing along their borders.
+const INK_LEVEL = 12;
+const DILATE_PX = 14;
+const DILATE_PASSES = 3;
+
 export class MapView {
   constructor(canvas, mapImage, explored) {
     this.canvas = canvas;
@@ -268,27 +277,60 @@ export class MapView {
   // the explored composite changed, so the punched-out reference is stale
   invalidateReveal() { this._revealDirty = true; }
 
-  // What the reference map has that YOUR map doesn't: |reference - explored|.
+  // The reference map with everywhere you've already mapped erased from it.
   //
-  // Masking by alpha doesn't work — a paste covers its whole rectangle, and
-  // the background fade keeps big dark regions opaque, so "has a pixel here"
-  // is not the same as "visited here". Differencing compares CONTENT instead:
-  // where your map draws the same rooms the reference does, the two cancel to
-  // black; where your map is dark (void, or an area a screenshot covered but
-  // you never explored) there's nothing to subtract, so the reference stays.
+  // Two things this must survive, both learned the hard way:
+  //   * Alpha is not "visited". A paste covers its whole rectangle and the
+  //     background fade leaves big dark regions opaque, so masking by alpha
+  //     erased ground you'd never explored.
+  //   * Pixel-differencing is not "visited" either. Your screenshots don't
+  //     match the reference in colour OR position, so every slightly
+  //     misaligned room border rang like an unexplored area.
   //
-  // Always computed against the explored map at FULL strength, so turning the
-  // opacity slider down can't corrupt the comparison. Cached — it's a full
-  // map-sized composite; only pastes / clears / cleans dirty it.
+  // So ask a blunter, binary question — did your map draw any INK near here?
+  // Bright room outlines (≈200 against <30 for void) are an unambiguous
+  // signal, unlike interior-vs-void which differs by a few units. The mask is
+  // built small and then dilated generously on the way back up, and that
+  // slack is what absorbs misalignment: being a few pixels out no longer
+  // uncovers a rim of reference along every border you've actually explored.
+  //
+  // Built from the explored map at FULL strength, so the opacity slider can't
+  // affect it. Cached — only pastes / clears / cleans dirty it.
   _revealLayer() {
     if (this._revealCache && !this._revealDirty) return this._revealCache;
+    const W = this.map.width, H = this.map.height;
+
+    // 1. shrink your map. The averaging is itself a first dose of tolerance:
+    //    a cell counts as inked if it caught ANY of your outlines.
+    const S = 6;
+    const mw = Math.max(1, Math.ceil(W / S)), mh = Math.max(1, Math.ceil(H / S));
+    const sc = document.createElement('canvas');
+    sc.width = mw; sc.height = mh;
+    const sx = sc.getContext('2d', { willReadFrequently: true });
+    sx.imageSmoothingEnabled = true;
+    sx.drawImage(this.explored.canvas, 0, 0, mw, mh);
+    const sd = sx.getImageData(0, 0, mw, mh);
+    const p = sd.data;
+    for (let i = 0; i < p.length; i += 4) {
+      const a = p[i + 3] / 255;
+      const lum = (p[i] * 0.299 + p[i + 1] * 0.587 + p[i + 2] * 0.114) * a;
+      p[i] = p[i + 1] = p[i + 2] = 0;
+      p[i + 3] = lum > INK_LEVEL ? 255 : 0;
+    }
+    sx.putImageData(sd, 0, 0);
+
+    // 2. reference, then erase the inked areas — blurred and stamped a few
+    //    times so the soft edge firms up into a real, wide dilation
     const c = this._revealCache || document.createElement('canvas');
-    c.width = this.map.width; c.height = this.map.height;   // also clears it
+    c.width = W; c.height = H;                              // also clears it
     const x = c.getContext('2d');
-    x.drawImage(this.map, 0, 0, c.width, c.height);
-    x.globalCompositeOperation = 'difference';
-    x.drawImage(this.explored.canvas, 0, 0, c.width, c.height);
+    x.drawImage(this.map, 0, 0, W, H);
+    x.globalCompositeOperation = 'destination-out';
+    x.filter = `blur(${DILATE_PX}px)`;
+    for (let i = 0; i < DILATE_PASSES; i++) x.drawImage(sc, 0, 0, W, H);
+    x.filter = 'none';
     x.globalCompositeOperation = 'source-over';
+
     this._revealCache = c;
     this._revealDirty = false;
     return c;
