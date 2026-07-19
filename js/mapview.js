@@ -27,6 +27,10 @@ export class MapView {
     // debug: overlay the reference map to check alignment
     this.debugReveal = false;
 
+    // how strongly YOUR explored map is drawn (the opacity slider). The reveal
+    // overlay ignores this, so it stays fully readable over a dimmed map.
+    this.mapOpacity = 1;
+
     this.onViewChanged = null;
     this._raf = 0;
 
@@ -277,21 +281,24 @@ export class MapView {
     ctx.setTransform(dpr * this.scale, 0, 0, dpr * this.scale, dpr * this.ox, dpr * this.oy);
     ctx.imageSmoothingQuality = 'high';
 
-    // debug overlay: the reference map, faint, UNDER the explored composite,
-    // so you can see how your pastes line up with it
+    // debug overlay: the reference map at FULL opacity, UNDER the explored
+    // composite. It deliberately ignores the opacity slider, so turning your
+    // map down makes the reference stand out instead of fading with it.
     if (this.debugReveal) {
-      ctx.globalAlpha = 0.5;
       ctx.drawImage(this.map, 0, 0, this.map.width, this.map.height);
-      ctx.globalAlpha = 1;
     }
 
     // the explored map: your pasted screenshots composited at their matched
     // positions, over the black fog. The reference map is never drawn (it is
     // only used to work out where a screenshot goes) — no spoilers.
+    ctx.globalAlpha = this.mapOpacity;
     ctx.drawImage(this.explored.canvas, 0, 0, this.map.width, this.map.height);
+    ctx.globalAlpha = 1;
 
     // debug: also draw the reference OVER the pastes, faint, so the room
-    // outlines can be compared directly on top of what you pasted
+    // outlines can be compared directly on top of what you pasted. This one
+    // must stay translucent — the reference is opaque (no alpha channel), so
+    // at full strength its black background would hide your pastes entirely.
     if (this.debugReveal) {
       ctx.globalAlpha = 0.4;
       ctx.drawImage(this.map, 0, 0, this.map.width, this.map.height);

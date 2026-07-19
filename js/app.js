@@ -1359,8 +1359,12 @@ function openHelp() {
   $('#dlg-help').showModal();
 }
 
+// Dim only the explored map, not the whole canvas — the reveal overlay is
+// drawn into the same canvas and must stay at full strength, so it stands out
+// against a dimmed map (CSS opacity here would fade the overlay too).
 function applyMapOpacity(pct) {
-  $('#map-canvas').style.opacity = pct / 100;
+  view.mapOpacity = pct / 100;
+  view.requestRender();
   $('.op-val').textContent = pct + '%';
 }
 
