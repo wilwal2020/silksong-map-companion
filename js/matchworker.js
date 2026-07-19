@@ -533,6 +533,12 @@ function refinePass(cv, tmplBase, aspect, cx2, cy2, twCenter, ks, progressFrom) 
 // because edges are what discriminate one room layout from another — fill
 // overlap alone accepts any roomy neighborhood. A fill sanity check on top
 // rejects placements whose rooms hang over reference void.
+// is base-px point (x, y) inside any of the overlay-ink boxes?
+function inBox(x, y, list) {
+  for (const b of list) if (x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1) return true;
+  return false;
+}
+
 function fillRefine(mask, raw, baseW, baseH, crop, hint, mode, exclude = []) {
   const fill = ensureRefFillDil();
   const edge = ensureRefEdge();
@@ -558,10 +564,6 @@ function fillRefine(mask, raw, baseW, baseH, crop, hint, mode, exclude = []) {
   // frame height). Label text stays in the EDGE points (it lines up with the
   // reference's own label text), but the marker leaves those too: it exists
   // nowhere on the reference, so its edges only pull the search off target.
-  const inBox = (x, y, list) => {
-    for (const b of list) if (x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1) return true;
-    return false;
-  };
   const exMarker = exclude.filter(b => b.kind === 'marker');
   const epts = [], fpts = [];
   for (let y = crop.y + 1; y < crop.y + crop.h - 1; y++) {
@@ -578,7 +580,11 @@ function fillRefine(mask, raw, baseW, baseH, crop, hint, mode, exclude = []) {
   let estride = 1;
   while (epts.length / (2 * estride) > 7000) estride++;
   const eN = Math.floor(epts.length / 2 / estride);
-  if (eN < 200) return null;
+  // too few boundary points to verify against is the same epistemic state as
+  // an unexplored area — "nothing here to check", NOT "checked and wrong".
+  // A hard null here made the caller distrust a perfectly good name match on
+  // small snips; sparse lets a confident name stand on its own instead.
+  if (eN < 200) return { sparse: true };
 
   const cx = hint.rect.x + hint.rect.w / 2;
   const cy = hint.rect.y + (hint.rect.w * baseH / baseW) / 2;
@@ -988,17 +994,31 @@ async function locate(shot, mode, hint) {
   // guess (letter-height ratio).
   if (hint && hint.rect) {
     tmplBase.delete();
-    if (structFrac0 < 0.035) {
-      // an unexplored (near-black) shot has nothing to correlate — tell the
-      // caller so it can keep the OCR placement instead of distrusting it
-      return { sparse: true };
-    }
     // overlay-ink boxes (matched labels, player marker) come in shot px;
-    // bring them into base px for fillRefine's fill-sanity sampling
+    // bring them into base px for the sparse check and fill-sanity sampling
     const bf = baseW / shot.width;
     const exclude = (hint.exclude || []).map(b => ({
       x0: b.x0 * bf, y0: b.y0 * bf, x1: b.x1 * bf, y1: b.y1 * bf, kind: b.kind,
     }));
+    // How much ROOM structure there is to verify against — overlay ink does
+    // not count: on a small snip the area name itself dominates the frame,
+    // and counting its letters as "structure" made the shot look verifiable,
+    // whereupon verification (against next to no actual rooms) failed and a
+    // perfectly good name match was thrown away. Structure the flood-fill
+    // marked but the raw threshold didn't (enclosed interiors) counts via
+    // `mask`, exactly as structFrac always did.
+    let roomCount = 0;
+    for (let y = rect.y; y < rect.y + rect.h; y++) {
+      const row = y * baseW;
+      for (let x = rect.x; x < rect.x + rect.w; x++) {
+        if (mask[row + x] && !inBox(x, y, exclude)) roomCount++;
+      }
+    }
+    if (roomCount / Math.max(1, rect.w * rect.h) < 0.035) {
+      // nothing (or as good as nothing) to correlate — tell the caller so it
+      // can keep a confident OCR placement instead of distrusting it
+      return { sparse: true };
+    }
     // one-sided fill overlap instead of edge correlation: robust in dense
     // regions where the screenshot shows only a subset of the reference's
     // rooms. The returned rect covers the full base frame, which IS the

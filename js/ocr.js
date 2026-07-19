@@ -285,7 +285,11 @@ function matchScore(candText, labelName) {
 // Tesseract's page segmentation is fickle on map imagery: automatic layout
 // sometimes discards a clearly legible label that sparse-text mode finds,
 // and vice versa — so run BOTH and union the words (dedupe by overlap).
-async function readLabels(shot) {
+// `labels` (the reference name table) is only a lexicon here: crop reads
+// sometimes come back confidence 0 despite being letter-perfect ("WORMWAYS"
+// read exactly, scored 0), and a read that exactly spells a real area name
+// is self-validating — the odds of noise doing that are nil.
+async function readLabels(shot, labels = []) {
   const worker = await getWorker();
   const { canvas, scale, comps } = preprocess(shot);
   const raw = [];
@@ -294,7 +298,12 @@ async function readLabels(shot) {
     const { data } = await worker.recognize(canvas);
     raw.push(...(data.words || []));
   }
-  const sizeOk = w => w.t.length >= 2 && (w.y1 - w.y0) >= 6 && (w.y1 - w.y0) <= shot.height * 0.2;
+  // max height: labels are a fixed size ON THE MAP, so in a small snip a
+  // perfectly normal name is a big fraction of the frame — a purely relative
+  // cap silently dropped those labels and small snips never got a name match.
+  // The absolute floor keeps any plausibly label-sized text in play.
+  const maxH = Math.max(shot.height * 0.2, 60);
+  const sizeOk = w => w.t.length >= 2 && (w.y1 - w.y0) >= 6 && (w.y1 - w.y0) <= maxH;
   const mapped = raw
     .map(w => ({
       t: (w.text || '').replace(/[^A-Za-z']/g, ''),
@@ -320,8 +329,18 @@ async function readLabels(shot) {
     });
     if (!dup) all.push(w);
   }
-  const words = all.filter(w => w.c >= 55 || (w.crop && w.c >= 28));
-  const weak = all.filter(w => w.c >= 25 && !(w.c >= 55 || (w.crop && w.c >= 28)));
+  // lexicon of ≥4-letter reference-name words for the confidence rescue
+  const lex = new Set();
+  for (const lb of labels) {
+    for (const t of ((lb.name || '').toLowerCase().match(/[a-z]{4,}/g) || [])) lex.add(t);
+  }
+  const lexHit = w => {
+    const t = (w.t || '').toLowerCase().replace(/[^a-z]/g, '');
+    return t.length >= 4 && lex.has(t);
+  };
+  const strong = w => w.c >= 55 || (w.crop && (w.c >= 28 || lexHit(w)));
+  const words = all.filter(strong);
+  const weak = all.filter(w => w.c >= 25 && !strong(w));
 
   // group into lines (similar baseline, horizontally adjacent)
   words.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
@@ -429,7 +448,7 @@ export async function ocrLocate(shot, { full = false, scaleHint = null, lockedSc
   if (!labels.length) return null;
   if (onStatus) onStatus('Reading the area name…');
 
-  const cands = await readLabels(shot);
+  const cands = await readLabels(shot, labels);
   console.debug('[silksong-map] OCR lines:', cands.map(c => `"${c.text}" @${Math.round(c.cx)},${Math.round(c.cy)}${c.cut ? ' (cut)' : ''}`));
   if (!cands.length) return null;
 
