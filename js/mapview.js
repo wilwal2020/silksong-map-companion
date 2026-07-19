@@ -24,8 +24,10 @@ export class MapView {
     this._ghostRaf = 0;
     this.reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    // debug: overlay the reference map to check alignment
+    // "Reveal map": fill the unexplored gaps with the reference map
     this.debugReveal = false;
+    this._revealCache = null;   // reference with explored punched out
+    this._revealDirty = true;
 
     // how strongly YOUR explored map is drawn (the opacity slider). The reveal
     // overlay ignores this, so it stays fully readable over a dimmed map.
@@ -263,6 +265,28 @@ export class MapView {
     ctx.restore();
   }
 
+  // the explored composite changed, so the punched-out reference is stale
+  invalidateReveal() { this._revealDirty = true; }
+
+  // Reference map minus everything already explored. Cached: it's a full
+  // map-sized composite, far too expensive to rebuild every frame while
+  // panning — only pastes / clears / cleans dirty it (see invalidateReveal).
+  _revealLayer() {
+    if (this._revealCache && !this._revealDirty) return this._revealCache;
+    const c = this._revealCache || document.createElement('canvas');
+    c.width = this.map.width; c.height = this.map.height;   // also clears it
+    const x = c.getContext('2d');
+    x.drawImage(this.map, 0, 0, c.width, c.height);
+    // punch out the pixels you've already pasted; partly-faded paste edges
+    // erase proportionally, so the two maps meet with a soft seam
+    x.globalCompositeOperation = 'destination-out';
+    x.drawImage(this.explored.canvas, 0, 0, c.width, c.height);
+    x.globalCompositeOperation = 'source-over';
+    this._revealCache = c;
+    this._revealDirty = false;
+    return c;
+  }
+
   requestRender() {
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => {
@@ -281,13 +305,6 @@ export class MapView {
     ctx.setTransform(dpr * this.scale, 0, 0, dpr * this.scale, dpr * this.ox, dpr * this.oy);
     ctx.imageSmoothingQuality = 'high';
 
-    // debug overlay: the reference map at FULL opacity, UNDER the explored
-    // composite. It deliberately ignores the opacity slider, so turning your
-    // map down makes the reference stand out instead of fading with it.
-    if (this.debugReveal) {
-      ctx.drawImage(this.map, 0, 0, this.map.width, this.map.height);
-    }
-
     // the explored map: your pasted screenshots composited at their matched
     // positions, over the black fog. The reference map is never drawn (it is
     // only used to work out where a screenshot goes) — no spoilers.
@@ -295,14 +312,14 @@ export class MapView {
     ctx.drawImage(this.explored.canvas, 0, 0, this.map.width, this.map.height);
     ctx.globalAlpha = 1;
 
-    // debug: also draw the reference OVER the pastes, faint, so the room
-    // outlines can be compared directly on top of what you pasted. This one
-    // must stay translucent — the reference is opaque (no alpha channel), so
-    // at full strength its black background would hide your pastes entirely.
+    // "Reveal map": the reference map with everything you've already explored
+    // punched out of it, so it shows up ONLY in the gaps. Layering the whole
+    // reference under the pastes hides it; layering it over hides the pastes —
+    // masking sidesteps both, leaving exactly the places you haven't visited.
+    // Drawn at full strength (ignores the opacity slider), so turning your own
+    // map down makes the unvisited areas stand out sharply.
     if (this.debugReveal) {
-      ctx.globalAlpha = 0.4;
-      ctx.drawImage(this.map, 0, 0, this.map.width, this.map.height);
-      ctx.globalAlpha = 1;
+      ctx.drawImage(this._revealLayer(), 0, 0, this.map.width, this.map.height);
     }
 
     // subtle bounds so you can tell where the world map area is

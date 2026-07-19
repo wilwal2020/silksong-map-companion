@@ -1539,7 +1539,12 @@ async function init() {
     },
   });
 
-  explored.onChange = () => { view.requestRender(); saveFog(); updateEmptyHint(); };
+  explored.onChange = () => {
+    view.invalidateReveal(); // the reveal is the reference minus what's explored
+    view.requestRender();
+    saveFog();
+    updateEmptyHint();
+  };
   view.onViewChanged = () => { pins.syncPositions(); positionEmptyHint(); saveView(); };
 
   // restore saved state
