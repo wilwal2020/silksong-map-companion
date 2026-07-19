@@ -2,17 +2,7 @@
 // (optional) placement overlay for a screenshot being positioned. `mapImage`
 // is used only for its dimensions (the reference map is never displayed).
 
-import { contrastMask } from './explored.js';
-
 const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-
-// "Reveal map" mask tuning. The mask is built on a 1/MASK_DIV copy of your map
-// (small enough to process quickly, big enough to keep room outlines).
-// DILATE_* widen it well past your actual pixels — that slack is what keeps
-// slightly misaligned pastes from glowing along their borders.
-const MASK_DIV = 4;
-const DILATE_PX = 14;
-const DILATE_PASSES = 3;
 
 export class MapView {
   constructor(canvas, mapImage, explored) {
@@ -34,14 +24,8 @@ export class MapView {
     this._ghostRaf = 0;
     this.reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    // "Reveal map": fill the unexplored gaps with the reference map
+    // "Reveal map": lay the full world map over yours to compare them
     this.debugReveal = false;
-    this._revealCache = null;   // reference with explored punched out
-    this._revealDirty = true;
-
-    // how strongly YOUR explored map is drawn (the opacity slider). The reveal
-    // overlay ignores this, so it stays fully readable over a dimmed map.
-    this.mapOpacity = 1;
 
     this.onViewChanged = null;
     this._raf = 0;
@@ -275,67 +259,6 @@ export class MapView {
     ctx.restore();
   }
 
-  // the explored composite changed, so the punched-out reference is stale
-  invalidateReveal() { this._revealDirty = true; }
-
-  // The reference map with everywhere you've already mapped erased from it.
-  //
-  // Two things this must survive, both learned the hard way:
-  //   * Alpha is not "visited". A paste covers its whole rectangle and the
-  //     background fade leaves big dark regions opaque, so masking by alpha
-  //     erased ground you'd never explored.
-  //   * Pixel-differencing is not "visited" either. Your screenshots don't
-  //     match the reference in colour OR position, so every slightly
-  //     misaligned room border rang like an unexplored area.
-  //
-  // So ask a blunter, binary question — did your map draw any INK near here?
-  // Crucially the answer must be RELATIVE, not an absolute brightness: the
-  // in-game background is a brown vignette, not black, so any fixed threshold
-  // low enough to be useful also swallows every area a screenshot merely
-  // covered — which is what made pastes blank the whole reveal. contrastMask
-  // (the same test the alignment matcher uses) compares each pixel with its
-  // LOCAL background instead, so flat vignette reads as empty however bright
-  // it is, while outlines and text read as ink however dim.
-  //
-  // The mask is then dilated generously, and that slack absorbs misalignment:
-  // being a few pixels out no longer uncovers a rim of reference along every
-  // border you have actually explored.
-  //
-  // Built from the explored map at FULL strength, so the opacity slider can't
-  // affect it. Cached — only pastes / clears / cleans dirty it.
-  _revealLayer() {
-    if (this._revealCache && !this._revealDirty) return this._revealCache;
-    const W = this.map.width, H = this.map.height;
-
-    const mw = Math.max(1, Math.ceil(W / MASK_DIV)), mh = Math.max(1, Math.ceil(H / MASK_DIV));
-    const sc = document.createElement('canvas');
-    sc.width = mw; sc.height = mh;
-    const sx = sc.getContext('2d', { willReadFrequently: true });
-    sx.imageSmoothingEnabled = true;
-    sx.drawImage(this.explored.canvas, 0, 0, mw, mh);
-
-    const { m } = contrastMask(sc);            // 1 where YOUR map drew ink
-    const md = sx.createImageData(mw, mh);     // ink -> an alpha-only stencil
-    for (let p = 0; p < m.length; p++) if (m[p]) md.data[p * 4 + 3] = 255;
-    sx.putImageData(md, 0, 0);
-
-    // 2. reference, then erase the inked areas — blurred and stamped a few
-    //    times so the soft edge firms up into a real, wide dilation
-    const c = this._revealCache || document.createElement('canvas');
-    c.width = W; c.height = H;                              // also clears it
-    const x = c.getContext('2d');
-    x.drawImage(this.map, 0, 0, W, H);
-    x.globalCompositeOperation = 'destination-out';
-    x.filter = `blur(${DILATE_PX}px)`;
-    for (let i = 0; i < DILATE_PASSES; i++) x.drawImage(sc, 0, 0, W, H);
-    x.filter = 'none';
-    x.globalCompositeOperation = 'source-over';
-
-    this._revealCache = c;
-    this._revealDirty = false;
-    return c;
-  }
-
   requestRender() {
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => {
@@ -355,24 +278,18 @@ export class MapView {
     ctx.imageSmoothingQuality = 'high';
 
     // the explored map: your pasted screenshots composited at their matched
-    // positions, over the black fog. The reference map is never drawn (it is
-    // only used to work out where a screenshot goes) — no spoilers.
-    ctx.globalAlpha = this.mapOpacity;
+    // positions, over the black fog.
     ctx.drawImage(this.explored.canvas, 0, 0, this.map.width, this.map.height);
-    ctx.globalAlpha = 1;
 
-    // "Reveal map": the reference with everywhere you've mapped erased out of
-    // it, painted straight over the top. Where you HAVE explored the layer is
-    // transparent, so your own screenshots show through untouched; everywhere
-    // else it paints the real map over whatever the screenshot happened to
-    // cover that ground with. Blending ('lighten') was no good here — a
-    // screenshot's background vignette is often brighter than the reference's
-    // room outlines, so it simply won out and the reveal vanished. Replacing
-    // is right anyway: that vignette covers ground you never explored.
-    // Unaffected by the opacity slider, so turning your own map down leaves
-    // the unvisited places at full strength.
+    // "Reveal map": the full world map laid straight over the top, opaque.
+    // Both maps live on the same canvas, so they share one opacity and
+    // toggling the button flicks cleanly between your map and the real one —
+    // the differences jump out of the flicker. Deliberately dumb: every
+    // attempt to detect explored-vs-unexplored automatically (alpha masks,
+    // pixel differencing, dilated ink masks) broke on real screenshots, which
+    // match the reference in neither colour nor alignment.
     if (this.debugReveal) {
-      ctx.drawImage(this._revealLayer(), 0, 0, this.map.width, this.map.height);
+      ctx.drawImage(this.map, 0, 0, this.map.width, this.map.height);
     }
 
     // subtle bounds so you can tell where the world map area is

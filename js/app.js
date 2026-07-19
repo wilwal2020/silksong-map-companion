@@ -1359,12 +1359,8 @@ function openHelp() {
   $('#dlg-help').showModal();
 }
 
-// Dim only the explored map, not the whole canvas — the reveal overlay is
-// drawn into the same canvas and must stay at full strength, so it stands out
-// against a dimmed map (CSS opacity here would fade the overlay too).
 function applyMapOpacity(pct) {
-  view.mapOpacity = pct / 100;
-  view.requestRender();
+  $('#map-canvas').style.opacity = pct / 100;
   $('.op-val').textContent = pct + '%';
 }
 
@@ -1539,12 +1535,7 @@ async function init() {
     },
   });
 
-  explored.onChange = () => {
-    view.invalidateReveal(); // the reveal is the reference minus what's explored
-    view.requestRender();
-    saveFog();
-    updateEmptyHint();
-  };
+  explored.onChange = () => { view.requestRender(); saveFog(); updateEmptyHint(); };
   view.onViewChanged = () => { pins.syncPositions(); positionEmptyHint(); saveView(); };
 
   // restore saved state
