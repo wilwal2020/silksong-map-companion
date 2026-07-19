@@ -228,7 +228,7 @@ function prepPaste(bitmap, refContent = null, mapRect = null, scale = 1) {
 // local contrast — a pixel notably brighter than its coarse local mean. Works
 // on the opaque composite and on a raw screenshot alike, so the two can be
 // aligned to each other. Returns { m: Uint8Array, n: count }.
-function contrastMask(cnv) {
+export function contrastMask(cnv) {
   const W = cnv.width, H = cnv.height;
   const d = cnv.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
   const bw = Math.max(1, W >> 3), bh = Math.max(1, H >> 3);

@@ -2,14 +2,15 @@
 // (optional) placement overlay for a screenshot being positioned. `mapImage`
 // is used only for its dimensions (the reference map is never displayed).
 
+import { contrastMask } from './explored.js';
+
 const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
-// "Reveal map" mask tuning. INK_LEVEL is a luminance on the 1/6-scale copy of
-// your map: high enough that a dark area a screenshot merely covered stays
-// below it, low enough that a cell catching any room outline clears it.
-// DILATE_* widen the mask well past your actual pixels — that slack is what
-// keeps slightly misaligned pastes from glowing along their borders.
-const INK_LEVEL = 12;
+// "Reveal map" mask tuning. The mask is built on a 1/MASK_DIV copy of your map
+// (small enough to process quickly, big enough to keep room outlines).
+// DILATE_* widen it well past your actual pixels — that slack is what keeps
+// slightly misaligned pastes from glowing along their borders.
+const MASK_DIV = 4;
 const DILATE_PX = 14;
 const DILATE_PASSES = 3;
 
@@ -288,11 +289,17 @@ export class MapView {
   //     misaligned room border rang like an unexplored area.
   //
   // So ask a blunter, binary question — did your map draw any INK near here?
-  // Bright room outlines (≈200 against <30 for void) are an unambiguous
-  // signal, unlike interior-vs-void which differs by a few units. The mask is
-  // built small and then dilated generously on the way back up, and that
-  // slack is what absorbs misalignment: being a few pixels out no longer
-  // uncovers a rim of reference along every border you've actually explored.
+  // Crucially the answer must be RELATIVE, not an absolute brightness: the
+  // in-game background is a brown vignette, not black, so any fixed threshold
+  // low enough to be useful also swallows every area a screenshot merely
+  // covered — which is what made pastes blank the whole reveal. contrastMask
+  // (the same test the alignment matcher uses) compares each pixel with its
+  // LOCAL background instead, so flat vignette reads as empty however bright
+  // it is, while outlines and text read as ink however dim.
+  //
+  // The mask is then dilated generously, and that slack absorbs misalignment:
+  // being a few pixels out no longer uncovers a rim of reference along every
+  // border you have actually explored.
   //
   // Built from the explored map at FULL strength, so the opacity slider can't
   // affect it. Cached — only pastes / clears / cleans dirty it.
@@ -300,24 +307,17 @@ export class MapView {
     if (this._revealCache && !this._revealDirty) return this._revealCache;
     const W = this.map.width, H = this.map.height;
 
-    // 1. shrink your map. The averaging is itself a first dose of tolerance:
-    //    a cell counts as inked if it caught ANY of your outlines.
-    const S = 6;
-    const mw = Math.max(1, Math.ceil(W / S)), mh = Math.max(1, Math.ceil(H / S));
+    const mw = Math.max(1, Math.ceil(W / MASK_DIV)), mh = Math.max(1, Math.ceil(H / MASK_DIV));
     const sc = document.createElement('canvas');
     sc.width = mw; sc.height = mh;
     const sx = sc.getContext('2d', { willReadFrequently: true });
     sx.imageSmoothingEnabled = true;
     sx.drawImage(this.explored.canvas, 0, 0, mw, mh);
-    const sd = sx.getImageData(0, 0, mw, mh);
-    const p = sd.data;
-    for (let i = 0; i < p.length; i += 4) {
-      const a = p[i + 3] / 255;
-      const lum = (p[i] * 0.299 + p[i + 1] * 0.587 + p[i + 2] * 0.114) * a;
-      p[i] = p[i + 1] = p[i + 2] = 0;
-      p[i + 3] = lum > INK_LEVEL ? 255 : 0;
-    }
-    sx.putImageData(sd, 0, 0);
+
+    const { m } = contrastMask(sc);            // 1 where YOUR map drew ink
+    const md = sx.createImageData(mw, mh);     // ink -> an alpha-only stencil
+    for (let p = 0; p < m.length; p++) if (m[p]) md.data[p * 4 + 3] = 255;
+    sx.putImageData(md, 0, 0);
 
     // 2. reference, then erase the inked areas — blurred and stamped a few
     //    times so the soft edge firms up into a real, wide dilation
@@ -361,17 +361,18 @@ export class MapView {
     ctx.drawImage(this.explored.canvas, 0, 0, this.map.width, this.map.height);
     ctx.globalAlpha = 1;
 
-    // "Reveal map": sketch in what you're missing. The layer is the reference
-    // minus your own map, so it's black wherever the two agree — and 'lighten'
-    // only ever brightens, so those black areas leave your pastes untouched.
-    // Under it, a screenshot can cover the whole world without hiding
-    // anything: only the rooms you've actually mapped cancel out, and the ones
-    // you haven't light up. It ignores the opacity slider, so turning your own
-    // map down makes the unvisited places stand out sharply.
+    // "Reveal map": the reference with everywhere you've mapped erased out of
+    // it, painted straight over the top. Where you HAVE explored the layer is
+    // transparent, so your own screenshots show through untouched; everywhere
+    // else it paints the real map over whatever the screenshot happened to
+    // cover that ground with. Blending ('lighten') was no good here — a
+    // screenshot's background vignette is often brighter than the reference's
+    // room outlines, so it simply won out and the reveal vanished. Replacing
+    // is right anyway: that vignette covers ground you never explored.
+    // Unaffected by the opacity slider, so turning your own map down leaves
+    // the unvisited places at full strength.
     if (this.debugReveal) {
-      ctx.globalCompositeOperation = 'lighten';
       ctx.drawImage(this._revealLayer(), 0, 0, this.map.width, this.map.height);
-      ctx.globalCompositeOperation = 'source-over';
     }
 
     // subtle bounds so you can tell where the world map area is
