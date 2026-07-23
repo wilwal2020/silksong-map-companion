@@ -1040,6 +1040,11 @@ function positionPaste(bitmap, rect) {
       if (nudge) { e.preventDefault(); view.movePlacement(nudge[0], nudge[1]); return; }
       if (e.key === '+' || e.key === '=') { e.preventDefault(); view.scalePlacement(1.02); }
       else if (e.key === '-' || e.key === '_') { e.preventDefault(); view.scalePlacement(1 / 1.02); }
+      else if (e.key === 'd' || e.key === 'D') {
+        e.preventDefault();
+        const btn = [...document.querySelectorAll('#place-actions .btn')].find(b => b.textContent === 'Difference');
+        if (btn) btn.click();
+      }
     };
     document.addEventListener('keydown', onKey, true);
 
@@ -1048,9 +1053,15 @@ function positionPaste(bitmap, rect) {
       { el: size },
       { label: '+', icon: true, title: 'Bigger (or Shift+scroll)', fn: () => view.scalePlacement(1.04) },
     ];
-    // there has to be something already on the map for auto-align to align to
+    // both alignment aids need something already on the map to align to
     if (!explored.isBlank()) {
-      actions.push({ label: 'Auto-align', title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign });
+      const diff = document.createElement('button');
+      diff.className = 'btn';
+      diff.textContent = 'Difference';
+      diff.title = 'Show the difference against the map underneath — nudge until the overlap goes black (D)';
+      diff.addEventListener('click', () => diff.classList.toggle('active', view.togglePlacementDiff()));
+      actions.push({ el: diff },
+        { label: 'Auto-align', title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign });
     }
     actions.push(
       { label: 'Place it', primary: true, fn: () => finish(true) },
@@ -1065,7 +1076,9 @@ function positionPaste(bitmap, rect) {
 }
 
 // Image-only alignment against what's already pasted — no reference map, so
-// it works for any game. It only ever nudges the placement you made.
+// it works for any game. It only ever MOVES the placement you made: the size
+// you set is taken as correct (one in-game zoom per game), and the search
+// stays around where you dropped it.
 function runAutoAlign() {
   const rect = view.placementRect();
   const p = view.placement;
@@ -1087,9 +1100,7 @@ function runAutoAlign() {
     }
     view.setPlacementRect(r);
     const moved = Math.hypot(r.x - rect.x, r.y - rect.y);
-    toast(moved < 0.6 && Math.abs(r.w / rect.w - 1) < 0.004
-      ? 'Already lined up.'
-      : 'Lined up with the map you already have.', 'ok');
+    toast(moved < 0.6 ? 'Already lined up.' : 'Lined up with the map you already have.', 'ok');
   }, 30);
 }
 

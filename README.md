@@ -50,12 +50,20 @@ yourself:
 2. **Drag** the screenshot where it belongs. `Shift`+scroll (or the − / +
    buttons) resizes it, arrow keys nudge it, `Shift`+arrows nudge further. A
    plain scroll still zooms the map, and dragging off the screenshot still pans.
-3. **Auto-align** (once there's something to align to) snaps it onto the
-   screenshots already on the map — purely by image, no name reading. It only
-   ever adjusts the position you dropped it at; if it can't find a fit it says
-   so and leaves your placement alone.
-4. Press **Place it**, then click **your player's spot** on the map to drop a
+3. Press **Place it**, then click **your player's spot** on the map to drop a
    pin there — or **Skip**.
+
+Once there's something on the map to line up against, two aids appear:
+
+- **Difference** (or `D`) draws the screenshot as its difference against the
+  map underneath, so everything that already matches cancels to black. Nudge
+  until the overlapping part goes dark and it's exactly right.
+- **Auto-align** finds that offset for you, purely by image — no name reading.
+
+Neither ever resizes the screenshot: all of a game's screenshots come from the
+same in-game zoom, so the size is taken as correct and only the position is
+searched, around where you dropped it. If auto-align can't find a fit it says so
+and leaves your placement untouched.
 
 Each paste remembers the size you settled on, so after the first screenshot
 there's usually nothing to resize. Everything else — pin types, notes, attached

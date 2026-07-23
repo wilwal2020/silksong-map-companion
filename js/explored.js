@@ -290,13 +290,6 @@ function satSum(sat, W, H, x, y, w, h) {
   return sat[y1 * S + x1] - sat[y0 * S + x1] - sat[y1 * S + x0] + sat[y0 * S + x0];
 }
 
-// n scale multipliers spread evenly across ±spread around 1
-function scaleLadder(spread, n) {
-  const out = [];
-  for (let i = 0; i < n; i++) out.push(1 - spread + (2 * spread * i) / (n - 1));
-  return out;
-}
-
 export class Explored {
   constructor(mapW, mapH, scale = 1) {
     this.mapW = mapW;
@@ -413,27 +406,36 @@ export class Explored {
 
   // Line a hand-placed screenshot up with what's already on the map. Purely
   // image-based — no reference map, no reading of names — so it works for any
-  // game: it brute-forces scale and translation around where you dropped the
-  // screenshot and keeps the fit whose drawn lines overlap the existing
-  // composite best (Jaccard over the paste's footprint, which stops a dense
-  // patch of map from winning just by being dense). Coarse pass over a wide
-  // window, then a fine one around the winner. Returns a corrected rect with
+  // game.
+  //
+  // MOVES ONLY, never resizes: every screenshot of a given game is taken at
+  // the same in-game zoom, so the size is already right and only the position
+  // is in question. That buys a much finer search — the passes below step the
+  // offset down to single composite pixels instead of spending the budget on
+  // scales that can't be wrong.
+  //
+  // The search stays around where you dropped the screenshot (a window of
+  // `pad` × its size), and keeps the offset whose drawn lines overlap the
+  // existing composite best: Jaccard over the paste's footprint, so a dense
+  // patch of map can't win just by being dense. Returns a corrected rect with
   // its `score`, or null when there's nothing nearby to line up against.
-  autoAlign(bitmap, rect, { pad = 0.32, spread = 0.16 } = {}) {
+  autoAlign(bitmap, rect, { pad = 0.3 } = {}) {
     const s = this.scale;
-    const aspect = bitmap.height / bitmap.width;
     const bmp = canvasOf(bitmap.width, bitmap.height);
     bmp.getContext('2d').drawImage(bitmap, 0, 0);
 
     // work inside a window around the current placement — wide enough to
     // absorb a rough drop, small enough that the search stays instant
     const padPx = Math.max(rect.w, rect.h) * pad;
+    // whole composite pixels, so the last (1:1) pass lands the paste on an
+    // exact pixel rather than the search window's own fractional origin
     const reg = {
-      x: (rect.x - padPx) * s, y: (rect.y - padPx) * s,
-      w: (rect.w + 2 * padPx) * s, h: (rect.h + 2 * padPx) * s,
+      x: Math.round((rect.x - padPx) * s), y: Math.round((rect.y - padPx) * s),
+      w: Math.round((rect.w + 2 * padPx) * s), h: Math.round((rect.h + 2 * padPx) * s),
     };
 
-    const pass = (DW, scales, center, winMap) => {
+    // one search over ±winMap map px around `center`, at reduced width DW
+    const pass = (DW, center, winMap) => {
       const f = Math.min(1, DW / reg.w);        // reduced px per composite px
       const rw = Math.max(24, Math.round(reg.w * f));
       const rh = Math.max(24, Math.round(reg.h * f));
@@ -446,69 +448,67 @@ export class Explored {
       const E = contrastMask(ec);
       if (E.n < rw * rh * 0.008) return null;   // nothing here to line up with
       const sat = summedArea(E.m, rw, rh);
+
+      const pw = Math.round(rect.w * s * f), ph = Math.round(rect.h * s * f);
+      if (pw < 12 || ph < 12) return null;
+      const nc = canvasOf(pw, ph);
+      const nx = nc.getContext('2d', { willReadFrequently: true });
+      nx.imageSmoothingEnabled = true;
+      nx.drawImage(bmp, 0, 0, pw, ph);
+      const N = contrastMask(nc);
+      if (N.n < 40) return null;
+      // sample the shot's content points — a few hundred is plenty and keeps
+      // the inner loop cheap
+      const stride = Math.max(1, Math.ceil(N.n / 500));
+      const px = [], py = [];
+      let seen = 0;
+      for (let p = 0; p < N.m.length; p++) {
+        if (!N.m[p] || (seen++ % stride)) continue;
+        px.push(p % pw); py.push((p / pw) | 0);
+      }
+      if (!px.length) return null;
+      const back = N.n / px.length;             // sampled hits -> full count
+      const bx = Math.round((center.x * s - reg.x) * f);
+      const by = Math.round((center.y * s - reg.y) * f);
       const R = Math.max(2, Math.round(winMap * s * f));
 
       let best = null;
-      for (const k of scales) {
-        const pw = Math.round(center.w * k * s * f);
-        const ph = Math.round(pw * aspect);
-        if (pw < 12 || ph < 12 || pw > rw || ph > rh) continue;
-        const nc = canvasOf(pw, ph);
-        const nx = nc.getContext('2d', { willReadFrequently: true });
-        nx.imageSmoothingEnabled = true;
-        nx.drawImage(bmp, 0, 0, pw, ph);
-        const N = contrastMask(nc);
-        if (N.n < 40) continue;
-        // sample the shot's content points — a few hundred is plenty and
-        // keeps the inner loop cheap
-        const stride = Math.max(1, Math.ceil(N.n / 400));
-        const px = [], py = [];
-        let seen = 0;
-        for (let p = 0; p < N.m.length; p++) {
-          if (!N.m[p] || (seen++ % stride)) continue;
-          px.push(p % pw); py.push((p / pw) | 0);
-        }
-        if (!px.length) continue;
-        const back = N.n / px.length;           // sampled hits -> full count
-        const bx = Math.round(((center.cx - center.w * k / 2) * s - reg.x) * f);
-        const by = Math.round(((center.cy - center.w * k * aspect / 2) * s - reg.y) * f);
-
-        for (let dy = -R; dy <= R; dy++) {
-          const oy = by + dy;
-          for (let dx = -R; dx <= R; dx++) {
-            const ox = bx + dx;
-            let inter = 0;
-            for (let i = 0; i < px.length; i++) {
-              const X = px[i] + ox, Y = py[i] + oy;
-              if (X < 0 || X >= rw || Y < 0 || Y >= rh) continue;
-              if (E.m[Y * rw + X]) inter++;
-            }
-            if (!inter) continue;
-            const est = inter * back;
-            const ecnt = satSum(sat, rw, rh, ox, oy, pw, ph);
-            const score = est / (N.n + ecnt - est);
-            if (!best || score > best.score) {
-              best = {
-                score,
-                x: (ox / f + reg.x) / s,
-                y: (oy / f + reg.y) / s,
-                w: center.w * k,
-              };
-            }
+      for (let dy = -R; dy <= R; dy++) {
+        const oy = by + dy;
+        for (let dx = -R; dx <= R; dx++) {
+          const ox = bx + dx;
+          let inter = 0;
+          for (let i = 0; i < px.length; i++) {
+            const X = px[i] + ox, Y = py[i] + oy;
+            if (X < 0 || X >= rw || Y < 0 || Y >= rh) continue;
+            if (E.m[Y * rw + X]) inter++;
+          }
+          if (!inter) continue;
+          const est = inter * back;
+          const ecnt = satSum(sat, rw, rh, ox, oy, pw, ph);
+          const score = est / (N.n + ecnt - est);
+          if (!best || score > best.score) {
+            best = { score, f, x: (ox / f + reg.x) / s, y: (oy / f + reg.y) / s };
           }
         }
       }
       return best;
     };
 
-    const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
-    const coarse = pass(200, scaleLadder(spread, 9), { cx, cy, w: rect.w }, padPx * 0.85);
-    if (!coarse) return null;
-    const fine = pass(560, scaleLadder(0.035, 7),
-      { cx: coarse.x + coarse.w / 2, cy: coarse.y + coarse.w * aspect / 2, w: coarse.w },
-      Math.max(rect.w, rect.h) * 0.04);
-    const r = fine || coarse;
-    return { x: r.x, y: r.y, w: r.w, h: r.w * aspect, score: r.score };
+    // coarse, then two refinements: each pass only has to cover the previous
+    // one's pixel size, so the window shrinks as the resolution grows
+    let best = null, center = { x: rect.x, y: rect.y }, win = padPx, lastF = 0;
+    for (const DW of [260, 700, 1500]) {
+      if (lastF >= 1) break;                    // already at composite pixels
+      const r = pass(DW, center, win);
+      if (!r) break;
+      best = r;
+      center = { x: r.x, y: r.y };
+      win = 2 / (r.f * s);                      // 2 px of the pass just done
+      lastF = r.f;
+    }
+    if (!best) return null;
+    return { x: best.x, y: best.y, w: rect.w, h: rect.h, score: best.score };
   }
 
   // Apply the content-halo fade to the composite as it stands: keeps rooms /

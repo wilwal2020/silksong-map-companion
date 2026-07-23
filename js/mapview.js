@@ -127,6 +127,15 @@ export class MapView {
     this._placementChanged();
   }
 
+  // difference view on/off (see render) — returns the new state
+  togglePlacementDiff(on) {
+    const p = this.placement;
+    if (!p) return false;
+    p.diff = on === undefined ? !p.diff : !!on;
+    this.requestRender();
+    return p.diff;
+  }
+
   // is this screen point on the screenshot being positioned?
   _overPlacement(px, py) {
     const p = this.placement;
@@ -359,11 +368,21 @@ export class MapView {
     if (this.placement) {
       const p = this.placement;
       const h = p.w * (p.img.height / p.img.width);
-      // nearly solid: while you're aiming it by hand you need to see the
-      // screenshot itself, not a wash of it over the map underneath
-      ctx.globalAlpha = 0.88;
-      ctx.drawImage(p.img, p.x, p.y, p.w, h);
-      ctx.globalAlpha = 1;
+      if (p.diff) {
+        // Difference view: the screenshot is XOR-ed against the map under it,
+        // so whatever already matches cancels to black. Nudge it until the
+        // overlap goes dark and it's exactly right — far more precise than
+        // eyeballing two overlaid pictures.
+        ctx.globalCompositeOperation = 'difference';
+        ctx.drawImage(p.img, p.x, p.y, p.w, h);
+        ctx.globalCompositeOperation = 'source-over';
+      } else {
+        // see-through enough to line up against what's underneath, solid
+        // enough to still read as the screenshot you're holding
+        ctx.globalAlpha = 0.7;
+        ctx.drawImage(p.img, p.x, p.y, p.w, h);
+        ctx.globalAlpha = 1;
+      }
       ctx.strokeStyle = '#e0c37e';
       ctx.lineWidth = 2 / this.scale;
       ctx.strokeRect(p.x, p.y, p.w, h);
