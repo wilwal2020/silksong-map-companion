@@ -30,6 +30,12 @@ stored locally.
    empty pin — paste a screenshot of the actual place (the sealed door, the NPC,
    the ledge you can't reach yet). It's attached to that pin, shown when you open
    it.
+
+   Took that picture *before* you opened the map? Paste it anyway and choose
+   **📷 A picture of what's here**. It waits in the bottom-right corner (click
+   the thumbnail to check it, ✕ to throw it away) and the **next pin you add
+   gets it automatically** — however that pin is made, and even if you reload in
+   between. No second trip into the game.
 5. **Came back and dealt with it?** Open the pin and check it off as done.
 
 Pins, the revealed map, and your custom types all persist automatically in the

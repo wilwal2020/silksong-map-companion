@@ -78,6 +78,18 @@
     <span id="spinner-msg">Locating screenshot on the map&hellip;</span>
   </div>
 
+  <!-- a picture pasted before its pin exists, waiting to be picked up -->
+  <div id="held-shot" class="hidden">
+    <img id="held-shot-img" alt="the picture waiting for its pin">
+    <div class="hs-text">
+      <b>Picture waiting</b>
+      <span>Goes on the next pin you add</span>
+    </div>
+    <button id="held-shot-x" title="Throw this picture away" aria-label="Throw this picture away">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+    </button>
+  </div>
+
   <!-- step bar for hand-placing a screenshot (custom games) -->
   <div id="place-bar" class="hidden">
     <div class="pb-text">
@@ -113,6 +125,12 @@
       <button class="paste-opt hot wide" data-type="place">
         <span class="po-ico">🧩</span>
         <span class="po-ttl">Add this to your map — you place it</span>
+      </button>
+      <!-- took the picture of the place before opening the map? Park it here
+           and the next pin picks it up -->
+      <button class="paste-opt wide" data-type="hold">
+        <span class="po-ico bone">📷</span>
+        <span class="po-ttl">A picture of what's here<span class="po-sub">Kept for the next pin you add</span></span>
       </button>
     </div>
     <button class="paste-cancel" data-type="cancel">Cancel</button>
@@ -263,6 +281,7 @@
       <span class="help-eyebrow">Step 5</span>
       <h2>Remember what's there</h2>
       <p>Once a pin is placed, you can attach a screenshot of what you're looking at — so you'll better remember what was there when you come back.</p>
+      <p>Photographed the place <b>before</b> you opened the map? Paste it anyway and pick <b>📷 A picture of what's here</b>. It waits in the corner, and the next pin you add takes it — no second trip.</p>
     </section>
     <section class="help-slide" data-step="6">
       <span class="help-eyebrow">Step 6</span>

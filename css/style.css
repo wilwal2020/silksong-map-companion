@@ -870,6 +870,40 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 #dlg-paste[data-mode="custom"] .paste-opt[data-type="map"],
 #dlg-paste[data-mode="custom"] .paste-opt[data-type="full"] { display: none; }
 .paste-opt.wide { grid-column: 1 / -1; flex-direction: row; gap: 14px; min-height: 0; text-align: left; }
+.po-sub { display: block; margin-top: 2px; font-size: .76rem; font-weight: 400; color: var(--text-dim); }
+
+/* ---------- a picture waiting for its pin ---------- */
+
+/* Pasted before the pin it belongs to exists (you photographed the place,
+   then remembered to open the map). It parks here until the next pin. */
+#held-shot {
+  position: absolute; right: 16px; bottom: 20px; z-index: 24;
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 11px 9px 9px; max-width: 320px;
+  background: rgba(12,14,19,.96); border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent); border-radius: 10px;
+  box-shadow: var(--shadow);
+  animation: toast-in .3s cubic-bezier(.18,.9,.28,1.3);
+}
+#held-shot.hidden { display: none !important; }
+#held-shot-img {
+  width: 58px; height: 44px; flex: none; object-fit: cover;
+  border-radius: 6px; border: 1px solid var(--border); cursor: zoom-in;
+}
+#held-shot-img:hover { border-color: var(--accent); }
+.hs-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.hs-text b { font-size: .84rem; font-weight: 600; color: var(--text); }
+.hs-text span { font-size: .74rem; color: var(--text-dim); }
+#held-shot-x {
+  flex: none; width: 24px; height: 24px; display: grid; place-items: center;
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text-dim); cursor: pointer; padding: 0;
+  transition: color .12s, background .12s, border-color .12s;
+}
+#held-shot-x svg { width: 13px; height: 13px; }
+#held-shot-x:hover { color: var(--rose); background: var(--accent-soft); border-color: #5d3134; }
+/* the step bar owns the bottom of the screen — get out of its way */
+body.placing-paste #held-shot { display: none; }
 
 #map-canvas.placing { cursor: grab; }
 #map-canvas.placing.over-placement { cursor: move; }
@@ -905,7 +939,7 @@ body.placing-paste #paste-hint, body.placing-paste #empty-hint { display: none; 
 .pb-actions .btn.icon { padding: 6px 10px; font-size: .95rem; line-height: 1; }
 
 @media (prefers-reduced-motion: reduce) {
-  #place-bar, #game-menu { animation: none !important; }
+  #place-bar, #game-menu, #held-shot { animation: none !important; }
 }
 
 @media (max-width: 720px) {

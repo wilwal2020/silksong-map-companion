@@ -649,13 +649,16 @@ async function applyMapPlacement(bitmap, rect, marker) {
     id: crypto.randomUUID(),
     x: rect.x + (marker ? marker.fx : 0.5) * rect.w,
     y: rect.y + (marker ? marker.fy : 0.5) * rect.h,
-    cat: 'other', note: '', done: false, img: null,
+    cat: 'other', note: '', done: false,
+    // a picture pasted before this pin existed comes along automatically
+    img: takeHeldShot(),
     created: Date.now(),
   };
   lastUndo.pinId = data.id;
   pins.add(data, { select: true, pop: true });
   pins.lastPlacedId = data.id; // don't let a paste right after placing attach to it
   persistPin(data);
+  if (data.img) toast('The picture you kept earlier is on this pin.', 'ok');
 
   // sub-pixel polish runs in the background while the pin editor is open;
   // it re-composites (and nudges the pin) if it beats this placement, and
@@ -1152,6 +1155,43 @@ function askPlayerLocation() {
   });
 }
 
+// ------------------------------------------- a picture waiting for its pin
+
+// You photograph the place, and only then remember to open the map — so the
+// picture arrives before the pin it belongs to exists. Rather than making you
+// go back for it, a paste can be parked here: the next pin you add picks it
+// up automatically. Survives a reload (it's kept in the game's store), so
+// stepping away and coming back doesn't lose it.
+let heldShot = null;      // { blob, url }
+
+function renderHeldShot() {
+  const el = $('#held-shot');
+  el.classList.toggle('hidden', !heldShot);
+  if (heldShot) $('#held-shot-img').src = heldShot.url;
+}
+
+function setHeldShot(blob, { persist = true } = {}) {
+  if (heldShot) URL.revokeObjectURL(heldShot.url);
+  heldShot = { blob, url: URL.createObjectURL(blob) };
+  if (persist) store.putMeta('heldShot', blob);
+  renderHeldShot();
+}
+
+function clearHeldShot({ persist = true } = {}) {
+  if (heldShot) URL.revokeObjectURL(heldShot.url);
+  heldShot = null;
+  if (persist) store.putMeta('heldShot', null);
+  renderHeldShot();
+}
+
+// hand the waiting picture to a pin being created (null if there isn't one)
+function takeHeldShot() {
+  if (!heldShot) return null;
+  const blob = heldShot.blob;
+  clearHeldShot();
+  return blob;
+}
+
 let currentPaste = null; // { blob, url } while the type chooser is open
 
 function routePaste(blob) {
@@ -1207,6 +1247,13 @@ for (const b of document.querySelectorAll('#dlg-paste button[data-type]')) {
     else if (type === 'env') await handleEnvScreenshot(paste.blob);
     else if (type === 'full') await handleFullMap(paste.blob);
     else if (type === 'place') await handleManualPlace(paste.blob);
+    else if (type === 'hold') {
+      const replaced = !!heldShot;
+      setHeldShot(paste.blob);
+      toast(replaced
+        ? 'Kept instead — the previous waiting picture was dropped.'
+        : "Picture kept. The next pin you add gets it — paste your map screenshot when you're ready.", 'ok');
+    }
   });
 }
 
@@ -1642,13 +1689,15 @@ function stopPlacing() {
 
 // resolves with the pin's data, or null if the editor was cancelled
 async function createManualPin(x, y) {
+  const held = takeHeldShot();  // a picture pasted before this pin existed
   const data = {
     id: crypto.randomUUID(),
-    x, y, cat: 'other', note: '', done: false, img: null,
+    x, y, cat: 'other', note: '', done: false, img: held,
     created: Date.now(),
   };
   pins.add(data, { select: true });
   pins.lastPlacedId = data.id;
+  if (held) toast('The picture you kept earlier is on this pin.', 'ok');
   const edit = await openPinEditor(data, true);
   if (edit) {
     data.cat = edit.cat;
@@ -1658,8 +1707,11 @@ async function createManualPin(x, y) {
     ensureCatVisible(data.cat);
     return data;
   }
-  // cancelled — the pin was only provisional, so it shouldn't stick around
+  // cancelled — the pin was only provisional, so it shouldn't stick around.
+  // The waiting picture goes back to waiting rather than vanishing with it
+  // (unless the editor was used to swap it out for a different one).
   pins.remove(data.id);
+  if (held && data.img === held) setHeldShot(held);
   return null;
 }
 
@@ -1802,6 +1854,14 @@ function buildToolbar() {
   $('#cattype-hint').classList.add('emoji-tip');
   $('#btn-add-pin').addEventListener('click', () => placing ? stopPlacing() : startPlacing());
 
+  $('#held-shot-x').addEventListener('click', () => {
+    clearHeldShot();
+    toast('Waiting picture thrown away.');
+  });
+  // click the thumbnail to see it full size — so you can check it's the right
+  // one before it lands on a pin
+  $('#held-shot-img').addEventListener('click', () => heldShot && showLightbox(heldShot.url));
+
   $('#btn-game').addEventListener('click', () => {
     $('#game-menu').classList.contains('hidden') ? openGameMenu() : closeGameMenu();
   });
@@ -1883,6 +1943,7 @@ function buildToolbar() {
       { title: 'Reset everything?', okLabel: 'Reset everything' })) return;
     await store.clearPins();
     await store.clearMeta();
+    clearHeldShot({ persist: false }); // its key went with clearMeta
     pins.removeAll();
     explored.clear();
     lastUndo = null;
@@ -1959,6 +2020,8 @@ async function init() {
   scaleSamples = (await store.getMeta('scaleSamples')) || [];
   const savedFog = await store.getMeta('fog');
   if (savedFog) await explored.loadFromBlob(savedFog);
+  const savedHeld = await store.getMeta('heldShot');
+  if (savedHeld) setHeldShot(savedHeld, { persist: false });
   const savedView = await store.getMeta('view');
   if (savedView) {
     view.scale = savedView.scale;
