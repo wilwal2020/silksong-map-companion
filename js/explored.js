@@ -10,6 +10,10 @@
 // makes overlapping pastes read as one continuous map. The outer edge (rect
 // OR freeform snip shape) is additionally feathered by true distance to the
 // nearest transparent pixel / border.
+//
+// All of that is calibrated on Silksong's map. Games added by hand switch it
+// off (`fadeBackground = false`) and composite their screenshots untouched —
+// only the snip edge is feathered.
 
 // how far (px) the background fades out around drawn content
 const FADE_PX = 14;
@@ -173,7 +177,11 @@ function contentFade(d, opaque, W, H, fadePx, refShot = null) {
 // `refContent` + `mapRect`: reference content mask (composite resolution)
 // and where this paste lands, so contentFade can tell cut-through-a-room
 // from open-to-the-void at the snip boundary.
-function prepPaste(bitmap, refContent = null, mapRect = null, scale = 1) {
+// `fadeBg = false` composites the screenshot exactly as it is (only the snip
+// edge is feathered): the fade decides what counts as "background" from
+// Silksong's own look, and there's no telling what another game's map is
+// supposed to look like.
+function prepPaste(bitmap, refContent = null, mapRect = null, scale = 1, fadeBg = true) {
   const W = bitmap.width, H = bitmap.height;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -188,7 +196,7 @@ function prepPaste(bitmap, refContent = null, mapRect = null, scale = 1) {
   }
   // resample the reference content mask into shot space
   let refShot = null;
-  if (refContent && mapRect) {
+  if (fadeBg && refContent && mapRect) {
     refShot = new Uint8Array(W * H);
     const kx = mapRect.w * scale / W, ky = mapRect.h * scale / H;
     const rx0 = mapRect.x * scale, ry0 = mapRect.y * scale;
@@ -204,19 +212,22 @@ function prepPaste(bitmap, refContent = null, mapRect = null, scale = 1) {
   }
   const edge = Math.round(Math.min(W, H) * 0.06);
   const rim = edge > 0 ? chamferDT(trans, W, H, edge, true) : null;
-  const fade = contentFade(d, opaque, W, H, FADE_PX, refShot);
+  const fade = fadeBg ? contentFade(d, opaque, W, H, FADE_PX, refShot) : null;
   const cap = edge * 3;
   for (let p = 0; p < opaque.length; p++) {
     const i = p * 4;
     if (!d[i + 3]) continue;
-    // fade the background toward BLACK: darken colour alongside the alpha
-    // drop, so the void reads as clean black instead of a lingering brown
-    // vignette tint. Kept content (fade 255) is untouched.
-    const k = fade[p];
-    d[i] = (d[i] * k / 255) | 0;
-    d[i + 1] = (d[i + 1] * k / 255) | 0;
-    d[i + 2] = (d[i + 2] * k / 255) | 0;
-    let a = d[i + 3] * k / 255;
+    let a = d[i + 3];
+    if (fade) {
+      // fade the background toward BLACK: darken colour alongside the alpha
+      // drop, so the void reads as clean black instead of a lingering brown
+      // vignette tint. Kept content (fade 255) is untouched.
+      const k = fade[p];
+      d[i] = (d[i] * k / 255) | 0;
+      d[i + 1] = (d[i + 1] * k / 255) | 0;
+      d[i + 2] = (d[i + 2] * k / 255) | 0;
+      a = a * k / 255;
+    }
     if (rim && rim[p] < cap) a = a * rim[p] / cap;
     d[i + 3] = a | 0;
   }
@@ -299,6 +310,11 @@ export class Explored {
     this.onChange = null; // set by app for persistence / rerender
     this.refImage = null; // reference map, set by app; guides the bg fade
     this._refKeep = null;
+    // Fade each paste's background to black on the way in. Tuned entirely on
+    // Silksong's map (dark void, bright outlines) — for a game we know
+    // nothing about, guessing which pixels are "background" would be
+    // vandalism, so those composite exactly as screenshotted.
+    this.fadeBackground = true;
   }
 
   // The reference map is NEVER displayed — the background fade only uses it
@@ -327,7 +343,8 @@ export class Explored {
 
   // composite a screenshot at map-rect (x, y, w, h), newest on top
   paste(bitmap, x, y, w, h) {
-    const p = prepPaste(bitmap, this._refContentMask(), { x, y, w, h }, this.scale);
+    const p = prepPaste(bitmap, this._refContentMask(), { x, y, w, h }, this.scale,
+      this.fadeBackground);
     const s = this.scale;
     this.ctx.drawImage(p, x * s, y * s, w * s, h * s);
     this._changed();

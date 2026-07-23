@@ -290,8 +290,10 @@ function applyGameChrome() {
   $('.game-name').textContent = game.name;
   // the paste chooser offers different things with and without a reference map
   $('#dlg-paste').dataset.mode = handPlaced() ? 'custom' : 'builtin';
-  // "Reveal map" lays the real world map over yours — there isn't one here
+  // "Reveal map" lays the real world map over yours — there isn't one here.
+  // "Clean map" is the same Silksong-tuned background fade, so it goes too.
   $('#btn-reveal').classList.toggle('hidden', handPlaced());
+  $('#btn-clean').classList.toggle('hidden', handPlaced());
   if (handPlaced()) {
     $('#empty-hint h2').textContent = 'Paste your first screenshot';
     $('#empty-hint p').innerHTML =
@@ -1899,6 +1901,9 @@ async function init() {
     world = { width: game.w, height: game.h };
   }
   explored = new Explored(world.width, world.height);
+  // the background fade only knows what Silksong's map looks like — a game
+  // added by hand keeps its screenshots exactly as they were taken
+  explored.fadeBackground = !!game.builtin;
   if (mapImage) explored.setReference(mapImage); // guides the bg fade (never shown)
   view = new MapView($('#map-canvas'), world, explored, mapImage);
   view.onPlacementChanged = updatePlaceSize;

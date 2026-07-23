@@ -59,8 +59,14 @@ yourself:
 
 Each paste remembers the size you settled on, so after the first screenshot
 there's usually nothing to resize. Everything else — pin types, notes, attached
-pictures, done-checkoffs, Clean map, export/import, `Ctrl+Z` — works exactly as
-it does for Silksong.
+pictures, done-checkoffs, export/import, `Ctrl+Z` — works exactly as it does for
+Silksong.
+
+The **background fading** below is the one thing that doesn't carry over:
+deciding which pixels are "background" is calibrated on Silksong's own map, and
+guessing wrong on a game it has never seen would wreck the screenshot. Your
+screenshots composite exactly as you took them (only the snip's edge is
+feathered), and **Clean map** isn't offered.
 
 ## The toolbar
 
@@ -71,6 +77,7 @@ it does for Silksong.
 - **Clean map** — fade every pasted screenshot's dark background to black so
   overlapping pastes blend into one seamless map. Room outlines, fills, area
   names and markers are kept; only the background void fades. Undoable.
+  Silksong only — see *Other games*.
 - **Export / Import** — download or restore a full JSON backup (revealed map +
   all pins with their pictures, notes and custom types). Clearing site data
   erases everything, so export now and then.
