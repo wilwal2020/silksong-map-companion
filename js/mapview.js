@@ -1,14 +1,17 @@
 // Pan/zoom canvas viewer. Draws: black fog -> explored screenshots ->
-// (optional) placement overlay for a screenshot being positioned. `mapImage`
-// is used only for its dimensions (the reference map is never displayed).
+// (optional) placement overlay for a screenshot being positioned. `world` is
+// used only for its dimensions ({ width, height }) — a custom game has no map
+// image at all. `reference`, when a game has one, is the full map: never drawn
+// except by the "Reveal map" comparison toggle.
 
 const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
 export class MapView {
-  constructor(canvas, mapImage, explored) {
+  constructor(canvas, world, explored, reference = null) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.map = mapImage;
+    this.map = world;
+    this.reference = reference;
     this.explored = explored;
 
     this.scale = 0.2;
@@ -76,9 +79,65 @@ export class MapView {
     this.requestRender();
   }
 
+  // ---- manual placement: drag the screenshot where it belongs -------------
+
+  // p = { img, x, y, w } in map coords (height follows the image's aspect).
+  // Custom games have no reference map to match against, so this is how a
+  // paste gets positioned: drag it, Shift+scroll to resize.
   setPlacement(p) {
     this.placement = p;
     this.canvas.classList.toggle('placing', !!p);
+    if (p && this.onPlacementChanged) this.onPlacementChanged(this.placementRect());
+    this.requestRender();
+  }
+
+  placementRect() {
+    const p = this.placement;
+    if (!p) return null;
+    return { x: p.x, y: p.y, w: p.w, h: p.w * (p.img.height / p.img.width) };
+  }
+
+  // move it to an exact rect (used by auto-align and by arrow-key nudges)
+  setPlacementRect(r) {
+    const p = this.placement;
+    if (!p) return;
+    p.x = r.x; p.y = r.y; p.w = r.w;
+    this._placementChanged();
+  }
+
+  // grow/shrink around a screen point (the cursor, or the image's centre)
+  scalePlacement(factor, anchorScreen = null) {
+    const p = this.placement;
+    if (!p || p.locked) return;
+    const h = p.w * (p.img.height / p.img.width);
+    const a = anchorScreen
+      ? this.screenToMap(anchorScreen.x, anchorScreen.y)
+      : { x: p.x + p.w / 2, y: p.y + h / 2 };
+    const k = Math.max(0.02 / (p.w || 1), factor);
+    p.x = a.x + (p.x - a.x) * k;
+    p.y = a.y + (p.y - a.y) * k;
+    p.w = Math.max(30, p.w * k);
+    this._placementChanged();
+  }
+
+  movePlacement(dx, dy) {
+    const p = this.placement;
+    if (!p || p.locked) return;
+    p.x += dx; p.y += dy;
+    this._placementChanged();
+  }
+
+  // is this screen point on the screenshot being positioned?
+  _overPlacement(px, py) {
+    const p = this.placement;
+    if (!p || p.locked) return false;
+    const m = this.screenToMap(px, py);
+    const h = p.w * (p.img.height / p.img.width);
+    return m.x >= p.x && m.x <= p.x + p.w && m.y >= p.y && m.y <= p.y + h;
+  }
+
+  _placementChanged() {
+    if (this.onPlacementChanged) this.onPlacementChanged(this.placementRect());
     this.requestRender();
   }
 
@@ -288,8 +347,8 @@ export class MapView {
     // attempt to detect explored-vs-unexplored automatically (alpha masks,
     // pixel differencing, dilated ink masks) broke on real screenshots, which
     // match the reference in neither colour nor alignment.
-    if (this.debugReveal) {
-      ctx.drawImage(this.map, 0, 0, this.map.width, this.map.height);
+    if (this.debugReveal && this.reference) {
+      ctx.drawImage(this.reference, 0, 0, this.map.width, this.map.height);
     }
 
     // subtle bounds so you can tell where the world map area is
@@ -300,12 +359,28 @@ export class MapView {
     if (this.placement) {
       const p = this.placement;
       const h = p.w * (p.img.height / p.img.width);
-      ctx.globalAlpha = 0.65;
+      // nearly solid: while you're aiming it by hand you need to see the
+      // screenshot itself, not a wash of it over the map underneath
+      ctx.globalAlpha = 0.88;
       ctx.drawImage(p.img, p.x, p.y, p.w, h);
       ctx.globalAlpha = 1;
       ctx.strokeStyle = '#e0c37e';
       ctx.lineWidth = 2 / this.scale;
       ctx.strokeRect(p.x, p.y, p.w, h);
+      // corner ticks — they read as "grab me" and make small misalignments
+      // against the existing map easy to eyeball
+      const t = Math.min(p.w, h) * 0.09;
+      ctx.lineWidth = 3.5 / this.scale;
+      ctx.beginPath();
+      for (const [cx, cy, sx, sy] of [
+        [p.x, p.y, 1, 1], [p.x + p.w, p.y, -1, 1],
+        [p.x, p.y + h, 1, -1], [p.x + p.w, p.y + h, -1, -1],
+      ]) {
+        ctx.moveTo(cx + sx * t, cy);
+        ctx.lineTo(cx, cy);
+        ctx.lineTo(cx, cy + sy * t);
+      }
+      ctx.stroke();
     }
 
     if (this.ghost) this._drawGhost(ctx);
@@ -321,32 +396,39 @@ export class MapView {
 
   _attachInput() {
     const c = this.canvas;
-    let dragging = false, lastX = 0, lastY = 0;
+    let dragging = false, movingPlacement = false, lastX = 0, lastY = 0;
 
     c.addEventListener('pointerdown', e => {
       dragging = true;
+      // dragging ON the screenshot moves it; dragging anywhere else still
+      // pans the map, so you can always look around mid-placement
+      movingPlacement = this._overPlacement(e.clientX, e.clientY);
       lastX = e.clientX; lastY = e.clientY;
       c.setPointerCapture(e.pointerId);
       c.classList.add('panning');
     });
 
     c.addEventListener('pointermove', e => {
-      if (!dragging) return;
+      if (!dragging) {
+        // cursor tells you which of the two drags you'd get
+        if (this.placement) c.classList.toggle('over-placement', this._overPlacement(e.clientX, e.clientY));
+        return;
+      }
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       lastX = e.clientX; lastY = e.clientY;
-      if (this.placement && !this.placement.locked) {
-        this.placement.x += dx / this.scale;
-        this.placement.y += dy / this.scale;
-      } else {
-        this.ox += dx;
-        this.oy += dy;
-        this._clampView();
+      if (movingPlacement) {
+        this.movePlacement(dx / this.scale, dy / this.scale);
+        return;
       }
+      this.ox += dx;
+      this.oy += dy;
+      this._clampView();
       this.requestRender();
     });
 
     const endDrag = e => {
       dragging = false;
+      movingPlacement = false;
       c.classList.remove('panning');
     };
     c.addEventListener('pointerup', endDrag);
@@ -355,14 +437,10 @@ export class MapView {
     c.addEventListener('wheel', e => {
       e.preventDefault();
       const factor = Math.exp(-e.deltaY * 0.0012);
-      if (this.placement && !this.placement.locked) {
-        // resize the placement around its center
-        const p = this.placement;
-        const h = p.w * (p.img.height / p.img.width);
-        const cx = p.x + p.w / 2, cy = p.y + h / 2;
-        p.w = Math.max(60, p.w * factor);
-        const nh = p.w * (p.img.height / p.img.width);
-        p.x = cx - p.w / 2; p.y = cy - nh / 2;
+      if (this.placement && !this.placement.locked && (e.shiftKey || e.altKey)) {
+        // Shift+scroll resizes the screenshot around the cursor; a plain
+        // scroll keeps zooming the map, so the view never gets stuck
+        this.scalePlacement(factor, { x: e.clientX, y: e.clientY });
       } else {
         const ns = Math.min(this.maxScale, Math.max(this.minScale, this.scale * factor));
         const k = ns / this.scale;

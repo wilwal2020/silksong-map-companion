@@ -35,11 +35,39 @@ stored locally.
 Pins, the revealed map, and your custom types all persist automatically in the
 browser's IndexedDB. `Ctrl+Z` undoes the last paste (or the last pin move).
 
+## Other games
+
+Silksong is the game that ships with a reference world map, which is what makes
+automatic placement possible. You can add **any other game** from the title in
+the top-left: click it, pick **＋ New game…**, give it a name, an emoji and a
+world size. Each game keeps its own map, pins, pin types and backups — switching
+between them reloads the page and nothing is shared.
+
+A game you add has no reference map to match against, so you place screenshots
+yourself:
+
+1. Paste as usual and choose **🧩 Add this to your map — you place it**.
+2. **Drag** the screenshot where it belongs. `Shift`+scroll (or the − / +
+   buttons) resizes it, arrow keys nudge it, `Shift`+arrows nudge further. A
+   plain scroll still zooms the map, and dragging off the screenshot still pans.
+3. **Auto-align** (once there's something to align to) snaps it onto the
+   screenshots already on the map — purely by image, no name reading. It only
+   ever adjusts the position you dropped it at; if it can't find a fit it says
+   so and leaves your placement alone.
+4. Press **Place it**, then click **your player's spot** on the map to drop a
+   pin there — or **Skip**.
+
+Each paste remembers the size you settled on, so after the first screenshot
+there's usually nothing to resize. Everything else — pin types, notes, attached
+pictures, done-checkoffs, Clean map, export/import, `Ctrl+Z` — works exactly as
+it does for Silksong.
+
 ## The toolbar
 
 - **📍 Add pin** — drop a pin by hand: click, then click the spot on the map.
 - **Reveal map** — overlay the reference map to check your alignment (a testing
-  aid; it's never part of your saved map).
+  aid; it's never part of your saved map). Silksong only — games you add have no
+  reference map.
 - **Clean map** — fade every pasted screenshot's dark background to black so
   overlapping pastes blend into one seamless map. Room outlines, fills, area
   names and markers are kept; only the background void fades. Undoable.
@@ -105,7 +133,8 @@ interior; it never adds anything you haven't pasted.
 - `js/explored.js` — the revealed-map canvas, compositing, and background fade.
 - `js/mapview.js`, `js/fog.js` — pan/zoom rendering and the fog overlay.
 - `js/pins.js`, `js/categories.js` — pins and pin types.
-- `js/store.js` — IndexedDB persistence.
+- `js/games.js` — the game list (built-in Silksong + your own) and world sizes.
+- `js/store.js` — IndexedDB persistence, scoped per game.
 - `vendor/opencv.js` — bundled OpenCV.js.
 
 ## Credits

@@ -793,6 +793,121 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 .field-hint.emoji-tip .emoji-tip-ico { font-size: 1.25rem; line-height: 1; flex: none; }
 .field-hint.emoji-tip .kbd { color: var(--text); font-weight: 600; }
 
+/* ---------- game switcher ---------- */
+
+/* the title doubles as the switcher: which game you're mapping is the first
+   thing on screen, and one click gets you to the others */
+.game-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: transparent; border: 1px solid transparent; border-radius: 8px;
+  padding: 3px 8px 3px 6px; margin: -3px 2px -3px -6px;
+  font: inherit; font-family: Cinzel, serif; font-size: 1.05rem; letter-spacing: .08em;
+  color: var(--text); cursor: pointer;
+  transition: background .14s, border-color .14s, box-shadow .14s;
+}
+.game-btn:hover { background: #161a23; border-color: #6a3a3b; box-shadow: 0 0 15px -7px var(--accent-glow); }
+.game-btn .game-ico { font-size: 1rem; line-height: 1; }
+.game-btn .game-chev { width: 13px; height: 13px; opacity: .55; }
+.game-btn:hover .game-chev { opacity: 1; }
+#toolbar h1 { display: flex; align-items: center; gap: 8px; }
+
+#game-menu {
+  position: fixed; left: 10px; top: 46px; z-index: 40;
+  min-width: 250px; max-width: 340px; padding: 6px;
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-top: 2px solid var(--accent); box-shadow: var(--shadow);
+  animation: dlg-in .16s cubic-bezier(.2,.9,.3,1.12);
+}
+.gm-head {
+  padding: 6px 9px 8px; font-family: Cinzel, serif; font-size: .72rem;
+  letter-spacing: .1em; color: var(--text-dim);
+}
+.gm-row {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 9px; border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--text); font: inherit; font-size: .88rem;
+  text-align: left; cursor: pointer; transition: background .12s, border-color .12s;
+}
+.gm-row:hover { background: var(--panel-2); border-color: var(--border); }
+.gm-row.on { background: var(--accent-soft); border-color: var(--accent); }
+.gm-ico { font-size: 1.05rem; line-height: 1; flex: none; width: 22px; text-align: center; }
+.gm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-sub { font-size: .72rem; color: var(--text-dim); }
+.gm-tools { display: flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+.gm-row:hover .gm-tools, .gm-row.on .gm-tools { opacity: 1; }
+.gm-tool {
+  background: transparent; border: 0; color: var(--text-dim);
+  font: inherit; font-size: .82rem; cursor: pointer; padding: 2px 4px; border-radius: 6px;
+}
+.gm-tool:hover { color: var(--text); background: #222835; }
+.gm-tool.del:hover { color: var(--rose); }
+.gm-sep { height: 1px; margin: 6px 4px; background: var(--border); }
+.gm-row.gm-new { color: var(--rose); border: 1px dashed #5d3134; }
+.gm-row.gm-new:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+/* ---------- new-game dialog ---------- */
+
+#game-intro { margin-bottom: 14px; }
+#game-size-wrap { margin-top: 14px; }
+.game-size-label { display: block; font-size: .78rem; color: var(--text-dim); margin-bottom: 7px; }
+.game-sizes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.game-size {
+  display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
+  padding: 10px 11px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 9px; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  transition: border-color .14s, background .14s;
+}
+.game-size:hover { border-color: var(--border-strong); background: #1a1f29; }
+.game-size.on { border-color: var(--accent); background: rgba(158,43,37,.12); }
+.game-size b { font-size: .88rem; font-weight: 600; }
+.game-size span { font-size: .72rem; color: var(--text-dim); line-height: 1.3; }
+
+/* ---------- hand-placing a screenshot ---------- */
+
+/* which paste options a game offers: with a reference map you get the two
+   automatic ones, without one there's a single "you place it" card */
+#dlg-paste[data-mode="builtin"] .paste-opt[data-type="place"],
+#dlg-paste[data-mode="custom"] .paste-opt[data-type="map"],
+#dlg-paste[data-mode="custom"] .paste-opt[data-type="full"] { display: none; }
+.paste-opt.wide { grid-column: 1 / -1; flex-direction: row; gap: 14px; min-height: 0; text-align: left; }
+
+#map-canvas.placing { cursor: grab; }
+#map-canvas.placing.over-placement { cursor: move; }
+#map-canvas.placing.panning { cursor: grabbing; }
+
+/* the step bar: the whole hand-placement flow lives here, docked low so it
+   never covers the screenshot you're aiming */
+#place-bar {
+  position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 26; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px;
+  max-width: min(760px, 94vw);
+  background: rgba(12,14,19,.97); border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent); border-radius: 10px;
+  padding: 10px 14px; box-shadow: var(--shadow);
+  animation: toast-in .28s cubic-bezier(.18,.9,.28,1.3);
+}
+#place-bar.hidden { display: none !important; }
+/* the step bar owns the bottom of the screen while it's up */
+body.placing-paste #paste-hint, body.placing-paste #empty-hint { display: none; }
+.pb-text { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex: 1 1 260px; }
+.pb-step {
+  flex: none; font-family: Cinzel, serif; font-size: .7rem; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--rose);
+}
+.pb-msg { font-size: .87rem; color: var(--text); line-height: 1.35; }
+.pb-msg .kbd { margin: 0 1px; }
+.pb-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+.pb-size {
+  font-size: .78rem; color: var(--text-dim); font-variant-numeric: tabular-nums;
+  min-width: 42px; text-align: center;
+}
+.pb-actions .btn { padding: 6px 11px; }
+.pb-actions .btn.icon { padding: 6px 10px; font-size: .95rem; line-height: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  #place-bar, #game-menu { animation: none !important; }
+}
+
 @media (max-width: 720px) {
   #cat-bar { width: 240px; }
 }

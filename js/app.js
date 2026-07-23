@@ -1,6 +1,6 @@
 import { Explored } from './explored.js';
 import { MapView } from './mapview.js';
-import { store } from './store.js';
+import { store, setStoreGame } from './store.js';
 import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT, refinePlacement } from './match.js';
 import { ocrLocate, loadLabels } from './ocr.js';
 import { PinManager, SVG } from './pins.js';
@@ -8,10 +8,20 @@ import {
   categories, catById, customCategories, currentOrder, isCustom,
   setCustomCategories, addCustomCategory, removeCustomCategory, updateCustomCategory, setOrder,
 } from './categories.js';
+import {
+  BUILTIN_GAME, WORLD_SIZES, DEFAULT_SIZE, allGames, gameById, loadGames,
+  createGame, updateGame, removeGame, currentGameId, setCurrentGameId,
+} from './games.js';
 
 const $ = s => document.querySelector(s);
 
-let view, explored, pins, mapImage;
+let view, explored, pins;
+let mapImage = null;      // reference world map — only games that ship one
+let world = null;         // { width, height } of this game's map space
+let game = BUILTIN_GAME;  // which game is open
+// A game without a reference map can't be matched against anything, so its
+// pastes are positioned by hand (and its player pin is clicked, not detected).
+const handPlaced = () => !game.builtin;
 let newPinPending = null; // freshly created pin waiting for its area screenshot
 let lastUndo = null;      // { snap, pinId } — one level of paste undo
 let learnedScale = null;  // map-px per screenshot-px from past successes
@@ -270,6 +280,163 @@ document.addEventListener('keydown', e => {
 });
 $('#btn-await-skip').addEventListener('click', () => skipAwaitingEnv());
 $('#dlg-await').addEventListener('cancel', e => { e.preventDefault(); skipAwaitingEnv(); });
+
+// ------------------------------------------------------------------- games
+
+// everything on screen that depends on which game is open
+function applyGameChrome() {
+  document.title = `${game.name} — Map Companion`;
+  $('.game-ico').textContent = game.icon || '🎮';
+  $('.game-name').textContent = game.name;
+  // the paste chooser offers different things with and without a reference map
+  $('#dlg-paste').dataset.mode = handPlaced() ? 'custom' : 'builtin';
+  // "Reveal map" lays the real world map over yours — there isn't one here
+  $('#btn-reveal').classList.toggle('hidden', handPlaced());
+  if (handPlaced()) {
+    $('#empty-hint h2').textContent = 'Paste your first screenshot';
+    $('#empty-hint p').innerHTML =
+      'Snip your in-game map with <span class="kbd">Shift + Win + S</span>, '
+      + 'then paste it here and drag it into place.';
+    $('#hint-text').textContent = 'paste a screenshot of your map';
+  }
+}
+
+function closeGameMenu() {
+  $('#game-menu').classList.add('hidden');
+  document.removeEventListener('pointerdown', onGameMenuOutside, true);
+}
+function onGameMenuOutside(e) {
+  if (!e.target.closest('#game-menu, #btn-game')) closeGameMenu();
+}
+
+function openGameMenu() {
+  const menu = $('#game-menu');
+  menu.innerHTML = '<div class="gm-head">GAMES</div>';
+  for (const g of allGames()) {
+    const row = document.createElement('button');
+    row.className = 'gm-row' + (g.id === game.id ? ' on' : '');
+    row.innerHTML =
+      `<span class="gm-ico">${g.icon || '🎮'}</span>`
+      + `<span class="gm-name">${escapeHtml(g.name)}</span>`;
+    if (!g.builtin) {
+      const tools = document.createElement('span');
+      tools.className = 'gm-tools';
+      const edit = document.createElement('button');
+      edit.className = 'gm-tool';
+      edit.textContent = '✎';
+      edit.title = 'Rename this game';
+      edit.addEventListener('click', e => { e.stopPropagation(); closeGameMenu(); openGameDialog(g); });
+      const del = document.createElement('button');
+      del.className = 'gm-tool del';
+      del.textContent = '🗑';
+      del.title = 'Delete this game';
+      del.addEventListener('click', e => { e.stopPropagation(); closeGameMenu(); deleteGame(g); });
+      tools.append(edit, del);
+      row.appendChild(tools);
+    } else {
+      row.insertAdjacentHTML('beforeend', '<span class="gm-sub">auto&#8209;placed</span>');
+    }
+    row.addEventListener('click', () => switchGame(g.id));
+    menu.appendChild(row);
+  }
+  menu.insertAdjacentHTML('beforeend', '<div class="gm-sep"></div>');
+  const add = document.createElement('button');
+  add.className = 'gm-row gm-new';
+  add.innerHTML = '<span class="gm-ico">＋</span><span class="gm-name">New game…</span>';
+  add.addEventListener('click', () => { closeGameMenu(); openGameDialog(null); });
+  menu.appendChild(add);
+
+  menu.classList.remove('hidden');
+  document.addEventListener('pointerdown', onGameMenuOutside, true);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// Switching game reloads the page: every game has its own map canvas, pins,
+// pin types and calibration, and a reload is the one way to be certain none
+// of the previous game's state leaks into the next one. Nothing is lost —
+// the pending saves are flushed first.
+async function switchGame(id) {
+  closeGameMenu();
+  if (id === game.id) return;
+  spinner(true, 'Opening ' + gameById(id).name + '…');
+  await flushSaves();
+  await setCurrentGameId(id);
+  location.reload();
+}
+
+// write the debounced state out now (a reload is coming)
+async function flushSaves() {
+  try {
+    await store.putMeta('fog', await explored.toBlob());
+    await store.putMeta('view', { scale: view.scale, ox: view.ox, oy: view.oy });
+  } catch (e) {
+    console.warn('[map] could not flush state:', e.message);
+  }
+}
+
+let gameEditing = null;   // the custom game being edited, or null when creating
+let gameSizeId = DEFAULT_SIZE;
+
+function openGameDialog(g) {
+  gameEditing = g;
+  gameSizeId = DEFAULT_SIZE;
+  $('#game-dlg-title').textContent = g ? 'Edit game' : 'New game';
+  $('#btn-game-save').textContent = g ? 'Save changes' : 'Create game';
+  $('#game-intro').classList.toggle('hidden', !!g);
+  $('#game-icon').value = g ? (g.icon || '') : '';
+  $('#game-name').value = g ? g.name : '';
+  // the world size fixes the canvas every pin coordinate is relative to, so
+  // it can only be chosen at creation
+  $('#game-size-wrap').classList.toggle('hidden', !!g);
+  renderGameSizes();
+  $('#dlg-game').showModal();
+  $('#game-name').focus();
+}
+
+function renderGameSizes() {
+  const wrap = $('#game-sizes');
+  wrap.innerHTML = '';
+  for (const s of WORLD_SIZES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'game-size' + (s.id === gameSizeId ? ' on' : '');
+    b.innerHTML = `<b>${s.label}</b><span>${s.hint}</span>`;
+    b.addEventListener('click', () => { gameSizeId = s.id; renderGameSizes(); });
+    wrap.appendChild(b);
+  }
+}
+
+async function saveGameDialog() {
+  const name = $('#game-name').value.trim();
+  if (!name) { $('#game-name').focus(); return; }
+  const icon = $('#game-icon').value.trim() || '🎮';
+  if (gameEditing) {
+    await updateGame(gameEditing.id, { name, icon });
+    const edited = gameEditing.id;
+    gameEditing = null;
+    closeDialog('#dlg-game');
+    if (edited === game.id) { game = gameById(game.id); applyGameChrome(); }
+    toast('Game updated.', 'ok');
+    return;
+  }
+  const size = WORLD_SIZES.find(s => s.id === gameSizeId) || WORLD_SIZES[1];
+  const g = await createGame({ name, icon, w: size.w, h: size.h });
+  closeDialog('#dlg-game');
+  await switchGame(g.id);
+}
+
+async function deleteGame(g) {
+  if (!await confirmDialog(
+    `“${g.name}” and everything in it — its map, its pins, their pictures and notes — is erased. This cannot be undone.`,
+    { title: 'Delete this game?', okLabel: 'Delete game' })) return;
+  const wasCurrent = g.id === game.id;
+  await removeGame(g.id);
+  if (wasCurrent) { await setCurrentGameId(BUILTIN_GAME.id); location.reload(); return; }
+  toast(`“${g.name}” deleted.`, 'ok');
+}
 
 // ------------------------------------------------------------- pin editing
 
@@ -811,9 +978,175 @@ async function handleFullMap(blob) {
   toast('Map updated with everything you have explored.', 'ok', { label: 'Undo', fn: undoLast });
 }
 
+// ------------------------------------------- hand-placed pastes (custom games)
+
+// The step bar at the bottom of the map. Both halves of the flow use it:
+// positioning the screenshot, then clicking your player's spot.
+function showPlaceBar(step, msgHtml, actions) {
+  $('#place-step').textContent = step;
+  $('#place-msg').innerHTML = msgHtml;
+  const wrap = $('#place-actions');
+  wrap.innerHTML = '';
+  for (const a of actions) {
+    if (a.el) { wrap.appendChild(a.el); continue; }
+    const b = document.createElement('button');
+    b.className = 'btn' + (a.primary ? ' primary' : '') + (a.icon ? ' icon' : '');
+    b.textContent = a.label;
+    if (a.title) b.title = a.title;
+    b.addEventListener('click', a.fn);
+    wrap.appendChild(b);
+  }
+  $('#place-bar').classList.remove('hidden');
+  document.body.classList.add('placing-paste'); // clears the bottom paste pill
+}
+function hidePlaceBar() {
+  $('#place-bar').classList.add('hidden');
+  document.body.classList.remove('placing-paste');
+}
+
+// live size readout while the screenshot is being sized (MapView calls this)
+let placeBaseWidth = 0;
+function updatePlaceSize(rect) {
+  const el = document.getElementById('place-size');
+  if (el && rect && placeBaseWidth) el.textContent = Math.round(rect.w / placeBaseWidth * 100) + '%';
+}
+
+// Position a pasted screenshot by hand. Resolves with the chosen map rect, or
+// null if it was cancelled.
+function positionPaste(bitmap, rect) {
+  return new Promise(resolve => {
+    placeBaseWidth = bitmap.width;
+    view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w });
+
+    const size = document.createElement('span');
+    size.className = 'pb-size';
+    size.id = 'place-size';
+
+    const finish = ok => {
+      document.removeEventListener('keydown', onKey, true);
+      const r = view.placementRect();
+      view.setPlacement(null);
+      hidePlaceBar();
+      resolve(ok ? r : null);
+    };
+
+    const onKey = e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); return; }
+      const step = e.shiftKey ? 10 : 1;
+      const nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+      if (nudge) { e.preventDefault(); view.movePlacement(nudge[0], nudge[1]); return; }
+      if (e.key === '+' || e.key === '=') { e.preventDefault(); view.scalePlacement(1.02); }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); view.scalePlacement(1 / 1.02); }
+    };
+    document.addEventListener('keydown', onKey, true);
+
+    const actions = [
+      { label: '−', icon: true, title: 'Smaller (or Shift+scroll)', fn: () => view.scalePlacement(1 / 1.04) },
+      { el: size },
+      { label: '+', icon: true, title: 'Bigger (or Shift+scroll)', fn: () => view.scalePlacement(1.04) },
+    ];
+    // there has to be something already on the map for auto-align to align to
+    if (!explored.isBlank()) {
+      actions.push({ label: 'Auto-align', title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign });
+    }
+    actions.push(
+      { label: 'Place it', primary: true, fn: () => finish(true) },
+      { label: 'Cancel', fn: () => finish(false) },
+    );
+
+    showPlaceBar('Step 1',
+      'Drag the screenshot into place — hold <span class="kbd">Shift</span> and scroll to resize, arrow keys to nudge.',
+      actions);
+    updatePlaceSize(view.placementRect());
+  });
+}
+
+// Image-only alignment against what's already pasted — no reference map, so
+// it works for any game. It only ever nudges the placement you made.
+function runAutoAlign() {
+  const rect = view.placementRect();
+  const p = view.placement;
+  if (!rect || !p) return;
+  spinner(true, 'Lining it up with your map…');
+  // let the spinner paint before the synchronous search blocks the thread
+  setTimeout(() => {
+    let r = null;
+    try {
+      r = explored.autoAlign(p.img, rect);
+    } catch (e) {
+      console.error(e);
+    }
+    spinner(false);
+    console.log('[map] auto-align:', r);
+    if (!r || r.score < 0.12) {
+      toast("Couldn't find anything here to line it up with — place it by eye, or move it closer first.", 'error');
+      return;
+    }
+    view.setPlacementRect(r);
+    const moved = Math.hypot(r.x - rect.x, r.y - rect.y);
+    toast(moved < 0.6 && Math.abs(r.w / rect.w - 1) < 0.004
+      ? 'Already lined up.'
+      : 'Lined up with the map you already have.', 'ok');
+  }, 30);
+}
+
+// Custom-game paste: you place it, then you mark where you are.
+async function handleManualPlace(blob) {
+  const bitmap = await createImageBitmap(blob);
+  $('#empty-hint').classList.add('hidden');
+
+  // start it at the size the last paste ended up — every screenshot from the
+  // same game is normally taken at the same zoom, so usually there's nothing
+  // to resize. Otherwise, something that comfortably fits the viewport.
+  const k = learnedScale || Math.min(
+    1, (view.canvas.clientWidth * 0.45) / (bitmap.width * view.scale));
+  const w = bitmap.width * k, h = bitmap.height * k;
+  const c = view.screenToMap(view.canvas.clientWidth / 2, view.canvas.clientHeight / 2);
+  const start = { x: c.x - w / 2, y: c.y - h / 2, w, h };
+
+  const rect = await positionPaste(bitmap, start);
+  if (!rect) {
+    bitmap.close?.();
+    updateEmptyHint();
+    toast('Paste cancelled — nothing was added.');
+    return;
+  }
+
+  snapshotForUndo();
+  explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
+  bitmap.close?.();
+  // remember the size for the next paste
+  learnedScale = rect.w / (placeBaseWidth || 1);
+  store.putMeta('scale', learnedScale);
+
+  // step 2 — where are you?
+  const spot = await askPlayerLocation();
+  if (!spot) {
+    toast('Screenshot added.', 'ok', { label: 'Undo', fn: undoLast });
+    return;
+  }
+  const data = await createManualPin(spot.x, spot.y);
+  if (data && lastUndo) lastUndo.pinId = data.id; // undo takes the pin with it
+}
+
+// the click-your-player step. Resolves with map coords, or null if skipped.
+function askPlayerLocation() {
+  return new Promise(resolve => {
+    showPlaceBar('Step 2', 'Now click your player’s spot on the map to drop a pin there.',
+      [{ label: 'Skip', fn: () => stopPlacing() }]);
+    startPlacing(m => { hidePlaceBar(); resolve(m); }, { toast: false, onCancel: () => resolve(null) });
+  });
+}
+
 let currentPaste = null; // { blob, url } while the type chooser is open
 
 function routePaste(blob) {
+  // one screenshot at a time while one is being positioned by hand
+  if (view.placement) {
+    toast('Finish placing the current screenshot first.');
+    return;
+  }
   // the pin editor's empty picture slot takes a paste straight away
   if (pinEditorAttach && document.querySelector('#dlg-pin[open] #pin-shot .no-env')) {
     pinEditorAttach(blob);
@@ -860,6 +1193,7 @@ for (const b of document.querySelectorAll('#dlg-paste button[data-type]')) {
     if (type === 'map') await handleMapScreenshot(paste.blob);
     else if (type === 'env') await handleEnvScreenshot(paste.blob);
     else if (type === 'full') await handleFullMap(paste.blob);
+    else if (type === 'place') await handleManualPlace(paste.blob);
   });
 }
 
@@ -886,6 +1220,9 @@ async function exportAll() {
     app: 'silksong-map-companion',
     version: 1,
     exported: new Date().toISOString(),
+    // which game this backup came from, so importing it somewhere else can
+    // say so (pin coordinates only mean anything within the same world size)
+    game: { id: game.id, name: game.name, icon: game.icon, w: world.width, h: world.height },
     fog: await blobToDataURL(await explored.toBlob()),
     customCats: customCategories(),
     catOrder: currentOrder(),
@@ -897,7 +1234,8 @@ async function exportAll() {
   const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `silksong-map-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const slug = game.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'map';
+  a.download = `${slug}-map-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
   toast('Backup downloaded.', 'ok');
@@ -912,7 +1250,17 @@ async function importAll(file) {
     toast('Could not read that file: ' + err.message, 'error');
     return;
   }
-  if (!await confirmDialog('Importing replaces your current map progress and pins. Continue?',
+  // a backup made in another game is still importable, but its pin positions
+  // were measured against that game's world — say so before it lands
+  let warn = '';
+  const from = data.game;
+  if (from && from.id !== game.id) {
+    warn = ` This backup is from “${from.name}”`
+      + (from.w && (from.w !== world.width || from.h !== world.height)
+        ? ', whose map is a different size — its pins and map will not line up here.'
+        : '.');
+  }
+  if (!await confirmDialog(`Importing replaces “${game.name}”'s map progress and pins.${warn} Continue?`,
     { title: 'Import backup?', okLabel: 'Import', danger: false })) return;
 
   await store.clearPins();
@@ -1211,6 +1559,8 @@ async function deleteCustomType(id) {
 
 let placing = false;
 let ghostPin = null;
+let placeClickCb = null;   // where the next map click goes (null = new pin)
+let placeCancelCb = null;
 
 function onPlacingMove(e) {
   if (!ghostPin) return;
@@ -1221,17 +1571,24 @@ function onPlacingMove(e) {
 
 function onPlacingClick(e) {
   // clicks on chrome (toolbar, sidebar, dialogs, sliders) don't place a pin
-  if (e.target.closest('#toolbar, #cat-bar, #map-opacity, dialog, .toast')) return;
+  if (e.target.closest('#toolbar, #cat-bar, #map-opacity, #place-bar, dialog, .toast')) return;
   e.preventDefault();
   e.stopPropagation();
   const m = view.screenToMap(e.clientX, e.clientY);
+  const cb = placeClickCb;
+  placeClickCb = null;
+  placeCancelCb = null;   // this is a completion, not a cancel
   stopPlacing();
-  createManualPin(m.x, m.y);
+  if (cb) cb(m); else createManualPin(m.x, m.y);
 }
 
-function startPlacing() {
+// `onPlace` takes over what a map click does (the custom-game "click your
+// player" step); without it a click creates a pin as usual.
+function startPlacing(onPlace = null, { toast: withToast = true, onCancel = null } = {}) {
   if (placing) return;
   placing = true;
+  placeClickCb = onPlace;
+  placeCancelCb = onCancel;
   pins.suppressHover = true; // don't pop other pins' cards while placing
   ghostPin = document.createElement('div');
   ghostPin.className = 'pin ghost-pin';
@@ -1247,12 +1604,15 @@ function startPlacing() {
   btn.querySelector('.add-pin-ico').textContent = '✕';
   btn.querySelector('.add-pin-label').textContent = 'Cancel';
   btn.dataset.tip = 'Click the map to drop the pin — or click here to cancel (Esc)';
-  toast('Click the spot on the map to drop your pin. Esc to cancel.');
+  if (withToast) toast('Click the spot on the map to drop your pin. Esc to cancel.');
 }
 
 function stopPlacing() {
   if (!placing) return;
   placing = false;
+  const cancelled = placeCancelCb;
+  placeClickCb = null;
+  placeCancelCb = null;
   pins.suppressHover = false;
   document.removeEventListener('pointermove', onPlacingMove);
   document.removeEventListener('click', onPlacingClick, true);
@@ -1263,8 +1623,11 @@ function stopPlacing() {
   btn.querySelector('.add-pin-ico').textContent = '📍';
   btn.querySelector('.add-pin-label').textContent = 'Add pin';
   btn.dataset.tip = 'Add a pin — click, then click the spot on the map';
+  hidePlaceBar();
+  if (cancelled) cancelled();
 }
 
+// resolves with the pin's data, or null if the editor was cancelled
 async function createManualPin(x, y) {
   const data = {
     id: crypto.randomUUID(),
@@ -1280,10 +1643,11 @@ async function createManualPin(x, y) {
     pins.update(data);
     persistPin(data);
     ensureCatVisible(data.cat);
-  } else {
-    // cancelled — the pin was only provisional, so it shouldn't stick around
-    pins.remove(data.id);
+    return data;
   }
+  // cancelled — the pin was only provisional, so it shouldn't stick around
+  pins.remove(data.id);
+  return null;
 }
 
 // ------------------------------------------------- sidebar resize / opacity
@@ -1319,7 +1683,7 @@ function updateEmptyHint() {
 function positionEmptyHint() {
   const el = $('#empty-hint');
   if (!el || el.classList.contains('hidden')) return;
-  const s = view.mapToScreen(mapImage.width / 2, mapImage.height / 2);
+  const s = view.mapToScreen(world.width / 2, world.height / 2);
   el.style.left = s.x + 'px';
   el.style.top = s.y + 'px';
 }
@@ -1329,7 +1693,19 @@ function positionEmptyHint() {
 let helpGoto = () => {};
 function wireHelpStepper() {
   const dlg = $('#dlg-help');
-  const slides = [...dlg.querySelectorAll('.help-slide')];
+  // slides marked for the other kind of game don't apply here — automatic
+  // placement and hand placement are different instructions
+  const want = game.builtin ? 'builtin' : 'custom';
+  const slides = [...dlg.querySelectorAll('.help-slide')].filter(s => {
+    const only = s.dataset.for;
+    if (only && only !== want) { s.remove(); return false; }
+    return true;
+  });
+  // renumber the eyebrows so the steps read 1..n whichever set is showing
+  slides.forEach((s, k) => {
+    const eb = s.querySelector('.help-eyebrow');
+    if (eb && !eb.classList.contains('tip')) eb.textContent = `Step ${k + 1}`;
+  });
   // an example image that fails to load (e.g. an asset not added yet) hides its
   // figure rather than showing a broken-image icon — cover both a later error
   // and one that already failed before this ran
@@ -1412,6 +1788,17 @@ function buildToolbar() {
   $('#cattype-hint').innerHTML = emojiKeyboardTipHtml();
   $('#cattype-hint').classList.add('emoji-tip');
   $('#btn-add-pin').addEventListener('click', () => placing ? stopPlacing() : startPlacing());
+
+  $('#btn-game').addEventListener('click', () => {
+    $('#game-menu').classList.contains('hidden') ? openGameMenu() : closeGameMenu();
+  });
+  $('#game-hint').innerHTML = emojiKeyboardTipHtml();
+  $('#game-hint').classList.add('emoji-tip');
+  $('#btn-game-save').addEventListener('click', saveGameDialog);
+  $('#btn-game-cancel').addEventListener('click', () => { gameEditing = null; closeDialog('#dlg-game'); });
+  $('#dlg-game').addEventListener('cancel', e => { e.preventDefault(); gameEditing = null; closeDialog('#dlg-game'); });
+  $('#game-name').addEventListener('keydown', e => { if (e.key === 'Enter') saveGameDialog(); });
+
   wireSidebarResize();
   wireOpacitySlider();
   $('#btn-cattype-save').addEventListener('click', saveCatType);
@@ -1499,10 +1886,22 @@ function buildToolbar() {
 // -------------------------------------------------------------------- init
 
 async function init() {
-  mapImage = await loadImage('assets/map.png');
-  explored = new Explored(mapImage.width, mapImage.height);
-  explored.setReference(mapImage); // guides the background fade (never shown)
-  view = new MapView($('#map-canvas'), mapImage, explored);
+  // which game are we mapping? Everything below (pins, map, pin types,
+  // calibration) is stored per game — see store.js.
+  await loadGames();
+  game = gameById(await currentGameId());
+  setStoreGame(game.id);
+
+  if (game.builtin) {
+    mapImage = await loadImage('assets/map.png');
+    world = { width: mapImage.width, height: mapImage.height };
+  } else {
+    world = { width: game.w, height: game.h };
+  }
+  explored = new Explored(world.width, world.height);
+  if (mapImage) explored.setReference(mapImage); // guides the bg fade (never shown)
+  view = new MapView($('#map-canvas'), world, explored, mapImage);
+  view.onPlacementChanged = updatePlaceSize;
 
   // category config must be loaded before the filter set is built
   setCustomCategories((await store.getMeta('customCats')) || []);
@@ -1574,7 +1973,8 @@ async function init() {
   if (savedOpacity != null) { $('#opacity-range').value = savedOpacity; applyMapOpacity(savedOpacity); }
 
   buildToolbar();
-  loadLabels(); // warm the area-name table for OCR matching
+  applyGameChrome();
+  if (game.builtin) loadLabels(); // warm the area-name table for OCR matching
   updateEmptyHint();
 
   if (!savedFog && !(await store.getMeta('helped'))) {
@@ -1584,10 +1984,12 @@ async function init() {
 
   // debug / testing hooks
   window.__ssmc = {
-    view, explored, get pins() { return pins; }, mapImage,
+    view, explored, get pins() { return pins; }, mapImage, world,
+    get game() { return game; },
     handleImageBlob: (blob, type) =>
       type === 'map' ? handleMapScreenshot(blob)
       : type === 'env' ? handleEnvScreenshot(blob)
+      : type === 'place' ? handleManualPlace(blob)
       : handleFullMap(blob),
     routePaste,
     undoLast,

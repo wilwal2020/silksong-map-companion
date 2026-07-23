@@ -252,6 +252,40 @@ function contrastMask(cnv) {
   return { m, n };
 }
 
+function canvasOf(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  return c;
+}
+
+// summed-area table over a 0/1 mask, so "how much content is under this
+// rectangle" is four lookups instead of a scan
+function summedArea(m, W, H) {
+  const S = W + 1;
+  const sat = new Int32Array(S * (H + 1));
+  for (let y = 0; y < H; y++) {
+    let run = 0;
+    for (let x = 0; x < W; x++) {
+      run += m[y * W + x];
+      sat[(y + 1) * S + x + 1] = sat[y * S + x + 1] + run;
+    }
+  }
+  return sat;
+}
+function satSum(sat, W, H, x, y, w, h) {
+  const S = W + 1;
+  const x0 = Math.max(0, Math.min(W, x)), y0 = Math.max(0, Math.min(H, y));
+  const x1 = Math.max(0, Math.min(W, x + w)), y1 = Math.max(0, Math.min(H, y + h));
+  return sat[y1 * S + x1] - sat[y0 * S + x1] - sat[y1 * S + x0] + sat[y0 * S + x0];
+}
+
+// n scale multipliers spread evenly across ±spread around 1
+function scaleLadder(spread, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(1 - spread + (2 * spread * i) / (n - 1));
+  return out;
+}
+
 export class Explored {
   constructor(mapW, mapH, scale = 1) {
     this.mapW = mapW;
@@ -358,6 +392,106 @@ export class Explored {
     }
 
     return { ...rect, x: rect.x + best.dx / (f * s), y: rect.y + best.dy / (f * s) };
+  }
+
+  // Line a hand-placed screenshot up with what's already on the map. Purely
+  // image-based — no reference map, no reading of names — so it works for any
+  // game: it brute-forces scale and translation around where you dropped the
+  // screenshot and keeps the fit whose drawn lines overlap the existing
+  // composite best (Jaccard over the paste's footprint, which stops a dense
+  // patch of map from winning just by being dense). Coarse pass over a wide
+  // window, then a fine one around the winner. Returns a corrected rect with
+  // its `score`, or null when there's nothing nearby to line up against.
+  autoAlign(bitmap, rect, { pad = 0.32, spread = 0.16 } = {}) {
+    const s = this.scale;
+    const aspect = bitmap.height / bitmap.width;
+    const bmp = canvasOf(bitmap.width, bitmap.height);
+    bmp.getContext('2d').drawImage(bitmap, 0, 0);
+
+    // work inside a window around the current placement — wide enough to
+    // absorb a rough drop, small enough that the search stays instant
+    const padPx = Math.max(rect.w, rect.h) * pad;
+    const reg = {
+      x: (rect.x - padPx) * s, y: (rect.y - padPx) * s,
+      w: (rect.w + 2 * padPx) * s, h: (rect.h + 2 * padPx) * s,
+    };
+
+    const pass = (DW, scales, center, winMap) => {
+      const f = Math.min(1, DW / reg.w);        // reduced px per composite px
+      const rw = Math.max(24, Math.round(reg.w * f));
+      const rh = Math.max(24, Math.round(reg.h * f));
+      const ec = canvasOf(rw, rh);
+      const ex = ec.getContext('2d', { willReadFrequently: true });
+      ex.imageSmoothingEnabled = true;
+      // a source rect reaching past the composite's edge is clipped in step
+      // with the destination, so this stays aligned at the map borders
+      ex.drawImage(this.canvas, reg.x, reg.y, reg.w, reg.h, 0, 0, rw, rh);
+      const E = contrastMask(ec);
+      if (E.n < rw * rh * 0.008) return null;   // nothing here to line up with
+      const sat = summedArea(E.m, rw, rh);
+      const R = Math.max(2, Math.round(winMap * s * f));
+
+      let best = null;
+      for (const k of scales) {
+        const pw = Math.round(center.w * k * s * f);
+        const ph = Math.round(pw * aspect);
+        if (pw < 12 || ph < 12 || pw > rw || ph > rh) continue;
+        const nc = canvasOf(pw, ph);
+        const nx = nc.getContext('2d', { willReadFrequently: true });
+        nx.imageSmoothingEnabled = true;
+        nx.drawImage(bmp, 0, 0, pw, ph);
+        const N = contrastMask(nc);
+        if (N.n < 40) continue;
+        // sample the shot's content points — a few hundred is plenty and
+        // keeps the inner loop cheap
+        const stride = Math.max(1, Math.ceil(N.n / 400));
+        const px = [], py = [];
+        let seen = 0;
+        for (let p = 0; p < N.m.length; p++) {
+          if (!N.m[p] || (seen++ % stride)) continue;
+          px.push(p % pw); py.push((p / pw) | 0);
+        }
+        if (!px.length) continue;
+        const back = N.n / px.length;           // sampled hits -> full count
+        const bx = Math.round(((center.cx - center.w * k / 2) * s - reg.x) * f);
+        const by = Math.round(((center.cy - center.w * k * aspect / 2) * s - reg.y) * f);
+
+        for (let dy = -R; dy <= R; dy++) {
+          const oy = by + dy;
+          for (let dx = -R; dx <= R; dx++) {
+            const ox = bx + dx;
+            let inter = 0;
+            for (let i = 0; i < px.length; i++) {
+              const X = px[i] + ox, Y = py[i] + oy;
+              if (X < 0 || X >= rw || Y < 0 || Y >= rh) continue;
+              if (E.m[Y * rw + X]) inter++;
+            }
+            if (!inter) continue;
+            const est = inter * back;
+            const ecnt = satSum(sat, rw, rh, ox, oy, pw, ph);
+            const score = est / (N.n + ecnt - est);
+            if (!best || score > best.score) {
+              best = {
+                score,
+                x: (ox / f + reg.x) / s,
+                y: (oy / f + reg.y) / s,
+                w: center.w * k,
+              };
+            }
+          }
+        }
+      }
+      return best;
+    };
+
+    const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
+    const coarse = pass(200, scaleLadder(spread, 9), { cx, cy, w: rect.w }, padPx * 0.85);
+    if (!coarse) return null;
+    const fine = pass(560, scaleLadder(0.035, 7),
+      { cx: coarse.x + coarse.w / 2, cy: coarse.y + coarse.w * aspect / 2, w: coarse.w },
+      Math.max(rect.w, rect.h) * 0.04);
+    const r = fine || coarse;
+    return { x: r.x, y: r.y, w: r.w, h: r.w * aspect, score: r.score };
   }
 
   // Apply the content-halo fade to the composite as it stands: keeps rooms /

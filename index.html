@@ -12,7 +12,15 @@
 <body>
 
 <header id="toolbar">
-  <h1>Silksong <span>Map Companion</span></h1>
+  <h1>
+    <button id="btn-game" class="game-btn" title="Switch game — or add one of your own">
+      <span class="game-ico">🪡</span>
+      <span class="game-name">Silksong</span>
+      <svg class="game-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <span>Map Companion</span>
+  </h1>
+  <div id="game-menu" class="hidden"></div>
 
   <button id="btn-add-pin" class="add-pin" data-tip="Add a pin — click, then click the spot on the map">
     <span class="add-pin-ico">📍</span><span class="add-pin-label">Add pin</span>
@@ -69,6 +77,15 @@
     <div class="spin"></div>
     <span id="spinner-msg">Locating screenshot on the map&hellip;</span>
   </div>
+
+  <!-- step bar for hand-placing a screenshot (custom games) -->
+  <div id="place-bar" class="hidden">
+    <div class="pb-text">
+      <span class="pb-step" id="place-step">Step 1</span>
+      <span class="pb-msg" id="place-msg"></span>
+    </div>
+    <div class="pb-actions" id="place-actions"></div>
+  </div>
 </main>
 
 <!-- paste type chooser -->
@@ -90,6 +107,12 @@
       <button class="paste-opt" data-type="full">
         <span class="po-ico bone">🗺</span>
         <span class="po-ttl">Update your map</span>
+      </button>
+      <!-- custom games have no reference map, so there's one thing to do with
+           a screenshot: put it on the map yourself -->
+      <button class="paste-opt hot wide" data-type="place">
+        <span class="po-ico">🧩</span>
+        <span class="po-ttl">Add this to your map — you place it</span>
       </button>
     </div>
     <button class="paste-cancel" data-type="cancel">Cancel</button>
@@ -142,6 +165,32 @@
   </div>
 </dialog>
 
+<!-- create / edit a game -->
+<dialog id="dlg-game">
+  <h2 id="game-dlg-title">New game</h2>
+  <p class="await-sub" id="game-intro">A game of your own gets the same map, pins and notes — you just place the screenshots yourself.</p>
+  <div class="cattype-grid">
+    <label class="cattype-field">
+      <span>Icon</span>
+      <input id="game-icon" type="text" maxlength="4" placeholder="🎮" autocomplete="off">
+    </label>
+    <label class="cattype-field grow">
+      <span>Name</span>
+      <input id="game-name" type="text" maxlength="28" placeholder="e.g. Ori and the Blind Forest" autocomplete="off">
+    </label>
+  </div>
+  <div id="game-size-wrap">
+    <span class="game-size-label">How big is the world?</span>
+    <div id="game-sizes" class="game-sizes"></div>
+    <p class="field-hint">Screenshots keep their own size, so this is just how much room they have. It can't be changed later.</p>
+  </div>
+  <p class="field-hint" id="game-hint"></p>
+  <div class="dlg-actions">
+    <button id="btn-game-save" class="btn primary">Create game</button>
+    <button id="btn-game-cancel" class="btn">Cancel</button>
+  </div>
+</dialog>
+
 <!-- help -->
 <dialog id="dlg-help">
   <div class="help-slides">
@@ -150,7 +199,23 @@
       <h2>How to insert our map</h2>
       <p>Open your in-game map, and press <span class="kbd">Shift + Win + S</span> to screenshot the parts of the map you want to bring in.</p>
     </section>
-    <section class="help-slide" data-step="2">
+    <section class="help-slide" data-for="custom">
+      <span class="help-eyebrow">Step 2</span>
+      <h2>Put it where it belongs</h2>
+      <p>This game has no built-in world map to match against, so you place each screenshot yourself:</p>
+      <ol class="help-list">
+        <li><span class="n">1</span><span><b>Drag</b> the screenshot until it lines up with what's already there.</span></li>
+        <li><span class="n">2</span><span>Hold <span class="kbd">Shift</span> and <b>scroll</b> to resize it (or use the − / + buttons).</span></li>
+        <li><span class="n">3</span><span>Press <b>Place it</b>. <b>Auto&#8209;align</b> nudges it onto the screenshots you've already added.</span></li>
+      </ol>
+      <p>Everything after the first screenshot keeps the size you used last time, so usually you only drag.</p>
+    </section>
+    <section class="help-slide" data-for="custom">
+      <span class="help-eyebrow">Step 3</span>
+      <h2>Then mark where you are</h2>
+      <p>Once the screenshot lands, click your player's spot on the map to drop a pin there — give it a type and a note, or skip the step entirely.</p>
+    </section>
+    <section class="help-slide" data-for="builtin" data-step="2">
       <span class="help-eyebrow">Step 2</span>
       <h2>Two kinds of paste</h2>
       <p>You can paste two types of images:</p>
@@ -169,7 +234,7 @@
         </figure>
       </div>
     </section>
-    <section class="help-slide" data-step="3">
+    <section class="help-slide" data-for="builtin" data-step="3">
       <span class="help-eyebrow tip">Tip</span>
       <h2>Landing on your spot</h2>
       <p>Pasting a <b>player screenshot</b>? Equip the <b>Compass</b> so your marker shows on the map and the pin drops on your exact spot. Without it, just move the pin into place by hand afterward.</p>
@@ -184,7 +249,7 @@
         </figure>
       </div>
     </section>
-    <section class="help-slide" data-step="4">
+    <section class="help-slide" data-for="builtin" data-step="4">
       <span class="help-eyebrow">Step 4</span>
       <h2>Keep a location name in frame</h2>
       <p>Whatever you screenshot, make sure at least one area name is visible — the site reads that name to place things.</p>
