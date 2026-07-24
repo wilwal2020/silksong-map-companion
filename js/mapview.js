@@ -97,10 +97,19 @@ export class MapView {
     return { x: p.x, y: p.y, w: p.w, h: p.w * (p.img.height / p.img.width) };
   }
 
-  // move it to an exact rect (used by auto-align and by arrow-key nudges)
-  setPlacementRect(r) {
+  // Announce a discrete change to the placement BEFORE it happens, with the
+  // rect as it stands — that's what an undo needs to put back. `kind` lets
+  // the app treat a continuous gesture (a scroll-resize) as one step.
+  _beginEdit(kind) {
+    if (this.onPlacementEdit && this.placement) this.onPlacementEdit(kind, this.placementRect());
+  }
+
+  // move it to an exact rect (used by auto-align and by undo). `record:false`
+  // for an undo itself — putting a position back isn't a new step.
+  setPlacementRect(r, { record = true } = {}) {
     const p = this.placement;
     if (!p) return;
+    if (record) this._beginEdit('set');
     p.x = r.x; p.y = r.y; p.w = r.w;
     this._placementChanged();
   }
@@ -109,6 +118,7 @@ export class MapView {
   scalePlacement(factor, anchorScreen = null) {
     const p = this.placement;
     if (!p || p.locked) return;
+    this._beginEdit('resize');
     const h = p.w * (p.img.height / p.img.width);
     const a = anchorScreen
       ? this.screenToMap(anchorScreen.x, anchorScreen.y)
@@ -136,6 +146,7 @@ export class MapView {
   nudgePlacement(dx, dy) {
     const p = this.placement;
     if (!p || p.locked) return;
+    this._beginEdit('nudge');
     p.x = Math.round(p.x) + dx;
     p.y = Math.round(p.y) + dy;
     this._placementChanged();
@@ -436,6 +447,7 @@ export class MapView {
       // dragging ON the screenshot moves it; dragging anywhere else still
       // pans the map, so you can always look around mid-placement
       movingPlacement = this._overPlacement(e.clientX, e.clientY);
+      if (movingPlacement) this._beginEdit('drag'); // the whole drag is one step
       lastX = e.clientX; lastY = e.clientY;
       c.setPointerCapture(e.pointerId);
       c.classList.add('panning');

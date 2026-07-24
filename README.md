@@ -57,7 +57,9 @@ yourself:
    buttons) resizes it; arrow keys nudge it one map pixel at a time (`Shift`
    for ten), always snapping onto the map's own pixel grid so an exact fit is
    reachable however you dragged it. A plain scroll still zooms the map, and
-   dragging off the screenshot still pans.
+   dragging off the screenshot still pans. `Ctrl+Z` steps back through where
+   the screenshot has been — each drag, nudge, resize or auto-align is one
+   step, and it undoes the *screenshot's* moves, never the previous paste.
 3. Press **Place it**, then click **your player's spot** on the map to drop a
    pin there — or **Skip**.
 
@@ -68,7 +70,7 @@ you where it can be:
   already there. Drop it anywhere within about half a screenshot of its real
   home and it arrives exactly right — the step bar says so, and there's nothing
   to do but confirm. Beyond that it stays where you dropped it rather than
-  guessing.
+  guessing. If it guesses wrong, `Ctrl+Z` puts it back where you dropped it.
 - **Auto-align** runs the same search again once you've dragged it closer.
 - **Difference** (or `D`) draws the screenshot as its difference against the
   map underneath, so everything that already matches cancels to black. Nudge

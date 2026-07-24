@@ -273,6 +273,9 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && placing) { stopPlacing(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'
       && !document.querySelector('dialog[open]')) {
+    // a screenshot being positioned has its own undo (see positionPaste) —
+    // undoing the PREVIOUS paste from under it would be a nasty surprise
+    if (view && view.placement) return;
     e.preventDefault();
     // a pending or just-confirmed pin move takes priority over a paste undo
     if (!pins.undoLastMove()) undoLast();
@@ -1018,10 +1021,33 @@ function updatePlaceSize(rect) {
 
 // Position a pasted screenshot by hand. Resolves with the chosen map rect, or
 // null if it was cancelled.
-function positionPaste(bitmap, rect, { snapped = false } = {}) {
+function positionPaste(bitmap, rect, { snapped = false, undoBase = null } = {}) {
   return new Promise(resolve => {
     placeBaseWidth = bitmap.width;
     view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w });
+
+    // Ctrl+Z steps back through where the screenshot has been: each drag,
+    // nudge, resize or auto-align records where it was first. When the paste
+    // was lined up automatically, the spot it actually landed on is the
+    // bottom of the stack — so an unwanted auto-align is one undo away.
+    const history = undoBase ? [undoBase] : [];
+    let lastKind = null, lastAt = 0;
+    view.onPlacementEdit = (kind, at) => {
+      const now = performance.now();
+      // a scroll-resize fires per wheel tick — that's one gesture, one step
+      if (kind === 'resize' && lastKind === 'resize' && now - lastAt < 500) { lastAt = now; return; }
+      history.push(at);
+      if (history.length > 60) history.shift();
+      lastKind = kind; lastAt = now;
+    };
+    const undoMove = () => {
+      if (!history.length) {
+        toast(snapped ? 'Back to where it was pasted.' : 'Nothing to undo — it hasn’t moved yet.');
+        return;
+      }
+      view.setPlacementRect(history.pop(), { record: false });
+      lastKind = null;
+    };
 
     const size = document.createElement('span');
     size.className = 'pb-size';
@@ -1029,6 +1055,7 @@ function positionPaste(bitmap, rect, { snapped = false } = {}) {
 
     const finish = ok => {
       document.removeEventListener('keydown', onKey, true);
+      view.onPlacementEdit = null;
       const r = view.placementRect();
       view.setPlacement(null);
       hidePlaceBar();
@@ -1038,6 +1065,13 @@ function positionPaste(bitmap, rect, { snapped = false } = {}) {
     const onKey = e => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
       if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); return; }
+      // while a screenshot is being placed, undo means "put it back where it
+      // was", not "undo the previous paste"
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault(); e.stopPropagation();
+        undoMove();
+        return;
+      }
       const step = e.shiftKey ? 10 : 1;
       const nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
       // one map pixel per press, on the map's own pixel grid — the finest
@@ -1075,8 +1109,10 @@ function positionPaste(bitmap, rect, { snapped = false } = {}) {
 
     showPlaceBar('Step 1',
       snapped
-        ? 'Lined up automatically — check it looks right. Arrow keys nudge it a pixel at a time.'
-        : 'Drag the screenshot into place — hold <span class="kbd">Shift</span> and scroll to resize, arrow keys to nudge.',
+        ? 'Lined up automatically — check it looks right. Arrow keys nudge a pixel at a time, '
+          + '<span class="kbd">Ctrl+Z</span> puts it back where you dropped it.'
+        : 'Drag it into place — <span class="kbd">Shift</span>+scroll resizes, arrow keys nudge, '
+          + '<span class="kbd">Ctrl+Z</span> steps back.',
       actions);
     updatePlaceSize(view.placementRect());
   });
@@ -1130,6 +1166,7 @@ async function handleManualPlace(blob) {
   // but confirm. A stricter bar than the button's — this move wasn't asked
   // for, so weak evidence should leave the paste where it dropped.
   let snapped = false;
+  const dropped = { ...start };   // where it landed before we moved it for them
   if (!explored.isBlank()) {
     spinner(true, 'Lining it up with your map…');
     await new Promise(r => setTimeout(r, 30)); // let the spinner paint first
@@ -1143,7 +1180,8 @@ async function handleManualPlace(blob) {
     spinner(false);
   }
 
-  const rect = await positionPaste(bitmap, start, { snapped });
+  const rect = await positionPaste(bitmap, start,
+    { snapped, undoBase: snapped ? dropped : null });
   if (!rect) {
     bitmap.close?.();
     updateEmptyHint();
