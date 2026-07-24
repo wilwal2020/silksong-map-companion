@@ -269,6 +269,14 @@ function canvasOf(w, h) {
   return c;
 }
 
+// trace a map-coordinate polygon as a path in composite pixels
+function tracePath(ctx, pts, s, dx, dy) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x * s + dx, pts[0].y * s + dy);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * s + dx, pts[i].y * s + dy);
+  ctx.closePath();
+}
+
 // summed-area table over a 0/1 mask, so "how much content is under this
 // rectangle" is four lookups instead of a scan
 function summedArea(m, W, H) {
@@ -512,6 +520,69 @@ export class Explored {
     }
     if (!best) return null;
     return { x: best.x, y: best.y, w: rect.w, h: rect.h, score: best.score };
+  }
+
+  // Lift the part of the composite inside a map-coordinate polygon: hand it
+  // back as its own canvas (everything outside the loop transparent) and cut
+  // it out of the composite, so it can be moved and stamped down elsewhere.
+  // Two areas of a game that turn out to connect need the map to be
+  // rearrangeable, not just addable-to — see the lasso.
+  liftRegion(pts) {
+    const s = this.scale;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of pts) {
+      x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
+      x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+    }
+    // whole composite pixels: nothing is resampled on the way out or back
+    const bx = Math.floor(x0 * s), by = Math.floor(y0 * s);
+    const bw = Math.max(1, Math.ceil(x1 * s) - bx), bh = Math.max(1, Math.ceil(y1 * s) - by);
+
+    const sel = canvasOf(bw, bh);
+    const sx = sel.getContext('2d', { willReadFrequently: true });
+    sx.save();
+    tracePath(sx, pts, s, -bx, -by);
+    sx.clip();
+    sx.drawImage(this.canvas, -bx, -by);
+    sx.restore();
+
+    const cx = this.ctx;
+    cx.save();
+    tracePath(cx, pts, s, 0, 0);
+    cx.globalCompositeOperation = 'destination-out';
+    cx.fillStyle = '#000';
+    cx.fill();
+    cx.restore();
+    this._changed();
+
+    // a small alpha mask of the cut-out shape: dragging an irregular piece
+    // should only grab the piece, not its whole bounding box
+    const MW = Math.max(1, Math.min(160, bw));
+    const MH = Math.max(1, Math.round(MW * bh / bw));
+    const mc = canvasOf(MW, MH);
+    const mx = mc.getContext('2d', { willReadFrequently: true });
+    mx.imageSmoothingEnabled = true;
+    mx.drawImage(sel, 0, 0, MW, MH);
+    const md = mx.getImageData(0, 0, MW, MH).data;
+    const mask = new Uint8Array(MW * MH);
+    let solid = 0;
+    for (let i = 0; i < mask.length; i++) if (md[i * 4 + 3] > 8) { mask[i] = 1; solid++; }
+
+    return {
+      canvas: sel,
+      rect: { x: bx / s, y: by / s, w: bw / s, h: bh / s },
+      mask: { w: MW, h: MH, data: mask },
+      coverage: solid / mask.length,
+    };
+  }
+
+  // Draw a canvas straight onto the composite — no background fade, no edge
+  // feather. This is map that was already composited once; it's being moved,
+  // not pasted, so it must come back down exactly as it was lifted.
+  stamp(img, x, y, w, h) {
+    const s = this.scale;
+    this.ctx.drawImage(img, x * s, y * s, w * s, h * s);
+    this._changed();
   }
 
   // Apply the content-halo fade to the composite as it stands: keeps rooms /

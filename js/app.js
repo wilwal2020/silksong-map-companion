@@ -185,9 +185,12 @@ function showAwaitDialog(title, sub, skipLabel) {
 
 // one-level undo of the last paste (explored composite + created pin);
 // the scale calibration is snapshotted too so undoing also restores it
-function snapshotForUndo(pinId = null) {
+// `snap` lets a caller hand in a snapshot it already took (the lasso cuts the
+// composite before you decide where the piece goes, so its "before" is older
+// than the moment the move is applied).
+function snapshotForUndo(pinId = null, snap = null) {
   lastUndo = {
-    snap: explored.snapshot(), pinId,
+    snap: snap || explored.snapshot(), pinId, pinMoves: null,
     scaleState: { learnedScale, scaleTrusted, scaleSamples: [...scaleSamples] },
   };
 }
@@ -207,6 +210,16 @@ function undoLast() {
     store.deletePin(lastUndo.pinId);
     if (newPinPending && newPinPending.id === lastUndo.pinId) newPinPending = null;
     closeDialog('#dlg-await');
+  }
+  // pins that rode along with a lassoed piece go back where they were
+  if (lastUndo.pinMoves) {
+    for (const p of lastUndo.pinMoves) {
+      const e = pins.pins.get(p.id);
+      if (!e) continue;
+      e.data.x = p.x; e.data.y = p.y;
+      persistPin(e.data);
+    }
+    pins.syncPositions();
   }
   lastUndo = null;
   toast('Undone.', 'ok');
@@ -271,6 +284,7 @@ function persistPin(data) {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && placing) { stopPlacing(); return; }
+  if (e.key === 'Escape' && view && view.lasso) { view.cancelLasso(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'
       && !document.querySelector('dialog[open]')) {
     // a screenshot being positioned has its own undo (see positionPaste) —
@@ -1014,17 +1028,25 @@ function hidePlaceBar() {
 
 // live size readout while the screenshot is being sized (MapView calls this)
 let placeBaseWidth = 0;
+let placementMoveCb = null;   // set per session: the lasso carries pins along
 function updatePlaceSize(rect) {
   const el = document.getElementById('place-size');
   if (el && rect && placeBaseWidth) el.textContent = Math.round(rect.w / placeBaseWidth * 100) + '%';
 }
 
-// Position a pasted screenshot by hand. Resolves with the chosen map rect, or
-// null if it was cancelled.
-function positionPaste(bitmap, rect, { snapped = false, undoBase = null } = {}) {
+// Position something on the map by hand — a pasted screenshot, or a piece of
+// the map lifted out with the lasso. Resolves with the chosen map rect, or
+// null if it was cancelled. `mask` makes an irregular piece grabbable only by
+// its own shape; `onMove` is called on every change (the lasso carries the
+// pins along with it).
+function positionPaste(bitmap, rect, {
+  snapped = false, undoBase = null, mask = null, onMove = null,
+  step = 'Step 1', msg = null, okLabel = 'Place it',
+} = {}) {
   return new Promise(resolve => {
     placeBaseWidth = bitmap.width;
-    view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w });
+    placementMoveCb = onMove;
+    view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w, mask });
 
     // Ctrl+Z steps back through where the screenshot has been: each drag,
     // nudge, resize or auto-align records where it was first. When the paste
@@ -1056,6 +1078,7 @@ function positionPaste(bitmap, rect, { snapped = false, undoBase = null } = {}) 
     const finish = ok => {
       document.removeEventListener('keydown', onKey, true);
       view.onPlacementEdit = null;
+      placementMoveCb = null;
       const r = view.placementRect();
       view.setPlacement(null);
       hidePlaceBar();
@@ -1103,19 +1126,98 @@ function positionPaste(bitmap, rect, { snapped = false, undoBase = null } = {}) 
         { label: 'Auto-align', title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign });
     }
     actions.push(
-      { label: 'Place it', primary: true, fn: () => finish(true) },
+      { label: okLabel, primary: true, fn: () => finish(true) },
       { label: 'Cancel', fn: () => finish(false) },
     );
 
-    showPlaceBar('Step 1',
-      snapped
+    showPlaceBar(step,
+      msg || (snapped
         ? 'Lined up automatically — check it looks right. Arrow keys nudge a pixel at a time, '
           + '<span class="kbd">Ctrl+Z</span> puts it back where you dropped it.'
         : 'Drag it into place — <span class="kbd">Shift</span>+scroll resizes, arrow keys nudge, '
-          + '<span class="kbd">Ctrl+Z</span> steps back.',
+          + '<span class="kbd">Ctrl+Z</span> steps back.'),
       actions);
     updatePlaceSize(view.placementRect());
   });
+}
+
+// ------------------------------------------------- move a part of the map
+
+// is (x, y) inside the lasso loop? (ray casting, so concave loops work)
+function pointInPolygon(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// Draw a loop around part of the map and move the whole thing — the pasted
+// screenshots inside the loop AND the pins standing on them. Two areas of a
+// game that turn out to connect (or a chunk that went down in the wrong
+// place) need the map to be rearrangeable, not just addable-to.
+async function startRegionMove() {
+  if (view.placement || view.lasso) return;
+  if (explored.isBlank()) { toast('Nothing on the map to move yet.'); return; }
+  if (placing) stopPlacing();   // can't be dropping a pin and lassoing at once
+
+  pins.suppressHover = true;
+  document.body.classList.add('lasso-mode');
+  showPlaceBar('Select', 'Draw a loop around the part of the map you want to move — '
+    + 'the pins inside it come too.', [{ label: 'Cancel', fn: () => view.cancelLasso() }]);
+  const pts = await view.captureLasso();
+  document.body.classList.remove('lasso-mode');
+  pins.suppressHover = false;
+  hidePlaceBar();
+  if (!pts) return;
+
+  // cut it out — the composite is left with a hole while you carry the piece
+  const before = explored.snapshot();
+  const lift = explored.liftRegion(pts);
+  if (!lift.coverage) {
+    explored.restore(before);
+    toast('Nothing inside that loop — draw around a part of the map that has something on it.');
+    return;
+  }
+
+  // the pins standing on that piece travel with it
+  const riding = [...pins.pins.values()].filter(e => pointInPolygon(e.data.x, e.data.y, pts));
+  const home = riding.map(e => ({ id: e.data.id, x: e.data.x, y: e.data.y }));
+  const rect0 = { ...lift.rect };
+  const carryPins = rect => {
+    const k = rect.w / rect0.w;
+    riding.forEach((e, i) => {
+      e.data.x = rect.x + (home[i].x - rect0.x) * k;
+      e.data.y = rect.y + (home[i].y - rect0.y) * k;
+    });
+    pins.syncPositions();
+  };
+
+  const n = riding.length;
+  const rect = await positionPaste(lift.canvas, lift.rect, {
+    mask: lift.mask,
+    onMove: carryPins,
+    step: 'Move it',
+    okLabel: 'Put it here',
+    msg: `Drag the piece where it belongs${n ? ` — ${n} pin${n > 1 ? 's' : ''} come${n > 1 ? '' : 's'} with it` : ''}. `
+      + 'Arrow keys nudge, <span class="kbd">Ctrl+Z</span> steps back.',
+  });
+
+  if (!rect) {
+    explored.restore(before);
+    carryPins(rect0);
+    toast('Left where it was.');
+    return;
+  }
+  // whole pixels, so the piece goes back down exactly as it was lifted
+  const at = { ...rect, x: Math.round(rect.x), y: Math.round(rect.y) };
+  explored.stamp(lift.canvas, at.x, at.y, at.w, at.h);
+  carryPins(at);
+  for (const e of riding) persistPin(e.data);
+  snapshotForUndo(null, before);
+  lastUndo.pinMoves = home;  // undo puts the pins back too
+  toast(n ? `Moved, with ${n} pin${n > 1 ? 's' : ''}.` : 'Moved.', 'ok', { label: 'Undo', fn: undoLast });
 }
 
 // Image-only alignment against what's already pasted — no reference map, so
@@ -1949,6 +2051,8 @@ function buildToolbar() {
     store.putMeta('showDone', e.target.checked);
   });
 
+  $('#btn-region').addEventListener('click', startRegionMove);
+
   $('#btn-reveal').addEventListener('click', e => {
     view.debugReveal = !view.debugReveal;
     e.currentTarget.classList.toggle('active', view.debugReveal);
@@ -2042,7 +2146,10 @@ async function init() {
   explored.fadeBackground = !!game.builtin;
   if (mapImage) explored.setReference(mapImage); // guides the bg fade (never shown)
   view = new MapView($('#map-canvas'), world, explored, mapImage);
-  view.onPlacementChanged = updatePlaceSize;
+  view.onPlacementChanged = rect => {
+    updatePlaceSize(rect);
+    if (placementMoveCb) placementMoveCb(rect);
+  };
 
   // category config must be loaded before the filter set is built
   setCustomCategories((await store.getMeta('customCats')) || []);

@@ -21,6 +21,9 @@ export class MapView {
     // placement overlay: { img, x, y, w } in map coords (h from aspect)
     this.placement = null;
 
+    // lasso: { pts, drawing, resolve } while a loop is being drawn
+    this.lasso = null;
+
     // ghost: a pasted screenshot shown floating while it's being located,
     // then flown into place (see showGhost / flyGhostTo / settleGhost)
     this.ghost = null;
@@ -77,6 +80,63 @@ export class MapView {
     this.ox = this.canvas.clientWidth / 2 - x * this.scale;
     this.oy = this.canvas.clientHeight / 2 - y * this.scale;
     this.requestRender();
+  }
+
+  // ---- lasso: draw a loop around part of the map --------------------------
+
+  // Resolves with the loop's points (map coords) once it's drawn, or null if
+  // it was cancelled or too small to mean anything.
+  captureLasso() {
+    return new Promise(resolve => {
+      this.lasso = { pts: [], drawing: false, resolve };
+      this.canvas.classList.add('lassoing');
+      this.requestRender();
+    });
+  }
+
+  cancelLasso() {
+    const l = this.lasso;
+    if (!l) return;
+    this._endLasso();
+    l.resolve(null);
+  }
+
+  _endLasso() {
+    this.lasso = null;
+    this.canvas.classList.remove('lassoing');
+    this.requestRender();
+  }
+
+  _finishLasso() {
+    const l = this.lasso;
+    if (!l) return;
+    const pts = l.pts;
+    this._endLasso();
+    // a stray click isn't a selection
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of pts) {
+      x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
+      x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+    }
+    const tiny = pts.length < 3 || (x1 - x0) * this.scale < 12 || (y1 - y0) * this.scale < 12;
+    l.resolve(tiny ? null : pts);
+  }
+
+  _drawLasso(ctx) {
+    const l = this.lasso;
+    if (!l || l.pts.length < 2) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(l.pts[0].x, l.pts[0].y);
+    for (let i = 1; i < l.pts.length; i++) ctx.lineTo(l.pts[i].x, l.pts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(224,195,126,.13)';
+    ctx.fill();
+    ctx.strokeStyle = '#e0c37e';
+    ctx.lineWidth = 2 / this.scale;
+    ctx.setLineDash([9 / this.scale, 6 / this.scale]);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // ---- manual placement: drag the screenshot where it belongs -------------
@@ -161,13 +221,20 @@ export class MapView {
     return p.diff;
   }
 
-  // is this screen point on the screenshot being positioned?
+  // is this screen point on the thing being positioned? A lassoed piece
+  // carries an alpha `mask` of its shape, so the empty corners of its
+  // bounding box still pan the map instead of grabbing it.
   _overPlacement(px, py) {
     const p = this.placement;
     if (!p || p.locked) return false;
     const m = this.screenToMap(px, py);
     const h = p.w * (p.img.height / p.img.width);
-    return m.x >= p.x && m.x <= p.x + p.w && m.y >= p.y && m.y <= p.y + h;
+    if (!(m.x >= p.x && m.x <= p.x + p.w && m.y >= p.y && m.y <= p.y + h)) return false;
+    const mk = p.mask;
+    if (!mk) return true;
+    const mx = Math.min(mk.w - 1, Math.max(0, Math.floor((m.x - p.x) / p.w * mk.w)));
+    const my = Math.min(mk.h - 1, Math.max(0, Math.floor((m.y - p.y) / h * mk.h)));
+    return !!mk.data[my * mk.w + mx];
   }
 
   _placementChanged() {
@@ -427,6 +494,8 @@ export class MapView {
       ctx.stroke();
     }
 
+    if (this.lasso) this._drawLasso(ctx);
+
     if (this.ghost) this._drawGhost(ctx);
   }
 
@@ -443,6 +512,14 @@ export class MapView {
     let dragging = false, movingPlacement = false, lastX = 0, lastY = 0;
 
     c.addEventListener('pointerdown', e => {
+      // drawing a lasso takes over the drag entirely — no panning, no moving
+      if (this.lasso) {
+        this.lasso.drawing = true;
+        this.lasso.pts = [this.screenToMap(e.clientX, e.clientY)];
+        c.setPointerCapture(e.pointerId);
+        this.requestRender();
+        return;
+      }
       dragging = true;
       // dragging ON the screenshot moves it; dragging anywhere else still
       // pans the map, so you can always look around mid-placement
@@ -454,6 +531,17 @@ export class MapView {
     });
 
     c.addEventListener('pointermove', e => {
+      if (this.lasso) {
+        if (!this.lasso.drawing) return;
+        const m = this.screenToMap(e.clientX, e.clientY);
+        const last = this.lasso.pts[this.lasso.pts.length - 1];
+        // thin the trail out — a point every few screen pixels is plenty
+        if (Math.hypot(m.x - last.x, m.y - last.y) * this.scale >= 3) {
+          this.lasso.pts.push(m);
+          this.requestRender();
+        }
+        return;
+      }
       if (!dragging) {
         // cursor tells you which of the two drags you'd get
         if (this.placement) c.classList.toggle('over-placement', this._overPlacement(e.clientX, e.clientY));
@@ -472,6 +560,7 @@ export class MapView {
     });
 
     const endDrag = e => {
+      if (this.lasso && this.lasso.drawing) { this._finishLasso(); return; }
       dragging = false;
       movingPlacement = false;
       c.classList.remove('panning');

@@ -98,6 +98,12 @@ feathered), and **Clean map** isn't offered.
 - **Reveal map** — overlay the reference map to check your alignment (a testing
   aid; it's never part of your saved map). Silksong only — games you add have no
   reference map.
+- **Move a part** — draw a loop around any part of your map and move the whole
+  thing: the pasted screenshots inside the loop *and* the pins standing on them
+  lift off together and drop where you drag them. For when two areas you mapped
+  separately turn out to connect, or a chunk went down in the wrong place. It
+  behaves exactly like placing a screenshot (drag, arrow keys, Difference,
+  `Ctrl+Z`), and the finished move is undoable — pin positions included.
 - **Clean map** — fade every pasted screenshot's dark background to black so
   overlapping pastes blend into one seamless map. Room outlines, fills, area
   names and markers are kept; only the background void fades. Undoable.

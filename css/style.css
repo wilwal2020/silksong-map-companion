@@ -905,6 +905,10 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 /* the step bar owns the bottom of the screen — get out of its way */
 body.placing-paste #held-shot { display: none; }
 
+/* drawing the loop: crosshair, and pins mustn't grab the drag */
+#map-canvas.lassoing { cursor: crosshair; }
+body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !important; }
+
 #map-canvas.placing { cursor: grab; }
 #map-canvas.placing.over-placement { cursor: move; }
 #map-canvas.placing.panning { cursor: grabbing; }
