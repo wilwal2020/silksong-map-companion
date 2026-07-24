@@ -915,6 +915,47 @@ body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !importa
 #map-canvas.placing.over-placement { cursor: move; }
 #map-canvas.placing.panning { cursor: grabbing; }
 
+/* floating align toolbar — hovers just above the screenshot being placed and
+   moves with it. Icon-forward, grouped, so the whole of Step 1 is these
+   controls and nothing else. */
+#place-tools {
+  position: fixed; z-index: 27; display: flex; align-items: center; gap: 3px;
+  padding: 5px; border-radius: 13px;
+  background: rgba(14,17,23,.97); border: 1px solid var(--border-strong);
+  box-shadow: 0 14px 34px rgba(0,0,0,.62), inset 0 1px 0 rgba(255,255,255,.04);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  animation: pt-in .16s cubic-bezier(.2,.9,.3,1.3);
+}
+#place-tools.hidden { display: none !important; }
+@keyframes pt-in { from { opacity: 0; transform: translateY(7px) scale(.97); } }
+
+.pt-group { display: flex; align-items: center; gap: 2px; }
+.pt-sep { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--border); }
+
+.pt-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 12px; border-radius: 9px;
+  background: transparent; border: 1px solid transparent; color: var(--text);
+  font: inherit; font-size: .84rem; letter-spacing: .01em; cursor: pointer; white-space: nowrap;
+  transition: background .13s, border-color .13s, color .13s, box-shadow .13s, transform .06s;
+}
+.pt-btn.icon { width: 34px; padding: 0; justify-content: center; }
+.pt-btn svg { width: 17px; height: 17px; flex: none; }
+.pt-btn:hover { background: #1c2230; border-color: #2f3646; }
+.pt-btn:active { transform: translateY(1px); }
+.pt-btn.primary { background: var(--text); border-color: var(--text); color: #12151c; font-weight: 600; }
+.pt-btn.primary:hover { background: #f4f0e3; border-color: #f4f0e3; box-shadow: 0 0 18px -6px rgba(230,226,211,.6); }
+.pt-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--rose); }
+.pt-btn.danger:hover { background: rgba(158,43,37,.16); border-color: #6a3a3b; color: #ecaaa3; }
+.pt-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 1px; }
+
+.pt-size {
+  min-width: 46px; padding: 0 4px; text-align: center;
+  font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) { #place-tools { animation: none; } }
+
 /* the step bar: the whole hand-placement flow lives here, docked low so it
    never covers the screenshot you're aiming */
 #place-bar {

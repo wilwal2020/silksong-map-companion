@@ -1002,8 +1002,78 @@ async function handleFullMap(blob) {
 
 // ------------------------------------------- hand-placed pastes (custom games)
 
-// The step bar at the bottom of the map. Both halves of the flow use it:
-// positioning the screenshot, then clicking your player's spot.
+// Icons for the floating align toolbar — a compact icon-forward set, so the
+// controls read at a glance without a wall of instructions.
+const TOOL_SVG = {
+  minus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  diff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="12" height="12" rx="1.5"/><rect x="8.5" y="8.5" width="12" height="12" rx="1.5" fill="currentColor" fill-opacity=".22"/></svg>',
+  align: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+};
+
+// The floating align toolbar. `groups` is an array of button groups (thin
+// dividers between them); each button is { icon?, label?, title?, primary?,
+// danger?, size?, id?, fn }. It hovers just above the screenshot being placed
+// and is repositioned whenever the placement or the view moves.
+function showPlaceTools(groups) {
+  const tools = $('#place-tools');
+  tools.innerHTML = '';
+  groups.forEach((group, gi) => {
+    if (gi) { const sep = document.createElement('span'); sep.className = 'pt-sep'; tools.appendChild(sep); }
+    const g = document.createElement('div');
+    g.className = 'pt-group';
+    for (const a of group) {
+      if (a.size) {
+        const s = document.createElement('span');
+        s.className = 'pt-size'; s.id = 'place-size';
+        g.appendChild(s);
+        continue;
+      }
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pt-btn'
+        + (a.primary ? ' primary' : '') + (a.danger ? ' danger' : '')
+        + (a.icon && !a.label ? ' icon' : '');
+      if (a.id) b.id = a.id;
+      if (a.title) b.title = a.title;
+      b.innerHTML = (a.icon || '') + (a.label ? `<span>${a.label}</span>` : '');
+      b.addEventListener('click', a.fn);
+      g.appendChild(b);
+    }
+    tools.appendChild(g);
+  });
+  tools.classList.remove('hidden');
+  document.body.classList.add('placing-paste'); // clears the bottom paste pill
+  positionPlaceTools();
+}
+
+function hidePlaceTools() {
+  $('#place-tools').classList.add('hidden');
+  document.body.classList.remove('placing-paste');
+}
+
+// keep the toolbar hovering just above the top edge of the screenshot, moving
+// with it as it's dragged, resized or the map is panned. Clamped to stay on
+// screen and clear of the app toolbar.
+function positionPlaceTools() {
+  const tools = $('#place-tools');
+  if (tools.classList.contains('hidden')) return;
+  const r = view.placementRect();
+  if (!r) return;
+  const top = view.mapToScreen(r.x + r.w / 2, r.y);
+  const tw = tools.offsetWidth, th = tools.offsetHeight, margin = 10, gap = 14, minTop = 54;
+  let x = top.x - tw / 2;
+  x = Math.max(margin, Math.min(window.innerWidth - tw - margin, x));
+  let y = top.y - gap - th;
+  if (y < minTop) y = minTop; // never above the app toolbar
+  tools.style.left = x + 'px';
+  tools.style.top = y + 'px';
+}
+
+// The step bar at the bottom of the map — now only the "click your player"
+// step (Step 2). Aligning the screenshot uses the floating toolbar above.
 function showPlaceBar(step, msgHtml, actions) {
   $('#place-step').textContent = step;
   $('#place-msg').innerHTML = msgHtml;
@@ -1040,8 +1110,7 @@ function updatePlaceSize(rect) {
 // its own shape; `onMove` is called on every change (the lasso carries the
 // pins along with it).
 function positionPaste(bitmap, rect, {
-  snapped = false, undoBase = null, mask = null, onMove = null,
-  step = 'Step 1', msg = null, okLabel = 'Place it',
+  undoBase = null, mask = null, onMove = null, okLabel = 'Place it',
 } = {}) {
   return new Promise(resolve => {
     placeBaseWidth = bitmap.width;
@@ -1063,17 +1132,10 @@ function positionPaste(bitmap, rect, {
       lastKind = kind; lastAt = now;
     };
     const undoMove = () => {
-      if (!history.length) {
-        toast(snapped ? 'Back to where it was pasted.' : 'Nothing to undo — it hasn’t moved yet.');
-        return;
-      }
+      if (!history.length) { toast('Nothing to undo — it hasn’t moved yet.'); return; }
       view.setPlacementRect(history.pop(), { record: false });
       lastKind = null;
     };
-
-    const size = document.createElement('span');
-    size.className = 'pb-size';
-    size.id = 'place-size';
 
     const finish = ok => {
       document.removeEventListener('keydown', onKey, true);
@@ -1081,7 +1143,7 @@ function positionPaste(bitmap, rect, {
       placementMoveCb = null;
       const r = view.placementRect();
       view.setPlacement(null);
-      hidePlaceBar();
+      hidePlaceTools();
       resolve(ok ? r : null);
     };
 
@@ -1102,41 +1164,33 @@ function positionPaste(bitmap, rect, {
       if (nudge) { e.preventDefault(); view.nudgePlacement(nudge[0], nudge[1]); return; }
       if (e.key === '+' || e.key === '=') { e.preventDefault(); view.scalePlacement(1.02); }
       else if (e.key === '-' || e.key === '_') { e.preventDefault(); view.scalePlacement(1 / 1.02); }
-      else if (e.key === 'd' || e.key === 'D') {
-        e.preventDefault();
-        const btn = [...document.querySelectorAll('#place-actions .btn')].find(b => b.textContent === 'Difference');
-        if (btn) btn.click();
-      }
+      else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); $('#pt-diff')?.click(); }
     };
     document.addEventListener('keydown', onKey, true);
 
-    const actions = [
-      { label: '−', icon: true, title: 'Smaller (or Shift+scroll)', fn: () => view.scalePlacement(1 / 1.04) },
-      { el: size },
-      { label: '+', icon: true, title: 'Bigger (or Shift+scroll)', fn: () => view.scalePlacement(1.04) },
+    // groups: [resize] · [align aids] · [confirm]
+    const resize = [
+      { icon: TOOL_SVG.minus, title: 'Smaller (Shift+scroll, or −)', fn: () => view.scalePlacement(1 / 1.04) },
+      { size: true },
+      { icon: TOOL_SVG.plus, title: 'Bigger (Shift+scroll, or +)', fn: () => view.scalePlacement(1.04) },
     ];
+    const groups = [resize];
     // both alignment aids need something already on the map to align to
     if (!explored.isBlank()) {
-      const diff = document.createElement('button');
-      diff.className = 'btn';
-      diff.textContent = 'Difference';
-      diff.title = 'Show the difference against the map underneath — nudge until the overlap goes black (D)';
-      diff.addEventListener('click', () => diff.classList.toggle('active', view.togglePlacementDiff()));
-      actions.push({ el: diff },
-        { label: 'Auto-align', title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign });
+      groups.push([
+        { id: 'pt-diff', icon: TOOL_SVG.diff, label: 'Difference',
+          title: 'Compare against the map underneath — nudge until the overlap goes black (D)',
+          fn: () => $('#pt-diff').classList.toggle('active', view.togglePlacementDiff()) },
+        { icon: TOOL_SVG.align, label: 'Auto-align',
+          title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign },
+      ]);
     }
-    actions.push(
-      { label: okLabel, primary: true, fn: () => finish(true) },
-      { label: 'Cancel', fn: () => finish(false) },
-    );
+    groups.push([
+      { id: 'pt-place', icon: TOOL_SVG.check, label: okLabel, primary: true, fn: () => finish(true) },
+      { icon: TOOL_SVG.x, danger: true, title: 'Cancel (Esc)', fn: () => finish(false) },
+    ]);
 
-    showPlaceBar(step,
-      msg || (snapped
-        ? 'Lined up automatically — check it looks right. Arrow keys nudge a pixel at a time, '
-          + '<span class="kbd">Ctrl+Z</span> puts it back where you dropped it.'
-        : 'Drag it into place — <span class="kbd">Shift</span>+scroll resizes, arrow keys nudge, '
-          + '<span class="kbd">Ctrl+Z</span> steps back.'),
-      actions);
+    showPlaceTools(groups);
     updatePlaceSize(view.placementRect());
   });
 }
@@ -1195,13 +1249,11 @@ async function startRegionMove() {
   };
 
   const n = riding.length;
+  if (n) toast(`Moving ${n} pin${n > 1 ? 's' : ''} with it.`);
   const rect = await positionPaste(lift.canvas, lift.rect, {
     mask: lift.mask,
     onMove: carryPins,
-    step: 'Move it',
     okLabel: 'Put it here',
-    msg: `Drag the piece where it belongs${n ? ` — ${n} pin${n > 1 ? 's' : ''} come${n > 1 ? '' : 's'} with it` : ''}. `
-      + 'Arrow keys nudge, <span class="kbd">Ctrl+Z</span> steps back.',
   });
 
   if (!rect) {
@@ -2213,6 +2265,7 @@ async function init() {
   view = new MapView($('#map-canvas'), world, explored, mapImage);
   view.onPlacementChanged = rect => {
     updatePlaceSize(rect);
+    positionPlaceTools();
     if (placementMoveCb) placementMoveCb(rect);
   };
 
@@ -2248,7 +2301,7 @@ async function init() {
   });
 
   explored.onChange = () => { view.requestRender(); saveFog(); updateEmptyHint(); };
-  view.onViewChanged = () => { pins.syncPositions(); positionEmptyHint(); saveView(); };
+  view.onViewChanged = () => { pins.syncPositions(); positionEmptyHint(); positionPlaceTools(); saveView(); };
 
   // restore saved state
   learnedScale = (await store.getMeta('scale')) || null;

@@ -91,7 +91,11 @@
     </button>
   </div>
 
-  <!-- step bar for hand-placing a screenshot (custom games) -->
+  <!-- floating toolbar for aligning a screenshot: hovers above the placement
+       and moves with it (Step 1 of hand-placing) -->
+  <div id="place-tools" class="hidden" role="toolbar" aria-label="Position the screenshot"></div>
+
+  <!-- step bar for the "click your player" step (Step 2) -->
   <div id="place-bar" class="hidden">
     <div class="pb-text">
       <span class="pb-step" id="place-step">Step 1</span>
@@ -222,10 +226,10 @@
       <span class="help-eyebrow">Step 2</span>
       <h2>Put it where it belongs</h2>
       <p>This game has no built-in world map to match against, so you place each screenshot yourself:</p>
+      <p>A small toolbar floats above the screenshot with everything you need:</p>
       <ol class="help-list">
-        <li><span class="n">1</span><span><b>Drag</b> the screenshot until it lines up with what's already there.</span></li>
-        <li><span class="n">2</span><span>Hold <span class="kbd">Shift</span> and <b>scroll</b> to resize it (or use the − / + buttons).</span></li>
-        <li><span class="n">3</span><span>Press <b>Place it</b>.</span></li>
+        <li><span class="n">1</span><span><b>Drag</b> the screenshot until it lines up with what's already there (<span class="kbd">Shift</span>+scroll or the − / + buttons resize it).</span></li>
+        <li><span class="n">2</span><span>Press <b>✓ Place it</b>.</span></li>
       </ol>
       <p>The screenshot lands <b>under your mouse pointer</b>, so point at roughly where it belongs before pasting. It tries to line itself up the moment you paste, so there's often nothing to do but confirm. <b>Auto&#8209;align</b> tries again after you've dragged it closer, and <b>Difference</b> (<span class="kbd">D</span>) blacks out everything that already matches so you can see the last pixel of error. Neither ever resizes the screenshot.</p>
       <p>Arrow keys nudge it <b>one pixel</b> at a time (<span class="kbd">Shift</span> for ten) — always onto the map's own pixel grid, so a perfect fit is always reachable. <span class="kbd">Ctrl+Z</span> steps back through every move you've made, including one the app made for you.</p>
