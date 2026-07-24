@@ -221,6 +221,14 @@ function undoLast() {
     }
     pins.syncPositions();
   }
+  // pins removed by a lasso delete come back
+  if (lastUndo.deletedPins) {
+    for (const d of lastUndo.deletedPins) {
+      store.putPin(d);
+      if (!pins.pins.has(d.id)) pins.add({ ...d });
+    }
+    pins.applyFilter();
+  }
   lastUndo = null;
   toast('Undone.', 'ok');
 }
@@ -1011,6 +1019,7 @@ const TOOL_SVG = {
   align: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>',
 };
 
 // The floating align toolbar. `groups` is an array of button groups (thin
@@ -1111,6 +1120,7 @@ function updatePlaceSize(rect) {
 // pins along with it).
 function positionPaste(bitmap, rect, {
   undoBase = null, mask = null, onMove = null, okLabel = 'Place it',
+  resizable = true, aids = !explored.isBlank(), deletable = false, deleteLabel = 'Delete',
 } = {}) {
   return new Promise(resolve => {
     placeBaseWidth = bitmap.width;
@@ -1144,6 +1154,7 @@ function positionPaste(bitmap, rect, {
       const r = view.placementRect();
       view.setPlacement(null);
       hidePlaceTools();
+      if (ok === 'delete') { resolve('delete'); return; }
       resolve(ok ? r : null);
     };
 
@@ -1162,21 +1173,24 @@ function positionPaste(bitmap, rect, {
       // one map pixel per press, on the map's own pixel grid — the finest
       // step that can actually land the screenshot exactly
       if (nudge) { e.preventDefault(); view.nudgePlacement(nudge[0], nudge[1]); return; }
-      if (e.key === '+' || e.key === '=') { e.preventDefault(); view.scalePlacement(1.02); }
-      else if (e.key === '-' || e.key === '_') { e.preventDefault(); view.scalePlacement(1 / 1.02); }
+      else if (resizable && (e.key === '+' || e.key === '=')) { e.preventDefault(); view.scalePlacement(1.02); }
+      else if (resizable && (e.key === '-' || e.key === '_')) { e.preventDefault(); view.scalePlacement(1 / 1.02); }
       else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); $('#pt-diff')?.click(); }
+      else if (deletable && (e.key === 'Delete')) { e.preventDefault(); e.stopPropagation(); finish('delete'); }
     };
     document.addEventListener('keydown', onKey, true);
 
-    // groups: [resize] · [align aids] · [confirm]
-    const resize = [
-      { icon: TOOL_SVG.minus, title: 'Smaller (Shift+scroll, or −)', fn: () => view.scalePlacement(1 / 1.04) },
-      { size: true },
-      { icon: TOOL_SVG.plus, title: 'Bigger (Shift+scroll, or +)', fn: () => view.scalePlacement(1.04) },
-    ];
-    const groups = [resize];
-    // both alignment aids need something already on the map to align to
-    if (!explored.isBlank()) {
+    // groups: [resize] · [align aids] · [confirm], each shown only when useful
+    const groups = [];
+    if (resizable) {
+      groups.push([
+        { icon: TOOL_SVG.minus, title: 'Smaller (Shift+scroll, or −)', fn: () => view.scalePlacement(1 / 1.04) },
+        { size: true },
+        { icon: TOOL_SVG.plus, title: 'Bigger (Shift+scroll, or +)', fn: () => view.scalePlacement(1.04) },
+      ]);
+    }
+    // the alignment aids need something already on the map to align to
+    if (aids) {
       groups.push([
         { id: 'pt-diff', icon: TOOL_SVG.diff, label: 'Difference',
           title: 'Compare against the map underneath — nudge until the overlap goes black (D)',
@@ -1185,10 +1199,13 @@ function positionPaste(bitmap, rect, {
           title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign },
       ]);
     }
-    groups.push([
+    const confirm = [
       { id: 'pt-place', icon: TOOL_SVG.check, label: okLabel, primary: true, fn: () => finish(true) },
-      { icon: TOOL_SVG.x, danger: true, title: 'Cancel (Esc)', fn: () => finish(false) },
-    ]);
+    ];
+    if (deletable) confirm.push({ icon: TOOL_SVG.trash, label: deleteLabel, danger: true,
+      title: `${deleteLabel} (Del)`, fn: () => finish('delete') });
+    confirm.push({ icon: TOOL_SVG.x, danger: true, title: 'Cancel (Esc)', fn: () => finish(false) });
+    groups.push(confirm);
 
     showPlaceTools(groups);
     updatePlaceSize(view.placementRect());
@@ -1213,30 +1230,57 @@ function pointInPolygon(x, y, pts) {
 // place) need the map to be rearrangeable, not just addable-to.
 async function startRegionMove() {
   if (view.placement || view.lasso) return;
-  if (explored.isBlank()) { toast('Nothing on the map to move yet.'); return; }
+  if (explored.isBlank() && !pins.pins.size) { toast('Nothing on the map to move yet.'); return; }
   if (placing) stopPlacing();   // can't be dropping a pin and lassoing at once
 
-  pins.suppressHover = true;
-  document.body.classList.add('lasso-mode');
-  showPlaceBar('Select', 'Draw a loop around the part of the map you want to move — '
-    + 'the pins inside it come too.', [{ label: 'Cancel', fn: () => view.cancelLasso() }]);
-  const pts = await view.captureLasso();
-  document.body.classList.remove('lasso-mode');
-  pins.suppressHover = false;
-  hidePlaceBar();
-  if (!pts) return;
+  const btn = $('#btn-region');
+  btn.classList.add('active');
+  try {
+    pins.suppressHover = true;
+    document.body.classList.add('lasso-mode');
+    showPlaceBar('Lasso', 'Loop around the map or pins you want to move — then drag, or delete.',
+      [{ label: 'Cancel', fn: () => view.cancelLasso() }]);
+    const pts = await view.captureLasso();
+    document.body.classList.remove('lasso-mode');
+    pins.suppressHover = false;
+    hidePlaceBar();
+    if (!pts) return;
 
-  // cut it out — the composite is left with a hole while you carry the piece
-  const before = explored.snapshot();
-  const lift = explored.liftRegion(pts);
-  if (!lift.coverage) {
-    explored.restore(before);
-    toast('Nothing inside that loop — draw around a part of the map that has something on it.');
-    return;
+    // pins standing inside the loop always come along
+    const riding = [...pins.pins.values()].filter(e => pointInPolygon(e.data.x, e.data.y, pts));
+
+    // cut whatever map content is inside out of the composite; coverage tells
+    // us whether there was any (a loop around only pins leaves it near zero)
+    const before = explored.snapshot();
+    const lift = explored.liftRegion(pts);
+    if (lift.coverage > 0.002) {
+      await moveOrDeleteRegion(before, lift, riding);
+    } else {
+      explored.restore(before); // the empty cut leaves nothing behind
+      if (!riding.length) { toast('Nothing inside that loop — draw around some map or a few pins.'); return; }
+      await moveOrDeletePins(before, riding);
+    }
+  } finally {
+    btn.classList.remove('active');
+    pins.suppressHover = false;
+    document.body.classList.remove('lasso-mode');
   }
+}
 
-  // the pins standing on that piece travel with it
-  const riding = [...pins.pins.values()].filter(e => pointInPolygon(e.data.x, e.data.y, pts));
+// remove the pins that were in the selection (undoable via lastUndo.deletedPins)
+function deleteRidingPins(riding) {
+  for (const e of riding) { pins.remove(e.data.id); store.deletePin(e.data.id); }
+}
+
+// record one undoable step: the composite before + what happened to the pins
+function finishRegionUndo(before, { pinMoves = null, deletedPins = null } = {}) {
+  snapshotForUndo(null, before);
+  if (pinMoves) lastUndo.pinMoves = pinMoves;
+  if (deletedPins) lastUndo.deletedPins = deletedPins;
+}
+
+// a lassoed piece of map (plus any pins on it): drag it somewhere, or delete it
+async function moveOrDeleteRegion(before, lift, riding) {
   const home = riding.map(e => ({ id: e.data.id, x: e.data.x, y: e.data.y }));
   const rect0 = { ...lift.rect };
   const carryPins = rect => {
@@ -1247,29 +1291,95 @@ async function startRegionMove() {
     });
     pins.syncPositions();
   };
-
   const n = riding.length;
-  if (n) toast(`Moving ${n} pin${n > 1 ? 's' : ''} with it.`);
-  const rect = await positionPaste(lift.canvas, lift.rect, {
-    mask: lift.mask,
-    onMove: carryPins,
-    okLabel: 'Put it here',
+  if (n) toast(`${n} pin${n > 1 ? 's' : ''} in the selection.`);
+  const res = await positionPaste(lift.canvas, lift.rect, {
+    mask: lift.mask, onMove: carryPins, okLabel: 'Put it here', deletable: true,
   });
 
-  if (!rect) {
-    explored.restore(before);
-    carryPins(rect0);
-    toast('Left where it was.');
+  if (res === 'delete') {
+    // keep the hole the lift left; drop the pins that were on it
+    deleteRidingPins(riding);
+    finishRegionUndo(before, { deletedPins: riding.map(e => ({ ...e.data })) });
+    toast(n ? `Deleted this part and ${n} pin${n > 1 ? 's' : ''}.` : 'Deleted this part of the map.',
+      'ok', { label: 'Undo', fn: undoLast });
     return;
   }
+  if (!res) { explored.restore(before); carryPins(rect0); toast('Left where it was.'); return; }
   // whole pixels, so the piece goes back down exactly as it was lifted
-  const at = { ...rect, x: Math.round(rect.x), y: Math.round(rect.y) };
+  const at = { ...res, x: Math.round(res.x), y: Math.round(res.y) };
   explored.stamp(lift.canvas, at.x, at.y, at.w, at.h);
   carryPins(at);
   for (const e of riding) persistPin(e.data);
-  snapshotForUndo(null, before);
-  lastUndo.pinMoves = home;  // undo puts the pins back too
+  finishRegionUndo(before, { pinMoves: home });
   toast(n ? `Moved, with ${n} pin${n > 1 ? 's' : ''}.` : 'Moved.', 'ok', { label: 'Undo', fn: undoLast });
+}
+
+// a loop around only pins: move just those pins, or delete them. There's no
+// map to lift, so a light ghost of the pins is what you drag.
+async function moveOrDeletePins(before, riding) {
+  const home = riding.map(e => ({ id: e.data.id, x: e.data.x, y: e.data.y }));
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const e of riding) {
+    x0 = Math.min(x0, e.data.x); y0 = Math.min(y0, e.data.y);
+    x1 = Math.max(x1, e.data.x); y1 = Math.max(y1, e.data.y);
+  }
+  const pad = 46;
+  const rect0 = { x: x0 - pad, y: y0 - pad, w: (x1 - x0) + 2 * pad, h: (y1 - y0) + 2 * pad };
+  const ghost = renderPinsGhost(riding, rect0);
+  const carryPins = rect => {
+    const k = rect.w / rect0.w;
+    riding.forEach((e, i) => {
+      e.data.x = rect.x + (home[i].x - rect0.x) * k;
+      e.data.y = rect.y + (home[i].y - rect0.y) * k;
+    });
+    pins.syncPositions();
+  };
+  const n = riding.length;
+  toast(`Moving ${n} pin${n > 1 ? 's' : ''}.`);
+  const res = await positionPaste(ghost, rect0, {
+    onMove: carryPins, okLabel: 'Move here', deletable: true, deleteLabel: 'Delete pins',
+    resizable: false, aids: false,
+  });
+
+  if (res === 'delete') {
+    deleteRidingPins(riding);
+    finishRegionUndo(before, { deletedPins: riding.map(e => ({ ...e.data })) });
+    toast(`Deleted ${n} pin${n > 1 ? 's' : ''}.`, 'ok', { label: 'Undo', fn: undoLast });
+    return;
+  }
+  if (!res) { carryPins(rect0); toast('Pins left where they were.'); return; }
+  carryPins({ ...res });
+  for (const e of riding) persistPin(e.data);
+  finishRegionUndo(before, { pinMoves: home });
+  toast(`Moved ${n} pin${n > 1 ? 's' : ''}.`, 'ok', { label: 'Undo', fn: undoLast });
+}
+
+// a draggable stand-in for a pins-only selection: a faint framed panel with
+// each pin drawn as its coloured, icon'd marker at its relative spot
+function renderPinsGhost(riding, rect) {
+  const S = 2; // render at 2× map px so the icons stay crisp when scaled up
+  const W = Math.max(1, Math.round(rect.w * S)), H = Math.max(1, Math.round(rect.h * S));
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  const rr = (x, y, w, h, r) => {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+    else ctx.rect(x, y, w, h);
+  };
+  ctx.fillStyle = 'rgba(224,195,126,.10)';
+  rr(1, 1, W - 2, H - 2, 10 * S); ctx.fill();
+  for (const e of riding) {
+    const cat = catById(e.data.cat);
+    const px = (e.data.x - rect.x) * S, py = (e.data.y - rect.y) * S, r = 13 * S;
+    ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = cat.color || '#9e2b25'; ctx.globalAlpha = .92; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.lineWidth = 1.5 * S; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.stroke();
+    ctx.font = `${15 * S}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(cat.icon || '📌', px, py + S);
+  }
+  return c;
 }
 
 // Is an alignment good enough to act on? `cover` — of the map that was under
