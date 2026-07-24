@@ -103,7 +103,8 @@ feathered), and **Clean map** isn't offered.
 
 ## The toolbar
 
-- **📍 Add pin** — drop a pin by hand: click, then click the spot on the map.
+- **📍 Add pin** — drop a pin by hand: click, then click the spot on the map
+  (right-click or `Esc` cancels).
 - **Reveal map** — overlay the reference map to check your alignment (a testing
   aid; it's never part of your saved map). Silksong only — games you add have no
   reference map.

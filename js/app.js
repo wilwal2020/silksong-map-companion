@@ -1342,7 +1342,7 @@ async function handleManualPlace(blob) {
 // the click-your-player step. Resolves with map coords, or null if skipped.
 function askPlayerLocation() {
   return new Promise(resolve => {
-    showPlaceBar('Step 2', 'Now click your player’s spot on the map to drop a pin there.',
+    showPlaceBar('Step 2', 'Now click your player’s spot on the map to drop a pin there — right-click to skip.',
       [{ label: 'Skip', fn: () => stopPlacing() }]);
     startPlacing(m => { hidePlaceBar(); resolve(m); }, { toast: false, onCancel: () => resolve(null) });
   });
@@ -1457,21 +1457,29 @@ let cursor = null;
 addEventListener('pointermove', e => { cursor = { x: e.clientX, y: e.clientY }; }, { passive: true });
 addEventListener('dragover', e => { cursor = { x: e.clientX, y: e.clientY }; });
 
-// the cursor in map coordinates, or the centre of the view if it's off-canvas
-// or hasn't moved yet
-function dropPoint() {
+// The drop spot is FROZEN the instant you paste, not read later: the paste
+// opens a chooser, and reaching for its button moves the cursor away from
+// where you were pointing. `pt` is a screen point (a drop event carries real
+// coordinates; a paste uses the last-known cursor). Null once consumed.
+let frozenDrop = null; // map coords captured at paste time
+function freezeDrop(pt) {
   const c = view.canvas.getBoundingClientRect();
-  const p = cursor && cursor.x >= c.left && cursor.x <= c.right
-    && cursor.y >= c.top && cursor.y <= c.bottom
-    ? cursor
+  const s = pt && pt.x >= c.left && pt.x <= c.right && pt.y >= c.top && pt.y <= c.bottom
+    ? pt
     : { x: c.left + c.width / 2, y: c.top + c.height / 2 };
-  return view.screenToMap(p.x, p.y);
+  frozenDrop = view.screenToMap(s.x, s.y);
+}
+
+// the frozen drop point, or the view centre as a last resort
+function dropPoint() {
+  return frozenDrop || view.screenToMap(view.canvas.clientWidth / 2, view.canvas.clientHeight / 2);
 }
 
 window.addEventListener('paste', e => {
   const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
   if (!item) return;
   e.preventDefault();
+  freezeDrop(cursor);           // where you were pointing at the moment of paste
   routePaste(item.getAsFile());
 });
 
@@ -1480,7 +1488,9 @@ window.addEventListener('dragover', e => e.preventDefault());
 window.addEventListener('drop', e => {
   e.preventDefault();
   const file = [...(e.dataTransfer?.files || [])].find(f => f.type.startsWith('image/'));
-  if (file) routePaste(file);
+  if (!file) return;
+  freezeDrop({ x: e.clientX, y: e.clientY }); // the actual drop location
+  routePaste(file);
 });
 
 // ---------------------------------------------------------- export / import
@@ -1853,6 +1863,14 @@ function onPlacingClick(e) {
   if (cb) cb(m); else createManualPin(m.x, m.y);
 }
 
+// right-click anywhere cancels placing (same as Esc) instead of opening the
+// browser's context menu
+function onPlacingContext(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  stopPlacing();
+}
+
 // `onPlace` takes over what a map click does (the custom-game "click your
 // player" step); without it a click creates a pin as usual.
 function startPlacing(onPlace = null, { toast: withToast = true, onCancel = null } = {}) {
@@ -1869,13 +1887,14 @@ function startPlacing(onPlace = null, { toast: withToast = true, onCancel = null
   document.addEventListener('pointermove', onPlacingMove);
   // capture so the map's own handlers don't also react to the placing click
   document.addEventListener('click', onPlacingClick, true);
+  document.addEventListener('contextmenu', onPlacingContext, true);
   document.body.classList.add('placing-mode');
   const btn = $('#btn-add-pin');
   btn.classList.add('active');
   btn.querySelector('.add-pin-ico').textContent = '✕';
   btn.querySelector('.add-pin-label').textContent = 'Cancel';
-  btn.dataset.tip = 'Click the map to drop the pin — or click here to cancel (Esc)';
-  if (withToast) toast('Click the spot on the map to drop your pin. Esc to cancel.');
+  btn.dataset.tip = 'Click the map to drop the pin — or right-click / Esc to cancel';
+  if (withToast) toast('Click the spot on the map to drop your pin. Right-click or Esc to cancel.');
 }
 
 function stopPlacing() {
@@ -1887,6 +1906,7 @@ function stopPlacing() {
   pins.suppressHover = false;
   document.removeEventListener('pointermove', onPlacingMove);
   document.removeEventListener('click', onPlacingClick, true);
+  document.removeEventListener('contextmenu', onPlacingContext, true);
   if (ghostPin) { ghostPin.remove(); ghostPin = null; }
   document.body.classList.remove('placing-mode');
   const btn = $('#btn-add-pin');
