@@ -1220,19 +1220,23 @@ async function startRegionMove() {
   toast(n ? `Moved, with ${n} pin${n > 1 ? 's' : ''}.` : 'Moved.', 'ok', { label: 'Undo', fn: undoLast });
 }
 
-// Is an alignment good enough to act on? Calibrated on real screenshots (see
-// explored.autoAlign): `cover` — of the map that was under the screenshot,
-// how much of it agreed — runs 0.84-0.95 for correct fits at every overlap
-// from 10% to full, and 0.19-0.22 for wrong ones. The raw overlap score can't
-// make that call on its own: it falls with the overlap area, so a correct fit
-// that only clips the existing map scores no better than junk. It stays on as
-// a floor against "three pixels matched perfectly" evidence.
-// `strict` is for a move the user didn't ask for (the one tried on paste) —
-// weak evidence should leave the paste where they dropped it.
+// Is an alignment good enough to act on? `cover` — of the map that was under
+// the screenshot, how much of it agreed — is the deciding signal. Measured
+// over 56 placements (partial overlaps from 15% to full, drops up to 900px
+// off, several screenshots on one map, and out-of-range junk): the 50 correct
+// fits never scored below 0.833 and the 6 wrong ones never above 0.585, so
+// 0.7 sits clear of both with room either side.
+// The raw overlap score can't make this call — it falls with the overlap
+// AREA, so a correct fit that only clips the existing map scores no better
+// than junk — but it stays on as a floor against "four pixels matched
+// perfectly" evidence.
+// `strict` is for a move the user didn't ask for (the one tried on paste),
+// which carries a little more margin: weak evidence should leave the paste
+// where they dropped it.
 function alignAccepted(r, strict = false) {
   if (!r) return false;
-  return strict ? (r.cover >= 0.62 && r.score >= 0.05)
-                : (r.cover >= 0.5 && r.score >= 0.035);
+  return strict ? (r.cover >= 0.75 && r.score >= 0.05)
+                : (r.cover >= 0.7 && r.score >= 0.035);
 }
 
 // Image-only alignment against what's already pasted — no reference map, so

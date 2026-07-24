@@ -559,28 +559,52 @@ export class Explored {
     // to cover the previous pass's pixel size — so the window collapses as
     // fast as the resolution climbs, and the last pass works in whole
     // composite pixels.
+    const coarseF = Math.min(1, 84 / (rect.w * s));
     const coarse = pass(84, { x: rect.x, y: rect.y }, padPx, 300, 6);
-    if (!coarse.length) return null;
+
+    // Where the user actually put it always gets a hearing at full resolution,
+    // whatever the coarse sweep made of it. They aimed deliberately, and an
+    // 84px-wide template is a poor judge — a correct placement can rank below
+    // half a dozen noise peaks at that size and be thrown away before anything
+    // better-resolved ever looks at it.
+    const seeds = [{ x: rect.x, y: rect.y, f: coarseF }, ...coarse];
 
     // One step up in resolution is enough to separate the candidates; only
     // the survivor is worth taking all the way down to single pixels.
     const step = (c, tw, pts) =>
       c.f >= 1 ? c : (pass(tw, { x: c.x, y: c.y }, 2 / (c.f * s), pts)[0] || c);
-    const judged = coarse.map(c => step(c, 240, 600));
+    const judged = seeds.map(c => step(c, 240, 600)).filter(c => c.score !== undefined);
+    if (!judged.length) return null;
 
-    // Pick on agreement, not on raw overlap: `cover` says how much of what was
-    // there to agree with actually agreed, which is what tells a correct fit
-    // apart from a dense patch of map (see alignAccepted in app.js). The score
-    // floor keeps "four pixels matched perfectly" from winning on cover alone.
+    // Rank on the overlap score, NOT on `cover`: cover rises as the overlap
+    // shrinks (a sliver that agrees perfectly scores ~0.95, a full correct fit
+    // ~0.85), so ranking by it hands the win to whichever candidate sits
+    // furthest off the map. Cover earns its keep as the accept gate instead,
+    // where the comparison is against a fixed bar rather than between
+    // candidates (see alignAccepted in app.js).
     const solid = judged.filter(r => r.score >= 0.03);
-    let best = (solid.length ? solid : judged)
-      .sort((a, b) => (solid.length ? b.cover - a.cover : b.score - a.score))[0];
+    const pool = solid.length ? solid : judged;
+    const top = Math.max(...pool.map(r => r.score));
+    // Among fits that are all about as good, keep the one nearest to where it
+    // was dropped. Placing it right and having it jump somewhere else is the
+    // worst thing this can do, and repetitive map corridors make near-ties
+    // common; a genuinely better spot still wins, since it has to be only
+    // slightly worse than the best to count as a tie at all.
+    const dist = c => Math.hypot(c.x - rect.x, c.y - rect.y);
+    let best = pool.filter(r => r.score >= top * 0.85).sort((a, b) => dist(a) - dist(b))[0];
 
     best = step(best, 620, 600);
     best = step(best, Infinity, 600);
     return {
       x: best.x, y: best.y, w: rect.w, h: rect.h,
       score: best.score, cover: best.cover, overlap: best.overlap,
+      // what else was in the running — this call is hard to reason about
+      // from the outside, and the choice between candidates is where it goes
+      // wrong when it goes wrong
+      cands: judged.map(c => ({
+        dx: Math.round(c.x - rect.x), dy: Math.round(c.y - rect.y),
+        score: +c.score.toFixed(3), cover: +c.cover.toFixed(3), overlap: +c.overlap.toFixed(2),
+      })),
     };
   }
 
