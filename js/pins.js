@@ -511,8 +511,23 @@ export class PinManager {
       img.className = 'env';
       img.src = entry.imgUrl;
       img.alt = '';
+      img.title = 'Scroll to zoom · click to open';
       img.addEventListener('load', () => this._positionCard(entry));
       img.addEventListener('click', () => this.handlers.onLightbox(entry.imgUrl));
+      // scroll over the picture to enlarge it in place — the whole card grows
+      // with the image, so you can read detail without opening the lightbox.
+      // Clamped between the card's normal width and a viewport-bounded max; the
+      // card is repositioned as it grows so it can't run off the screen.
+      const BASE_W = 320;
+      let zoomW = BASE_W;
+      img.addEventListener('wheel', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const maxW = Math.min(760, window.innerWidth - 24);
+        zoomW = Math.max(BASE_W, Math.min(maxW, zoomW - e.deltaY * 0.6));
+        card.style.width = zoomW + 'px';
+        this._positionCard(entry);
+      }, { passive: false });
       imgWrap.appendChild(img);
       // ✕ to remove the picture — hovering dims the image; it takes two clicks
       // to confirm, and moving off the image resets the confirmation

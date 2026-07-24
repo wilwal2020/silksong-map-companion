@@ -29,7 +29,8 @@ stored locally.
 4. **Remember what's there.** With a pin's editor open — or while hovering an
    empty pin — paste a screenshot of the actual place (the sealed door, the NPC,
    the ledge you can't reach yet). It's attached to that pin, shown when you open
-   it.
+   it — **scroll over the picture to enlarge it** in place, or click it for the
+   full-size lightbox.
 
    Took that picture *before* you opened the map? Paste it anyway and choose
    **📷 A picture of what's here**. It waits in the bottom-right corner (click
