@@ -127,6 +127,20 @@ export class MapView {
     this._placementChanged();
   }
 
+  // Arrow-key nudge. Unlike a drag this SNAPS to whole map pixels first:
+  // dragging leaves the placement on a fraction of a pixel, and stepping by
+  // whole pixels from a fraction keeps that fraction forever — you can step
+  // past the right spot again and again without ever landing on it. Rounding
+  // first means the first press puts you on the grid the map itself is drawn
+  // on, and from there every position is reachable exactly.
+  nudgePlacement(dx, dy) {
+    const p = this.placement;
+    if (!p || p.locked) return;
+    p.x = Math.round(p.x) + dx;
+    p.y = Math.round(p.y) + dy;
+    this._placementChanged();
+  }
+
   // difference view on/off (see render) — returns the new state
   togglePlacementDiff(on) {
     const p = this.placement;

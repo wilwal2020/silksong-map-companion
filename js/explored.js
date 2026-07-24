@@ -419,7 +419,10 @@ export class Explored {
   // existing composite best: Jaccard over the paste's footprint, so a dense
   // patch of map can't win just by being dense. Returns a corrected rect with
   // its `score`, or null when there's nothing nearby to line up against.
-  autoAlign(bitmap, rect, { pad = 0.3 } = {}) {
+  // `pad` (fraction of the screenshot's size) is how far off the drop can be
+  // and still be found — it's tried automatically on paste, where the
+  // screenshot starts at the middle of the view rather than near its home.
+  autoAlign(bitmap, rect, { pad = 0.5 } = {}) {
     const s = this.scale;
     const bmp = canvasOf(bitmap.width, bitmap.height);
     bmp.getContext('2d').drawImage(bitmap, 0, 0);

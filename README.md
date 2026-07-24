@@ -54,17 +54,25 @@ yourself:
 
 1. Paste as usual and choose **🧩 Add this to your map — you place it**.
 2. **Drag** the screenshot where it belongs. `Shift`+scroll (or the − / +
-   buttons) resizes it, arrow keys nudge it, `Shift`+arrows nudge further. A
-   plain scroll still zooms the map, and dragging off the screenshot still pans.
+   buttons) resizes it; arrow keys nudge it one map pixel at a time (`Shift`
+   for ten), always snapping onto the map's own pixel grid so an exact fit is
+   reachable however you dragged it. A plain scroll still zooms the map, and
+   dragging off the screenshot still pans.
 3. Press **Place it**, then click **your player's spot** on the map to drop a
    pin there — or **Skip**.
 
-Once there's something on the map to line up against, two aids appear:
+Once there's something on the map to line up against, alignment is handled for
+you where it can be:
 
+- **On paste**, it immediately tries to line the screenshot up with what's
+  already there. Drop it anywhere within about half a screenshot of its real
+  home and it arrives exactly right — the step bar says so, and there's nothing
+  to do but confirm. Beyond that it stays where you dropped it rather than
+  guessing.
+- **Auto-align** runs the same search again once you've dragged it closer.
 - **Difference** (or `D`) draws the screenshot as its difference against the
   map underneath, so everything that already matches cancels to black. Nudge
   until the overlapping part goes dark and it's exactly right.
-- **Auto-align** finds that offset for you, purely by image — no name reading.
 
 Neither ever resizes the screenshot: all of a game's screenshots come from the
 same in-game zoom, so the size is taken as correct and only the position is

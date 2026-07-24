@@ -1018,7 +1018,7 @@ function updatePlaceSize(rect) {
 
 // Position a pasted screenshot by hand. Resolves with the chosen map rect, or
 // null if it was cancelled.
-function positionPaste(bitmap, rect) {
+function positionPaste(bitmap, rect, { snapped = false } = {}) {
   return new Promise(resolve => {
     placeBaseWidth = bitmap.width;
     view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w });
@@ -1040,7 +1040,9 @@ function positionPaste(bitmap, rect) {
       if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); return; }
       const step = e.shiftKey ? 10 : 1;
       const nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
-      if (nudge) { e.preventDefault(); view.movePlacement(nudge[0], nudge[1]); return; }
+      // one map pixel per press, on the map's own pixel grid — the finest
+      // step that can actually land the screenshot exactly
+      if (nudge) { e.preventDefault(); view.nudgePlacement(nudge[0], nudge[1]); return; }
       if (e.key === '+' || e.key === '=') { e.preventDefault(); view.scalePlacement(1.02); }
       else if (e.key === '-' || e.key === '_') { e.preventDefault(); view.scalePlacement(1 / 1.02); }
       else if (e.key === 'd' || e.key === 'D') {
@@ -1072,7 +1074,9 @@ function positionPaste(bitmap, rect) {
     );
 
     showPlaceBar('Step 1',
-      'Drag the screenshot into place — hold <span class="kbd">Shift</span> and scroll to resize, arrow keys to nudge.',
+      snapped
+        ? 'Lined up automatically — check it looks right. Arrow keys nudge it a pixel at a time.'
+        : 'Drag the screenshot into place — hold <span class="kbd">Shift</span> and scroll to resize, arrow keys to nudge.',
       actions);
     updatePlaceSize(view.placementRect());
   });
@@ -1119,9 +1123,27 @@ async function handleManualPlace(blob) {
     1, (view.canvas.clientWidth * 0.45) / (bitmap.width * view.scale));
   const w = bitmap.width * k, h = bitmap.height * k;
   const c = view.screenToMap(view.canvas.clientWidth / 2, view.canvas.clientHeight / 2);
-  const start = { x: c.x - w / 2, y: c.y - h / 2, w, h };
+  let start = { x: Math.round(c.x - w / 2), y: Math.round(c.y - h / 2), w, h };
 
-  const rect = await positionPaste(bitmap, start);
+  // Give auto-align first crack at it: if the screenshot lands anywhere near
+  // where it belongs, it arrives already lined up and there's nothing to do
+  // but confirm. A stricter bar than the button's — this move wasn't asked
+  // for, so weak evidence should leave the paste where it dropped.
+  let snapped = false;
+  if (!explored.isBlank()) {
+    spinner(true, 'Lining it up with your map…');
+    await new Promise(r => setTimeout(r, 30)); // let the spinner paint first
+    try {
+      const r = explored.autoAlign(bitmap, start);
+      console.log('[map] auto-align on paste:', r);
+      if (r && r.score >= 0.2) { start = { ...start, x: r.x, y: r.y }; snapped = true; }
+    } catch (e) {
+      console.warn('[map] auto-align on paste failed:', e.message);
+    }
+    spinner(false);
+  }
+
+  const rect = await positionPaste(bitmap, start, { snapped });
   if (!rect) {
     bitmap.close?.();
     updateEmptyHint();
@@ -1130,7 +1152,11 @@ async function handleManualPlace(blob) {
   }
 
   snapshotForUndo();
-  explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
+  // land on the map's pixel grid: a drag ends on a fraction of a pixel, which
+  // resamples the screenshot (softening it) and puts the next paste's stitch
+  // half a pixel out. Auto-align and the arrow keys already work in whole
+  // pixels, so this only ever moves a free-dragged paste by <1px.
+  explored.paste(bitmap, Math.round(rect.x), Math.round(rect.y), rect.w, rect.h);
   bitmap.close?.();
   // remember the size for the next paste
   learnedScale = rect.w / (placeBaseWidth || 1);
