@@ -1055,12 +1055,16 @@ function showPlaceTools(groups) {
   });
   tools.classList.remove('hidden');
   document.body.classList.add('placing-paste'); // clears the bottom paste pill
+  // while you're positioning something, the top action buttons (Add pin,
+  // Lasso) don't apply and would just clutter the view above the screenshot
+  document.body.classList.add('moving');
   positionPlaceTools();
 }
 
 function hidePlaceTools() {
   $('#place-tools').classList.add('hidden');
   document.body.classList.remove('placing-paste');
+  document.body.classList.remove('moving');
 }
 
 // keep the toolbar hovering just above the top edge of the screenshot, moving

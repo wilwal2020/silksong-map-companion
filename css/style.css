@@ -711,6 +711,9 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
   position: fixed; left: 50%; top: 58px; transform: translateX(-50%); z-index: 25;
   display: flex; align-items: center; gap: 9px;
 }
+/* while positioning a screenshot or lassoed piece, these don't apply — get
+   them out of the way so the floating toolbar owns the top of the map */
+body.moving #center-tools { display: none; }
 
 /* the primary action — big, crimson-forward so it's unmissable */
 .add-pin {
