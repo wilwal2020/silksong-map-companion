@@ -52,7 +52,9 @@ between them reloads the page and nothing is shared.
 A game you add has no reference map to match against, so you place screenshots
 yourself:
 
-1. Paste as usual and choose **🧩 Add this to your map — you place it**.
+1. Paste as usual and choose **🧩 Add this to your map — you place it**. The
+   screenshot appears **under your mouse pointer**, so point roughly at where
+   it belongs before pasting and it starts there.
 2. **Drag** the screenshot where it belongs. `Shift`+scroll (or the − / +
    buttons) resizes it; arrow keys nudge it one map pixel at a time (`Shift`
    for ten), always snapping onto the map's own pixel grid so an exact fit is
@@ -67,11 +69,17 @@ Once there's something on the map to line up against, alignment is handled for
 you where it can be:
 
 - **On paste**, it immediately tries to line the screenshot up with what's
-  already there. Drop it anywhere within about **1.5 screenshot-widths** of its
-  real home and it arrives exactly right — the step bar says so, and there's
-  nothing to do but confirm. Beyond that it stays where you dropped it rather
-  than guessing; drag it nearer and press **Auto-align**. If it ever guesses
-  wrong, `Ctrl+Z` puts it back where you dropped it.
+  already there. Point roughly at the right spot and it arrives exactly right —
+  the step bar says so, and there's nothing to do but confirm. It searches
+  closely around where you pointed and more coarsely out to about 1.5
+  screenshot-widths. Beyond that it stays put rather than guessing; drag it
+  nearer and press **Auto-align**. If it ever guesses wrong, `Ctrl+Z` puts it
+  back where you dropped it.
+
+  It does not need the screenshot to match what's on the map everywhere — only
+  where the two actually overlap. Adding a screenshot of a big newly-explored
+  region that touches your existing map along one edge works fine; the new
+  ground has nothing to disagree with.
 - **Auto-align** runs the same search again once you've dragged it closer.
 - **Difference** (or `D`) draws the screenshot as its difference against the
   map underneath, so everything that already matches cancels to black. Nudge

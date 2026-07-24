@@ -559,21 +559,26 @@ export class Explored {
     // to cover the previous pass's pixel size — so the window collapses as
     // fast as the resolution climbs, and the last pass works in whole
     // composite pixels.
-    const coarseF = Math.min(1, 84 / (rect.w * s));
-    const coarse = pass(84, { x: rect.x, y: rect.y }, padPx, 300, 6);
-
-    // Where the user actually put it always gets a hearing at full resolution,
-    // whatever the coarse sweep made of it. They aimed deliberately, and an
-    // 84px-wide template is a poor judge — a correct placement can rank below
-    // half a dozen noise peaks at that size and be thrown away before anything
-    // better-resolved ever looks at it.
-    const seeds = [{ x: rect.x, y: rect.y, f: coarseF }, ...coarse];
-
-    // One step up in resolution is enough to separate the candidates; only
-    // the survivor is worth taking all the way down to single pixels.
+    // One step up in resolution is enough to separate candidates; only the
+    // survivor is worth taking all the way down to single pixels.
     const step = (c, tw, pts) =>
       c.f >= 1 ? c : (pass(tw, { x: c.x, y: c.y }, 2 / (c.f * s), pts)[0] || c);
-    const judged = seeds.map(c => step(c, 240, 600)).filter(c => c.score !== undefined);
+
+    // A proper local search around where the user put it, at a resolution
+    // that can actually judge — not the coarse sweep's verdict on it. They
+    // aimed deliberately, so the answer is usually within a nudge of the
+    // drop, and an 84px-wide template is far too blunt to confirm that: on a
+    // wide screenshot whose overlap with the map is a small strip, the
+    // correct spot doesn't reliably surface in the sweep at all. Costs almost
+    // nothing — the window is a fraction of the screenshot either way.
+    const localWin = Math.max(60, Math.max(rect.w, rect.h) * 0.16);
+    const local = pass(240, { x: rect.x, y: rect.y }, localWin, 600, 3);
+
+    // ...and the wide sweep, for when the drop really is a long way off
+    const coarse = pass(84, { x: rect.x, y: rect.y }, padPx, 300, 8);
+
+    const judged = [...local, ...coarse.map(c => step(c, 240, 600))]
+      .filter(c => c && c.score !== undefined);
     if (!judged.length) return null;
 
     // Rank on the overlap score, NOT on `cover`: cover rises as the overlap

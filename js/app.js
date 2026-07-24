@@ -1221,22 +1221,28 @@ async function startRegionMove() {
 }
 
 // Is an alignment good enough to act on? `cover` — of the map that was under
-// the screenshot, how much of it agreed — is the deciding signal. Measured
-// over 56 placements (partial overlaps from 15% to full, drops up to 900px
-// off, several screenshots on one map, and out-of-range junk): the 50 correct
-// fits never scored below 0.833 and the 6 wrong ones never above 0.585, so
-// 0.7 sits clear of both with room either side.
+// the screenshot, how much of it agreed — is the deciding signal.
+//
+// Calibrated on REAL pairs of screenshots placed at offsets taken from the
+// Silksong reference matcher, which is the honest test: two separate captures
+// of the same ground agree far less than a synthetic crop of one image does,
+// and an earlier bar set on synthetic data (0.75) rejected genuinely correct
+// alignments at 0.73. Correct fits across those pairs run 0.73-0.87 — down to
+// 16% overlap, where the rest of the screenshot is newly explored ground with
+// nothing to match against — while wrong answers sat at 0.14-0.25 (0.585 for
+// one pathological sliver). 0.64 clears both sides.
+//
 // The raw overlap score can't make this call — it falls with the overlap
-// AREA, so a correct fit that only clips the existing map scores no better
-// than junk — but it stays on as a floor against "four pixels matched
-// perfectly" evidence.
-// `strict` is for a move the user didn't ask for (the one tried on paste),
-// which carries a little more margin: weak evidence should leave the paste
-// where they dropped it.
-function alignAccepted(r, strict = false) {
-  if (!r) return false;
-  return strict ? (r.cover >= 0.75 && r.score >= 0.05)
-                : (r.cover >= 0.7 && r.score >= 0.035);
+// AREA, so a correct fit that mostly covers new ground scores no better than
+// junk — but it stays on as a floor against "four pixels matched perfectly".
+//
+// One bar for both the button and the move tried on paste. A stricter bar for
+// the automatic one sounds prudent and isn't: correct fits on real pairs sit
+// close enough to it that the extra margin mostly rejects good alignments,
+// while a wrong one costs a single Ctrl+Z (and near-ties already keep the
+// placement the user made).
+function alignAccepted(r) {
+  return !!r && r.cover >= 0.64 && r.score >= 0.03;
 }
 
 // Image-only alignment against what's already pasted — no reference map, so
@@ -1279,7 +1285,9 @@ async function handleManualPlace(blob) {
   const k = learnedScale || Math.min(
     1, (view.canvas.clientWidth * 0.45) / (bitmap.width * view.scale));
   const w = bitmap.width * k, h = bitmap.height * k;
-  const c = view.screenToMap(view.canvas.clientWidth / 2, view.canvas.clientHeight / 2);
+  // centred on the pointer: point at roughly where the screenshot belongs and
+  // it lands there, which is also the best help you can give the aligner
+  const c = dropPoint();
   let start = { x: Math.round(c.x - w / 2), y: Math.round(c.y - h / 2), w, h };
 
   // Give auto-align first crack at it: if the screenshot lands anywhere near
@@ -1294,7 +1302,7 @@ async function handleManualPlace(blob) {
     try {
       const r = explored.autoAlign(bitmap, start);
       console.log('[map] auto-align on paste:', r);
-      if (alignAccepted(r, true)) { start = { ...start, x: r.x, y: r.y }; snapped = true; }
+      if (alignAccepted(r)) { start = { ...start, x: r.x, y: r.y }; snapped = true; }
     } catch (e) {
       console.warn('[map] auto-align on paste failed:', e.message);
     }
@@ -1440,6 +1448,24 @@ for (const b of document.querySelectorAll('#dlg-paste button[data-type]')) {
         : "Picture kept. The next pin you add gets it — paste your map screenshot when you're ready.", 'ok');
     }
   });
+}
+
+// Where the pointer is, so a pasted screenshot can land under it rather than
+// at the middle of the screen — you point at where it goes, and it starts
+// there. A paste event carries no coordinates of its own, hence the tracking.
+let cursor = null;
+addEventListener('pointermove', e => { cursor = { x: e.clientX, y: e.clientY }; }, { passive: true });
+addEventListener('dragover', e => { cursor = { x: e.clientX, y: e.clientY }; });
+
+// the cursor in map coordinates, or the centre of the view if it's off-canvas
+// or hasn't moved yet
+function dropPoint() {
+  const c = view.canvas.getBoundingClientRect();
+  const p = cursor && cursor.x >= c.left && cursor.x <= c.right
+    && cursor.y >= c.top && cursor.y <= c.bottom
+    ? cursor
+    : { x: c.left + c.width / 2, y: c.top + c.height / 2 };
+  return view.screenToMap(p.x, p.y);
 }
 
 window.addEventListener('paste', e => {
@@ -2262,6 +2288,7 @@ async function init() {
       : handleFullMap(blob),
     routePaste,
     undoLast,
+    dropPoint,
   };
 }
 
