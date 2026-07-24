@@ -427,27 +427,33 @@ export class Explored {
   // existing composite best: Jaccard over the paste's footprint, so a dense
   // patch of map can't win just by being dense. Returns a corrected rect with
   // its `score`, or null when there's nothing nearby to line up against.
-  // `pad` (fraction of the screenshot's size) is how far off the drop can be
-  // and still be found — it's tried automatically on paste, where the
-  // screenshot starts at the middle of the view rather than near its home.
-  autoAlign(bitmap, rect, { pad = 0.5 } = {}) {
+  //
+  // `pad` (multiples of the screenshot's size) is how far off the drop can be
+  // and still be found. It is deliberately generous: a paste that lands
+  // outside the window doesn't align badly, it doesn't align at all — which
+  // reads as "it failed, but it works once I drag it closer". Widening it is
+  // affordable because each pass is sized by its TEMPLATE (see `tw`), not by
+  // the window, so a bigger search area no longer means a blurrier match.
+  autoAlign(bitmap, rect, { pad = 1.6 } = {}) {
     const s = this.scale;
     const bmp = canvasOf(bitmap.width, bitmap.height);
     bmp.getContext('2d').drawImage(bitmap, 0, 0);
 
-    // work inside a window around the current placement — wide enough to
-    // absorb a rough drop, small enough that the search stays instant
     const padPx = Math.max(rect.w, rect.h) * pad;
-    // whole composite pixels, so the last (1:1) pass lands the paste on an
-    // exact pixel rather than the search window's own fractional origin
-    const reg = {
-      x: Math.round((rect.x - padPx) * s), y: Math.round((rect.y - padPx) * s),
-      w: Math.round((rect.w + 2 * padPx) * s), h: Math.round((rect.h + 2 * padPx) * s),
-    };
 
-    // one search over ±winMap map px around `center`, at reduced width DW
-    const pass = (DW, center, winMap) => {
-      const f = Math.min(1, DW / reg.w);        // reduced px per composite px
+    // One search over ±winMap map px around `center`. `tw` is how wide the
+    // screenshot itself is rendered for this pass — that alone sets the
+    // resolution, so the window can grow without coarsening the template.
+    // The region examined is only ever the footprint plus that window, so a
+    // refinement pass stays cheap however wide the first sweep was.
+    const pass = (tw, center, winMap, wantPts, topK = 1) => {
+      // whole composite pixels, so the last (1:1) pass lands the paste on an
+      // exact pixel rather than the region's own fractional origin
+      const reg = {
+        x: Math.round((center.x - winMap) * s), y: Math.round((center.y - winMap) * s),
+        w: Math.round((rect.w + 2 * winMap) * s), h: Math.round((rect.h + 2 * winMap) * s),
+      };
+      const f = Math.min(1, tw / (rect.w * s)); // reduced px per composite px
       const rw = Math.max(24, Math.round(reg.w * f));
       const rh = Math.max(24, Math.round(reg.h * f));
       const ec = canvasOf(rw, rh);
@@ -457,69 +463,125 @@ export class Explored {
       // with the destination, so this stays aligned at the map borders
       ex.drawImage(this.canvas, reg.x, reg.y, reg.w, reg.h, 0, 0, rw, rh);
       const E = contrastMask(ec);
-      if (E.n < rw * rh * 0.008) return null;   // nothing here to line up with
+      // Nothing here to line up with. An absolute floor, NOT a share of the
+      // region: the region grows with the search window, so a density test
+      // would quietly stop finding matches exactly as the window widens.
+      // Weak-but-present evidence is the caller's business — it scores low
+      // and the caller's threshold rejects it.
+      if (E.n < 40) return [];
       const sat = summedArea(E.m, rw, rh);
 
       const pw = Math.round(rect.w * s * f), ph = Math.round(rect.h * s * f);
-      if (pw < 12 || ph < 12) return null;
+      if (pw < 12 || ph < 12) return [];
       const nc = canvasOf(pw, ph);
       const nx = nc.getContext('2d', { willReadFrequently: true });
       nx.imageSmoothingEnabled = true;
       nx.drawImage(bmp, 0, 0, pw, ph);
       const N = contrastMask(nc);
-      if (N.n < 40) return null;
+      if (N.n < 40) return [];
       // sample the shot's content points — a few hundred is plenty and keeps
       // the inner loop cheap
-      const stride = Math.max(1, Math.ceil(N.n / 500));
+      const stride = Math.max(1, Math.ceil(N.n / wantPts));
       const px = [], py = [];
       let seen = 0;
       for (let p = 0; p < N.m.length; p++) {
         if (!N.m[p] || (seen++ % stride)) continue;
         px.push(p % pw); py.push((p / pw) | 0);
       }
-      if (!px.length) return null;
+      if (!px.length) return [];
       const back = N.n / px.length;             // sampled hits -> full count
       const bx = Math.round((center.x * s - reg.x) * f);
       const by = Math.round((center.y * s - reg.y) * f);
       const R = Math.max(2, Math.round(winMap * s * f));
 
-      let best = null;
-      for (let dy = -R; dy <= R; dy++) {
-        const oy = by + dy;
-        for (let dx = -R; dx <= R; dx++) {
-          const ox = bx + dx;
-          let inter = 0;
-          for (let i = 0; i < px.length; i++) {
-            const X = px[i] + ox, Y = py[i] + oy;
-            if (X < 0 || X >= rw || Y < 0 || Y >= rh) continue;
-            if (E.m[Y * rw + X]) inter++;
-          }
-          if (!inter) continue;
-          const est = inter * back;
-          const ecnt = satSum(sat, rw, rh, ox, oy, pw, ph);
-          const score = est / (N.n + ecnt - est);
-          if (!best || score > best.score) {
-            best = { score, f, x: (ox / f + reg.x) / s, y: (oy / f + reg.y) / s };
-          }
+      // Scan outward from the drop in rings rather than row by row: a good
+      // score found near the middle prunes most of the outer ground, and when
+      // two spots tie the nearer one is already the incumbent.
+      //
+      // The sweep keeps the top few SPATIALLY DISTINCT peaks, not just the
+      // winner. At the coarse resolution a correct fit that only clips the
+      // existing map is not reliably the highest peak — refining each
+      // candidate and judging them on the evidence then settles it, which
+      // costs almost nothing because a refinement pass only looks at the
+      // footprint.
+      const found = [];
+      const sep = Math.max(3, Math.round(pw * 0.3));
+      let top = 0;                               // best score so far
+      const consider = (dx, dy) => {
+        const ox = bx + dx, oy = by + dy;
+        // Upper bound on this offset's score, from four table lookups: the
+        // overlap can't exceed the existing content under the footprint, so
+        // score <= ecnt / N.n. Empty ground is rejected without touching a
+        // single point, which is most of a wide window on a sparse map. The
+        // half leaves room for the runners-up to still be recorded.
+        const ecnt = satSum(sat, rw, rh, ox, oy, pw, ph);
+        if (ecnt <= top * N.n * (topK > 1 ? 0.5 : 1)) return;
+        let inter = 0;
+        for (let i = 0; i < px.length; i++) {
+          const X = px[i] + ox, Y = py[i] + oy;
+          if (X < 0 || X >= rw || Y < 0 || Y >= rh) continue;
+          if (E.m[Y * rw + X]) inter++;
         }
+        if (!inter) return;
+        const est = inter * back;
+        const score = est / (N.n + ecnt - est);
+        if (score > top) top = score;
+        const cand = {
+          score, f, ox, oy, x: (ox / f + reg.x) / s, y: (oy / f + reg.y) / s,
+          // How much of the map that IS under the footprint got matched.
+          // Jaccard alone falls with the overlap area, so a correct match
+          // that only clips the existing map scores no better than junk in
+          // a dense region; this says "of what was there to agree with, how
+          // much agreed" and stays high whenever the fit is right.
+          cover: est / Math.min(N.n, Math.max(1, ecnt)),
+          overlap: Math.min(ecnt, N.n) / N.n,
+        };
+        // one entry per neighbourhood — keep the best of each
+        const near = found.find(c => Math.abs(c.ox - ox) < sep && Math.abs(c.oy - oy) < sep);
+        if (near) {
+          if (score > near.score) Object.assign(near, cand);
+          return;
+        }
+        found.push(cand);
+        found.sort((a, b) => b.score - a.score);
+        if (found.length > topK) found.length = topK;
+      };
+      consider(0, 0);
+      for (let r = 1; r <= R; r++) {
+        for (let d = -r; d <= r; d++) { consider(d, -r); consider(d, r); }
+        for (let d = -r + 1; d <= r - 1; d++) { consider(-r, d); consider(r, d); }
       }
-      return best;
+      found.sort((a, b) => b.score - a.score);
+      return found;
     };
 
-    // coarse, then two refinements: each pass only has to cover the previous
-    // one's pixel size, so the window shrinks as the resolution grows
-    let best = null, center = { x: rect.x, y: rect.y }, win = padPx, lastF = 0;
-    for (const DW of [260, 700, 1500]) {
-      if (lastF >= 1) break;                    // already at composite pixels
-      const r = pass(DW, center, win);
-      if (!r) break;
-      best = r;
-      center = { x: r.x, y: r.y };
-      win = 2 / (r.f * s);                      // 2 px of the pass just done
-      lastF = r.f;
-    }
-    if (!best) return null;
-    return { x: best.x, y: best.y, w: rect.w, h: rect.h, score: best.score };
+    // A small template sweeps the whole window, then each refinement only has
+    // to cover the previous pass's pixel size — so the window collapses as
+    // fast as the resolution climbs, and the last pass works in whole
+    // composite pixels.
+    const coarse = pass(84, { x: rect.x, y: rect.y }, padPx, 300, 6);
+    if (!coarse.length) return null;
+
+    // One step up in resolution is enough to separate the candidates; only
+    // the survivor is worth taking all the way down to single pixels.
+    const step = (c, tw, pts) =>
+      c.f >= 1 ? c : (pass(tw, { x: c.x, y: c.y }, 2 / (c.f * s), pts)[0] || c);
+    const judged = coarse.map(c => step(c, 240, 600));
+
+    // Pick on agreement, not on raw overlap: `cover` says how much of what was
+    // there to agree with actually agreed, which is what tells a correct fit
+    // apart from a dense patch of map (see alignAccepted in app.js). The score
+    // floor keeps "four pixels matched perfectly" from winning on cover alone.
+    const solid = judged.filter(r => r.score >= 0.03);
+    let best = (solid.length ? solid : judged)
+      .sort((a, b) => (solid.length ? b.cover - a.cover : b.score - a.score))[0];
+
+    best = step(best, 620, 600);
+    best = step(best, Infinity, 600);
+    return {
+      x: best.x, y: best.y, w: rect.w, h: rect.h,
+      score: best.score, cover: best.cover, overlap: best.overlap,
+    };
   }
 
   // Lift the part of the composite inside a map-coordinate polygon: hand it

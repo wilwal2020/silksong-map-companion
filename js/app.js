@@ -1220,6 +1220,21 @@ async function startRegionMove() {
   toast(n ? `Moved, with ${n} pin${n > 1 ? 's' : ''}.` : 'Moved.', 'ok', { label: 'Undo', fn: undoLast });
 }
 
+// Is an alignment good enough to act on? Calibrated on real screenshots (see
+// explored.autoAlign): `cover` — of the map that was under the screenshot,
+// how much of it agreed — runs 0.84-0.95 for correct fits at every overlap
+// from 10% to full, and 0.19-0.22 for wrong ones. The raw overlap score can't
+// make that call on its own: it falls with the overlap area, so a correct fit
+// that only clips the existing map scores no better than junk. It stays on as
+// a floor against "three pixels matched perfectly" evidence.
+// `strict` is for a move the user didn't ask for (the one tried on paste) —
+// weak evidence should leave the paste where they dropped it.
+function alignAccepted(r, strict = false) {
+  if (!r) return false;
+  return strict ? (r.cover >= 0.62 && r.score >= 0.05)
+                : (r.cover >= 0.5 && r.score >= 0.035);
+}
+
 // Image-only alignment against what's already pasted — no reference map, so
 // it works for any game. It only ever MOVES the placement you made: the size
 // you set is taken as correct (one in-game zoom per game), and the search
@@ -1239,7 +1254,7 @@ function runAutoAlign() {
     }
     spinner(false);
     console.log('[map] auto-align:', r);
-    if (!r || r.score < 0.12) {
+    if (!alignAccepted(r)) {
       toast("Couldn't find anything here to line it up with — place it by eye, or move it closer first.", 'error');
       return;
     }
@@ -1275,7 +1290,7 @@ async function handleManualPlace(blob) {
     try {
       const r = explored.autoAlign(bitmap, start);
       console.log('[map] auto-align on paste:', r);
-      if (r && r.score >= 0.2) { start = { ...start, x: r.x, y: r.y }; snapped = true; }
+      if (alignAccepted(r, true)) { start = { ...start, x: r.x, y: r.y }; snapped = true; }
     } catch (e) {
       console.warn('[map] auto-align on paste failed:', e.message);
     }
