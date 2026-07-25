@@ -630,11 +630,21 @@ export class MapView {
     c.addEventListener('wheel', e => {
       e.preventDefault();
       if (this.placement && !this.placement.locked && (e.shiftKey || e.altKey)) {
-        // Shift+scroll is the FINE resize: a very small nudge per notch, so
+        // Shift+scroll is the FINE resize: exactly 1% per wheel notch, so
         // corner-dragging does the big scaling and the wheel dials in the
-        // last percent or two. Much gentler than the map-zoom factor below.
-        const fine = Math.exp(-e.deltaY * 0.0001);
-        this.scalePlacement(fine, { x: e.clientX, y: e.clientY });
+        // last percent or two.
+        //
+        // deltaY's SIZE can't be used for this. One notch is 100 in some
+        // browsers, 120 in others, and 3 "lines" in others again — scaling by
+        // the raw number is what made a notch come out a little over 1%. So
+        // anything big enough to be a real notch counts as exactly one,
+        // whatever it measures, and only trackpad-sized fragments (which
+        // arrive many to a swipe) are taken proportionally.
+        const d = e.deltaY;
+        const notches = e.deltaMode === 0
+          ? (Math.abs(d) >= 40 ? Math.sign(d) : d / 40)
+          : Math.sign(d);
+        this.scalePlacement(Math.pow(1.01, -notches), { x: e.clientX, y: e.clientY });
       } else {
         const factor = Math.exp(-e.deltaY * 0.0012);
         const ns = Math.min(this.maxScale, Math.max(this.minScale, this.scale * factor));
