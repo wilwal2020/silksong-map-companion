@@ -1015,6 +1015,8 @@ async function handleFullMap(blob) {
 const TOOL_SVG = {
   diff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="12" height="12" rx="1.5"/><rect x="8.5" y="8.5" width="12" height="12" rx="1.5" fill="currentColor" fill-opacity=".22"/></svg>',
   align: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
+  // diagonal arrows out of a box — "auto-align may change the size too"
+  scale: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10V4h6"/><path d="M20 14v6h-6"/><path d="M4 4l6 6"/><path d="M20 20l-6-6"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>',
@@ -1042,6 +1044,7 @@ function showPlaceTools(groups) {
       b.type = 'button';
       b.className = 'pt-btn'
         + (a.primary ? ' primary' : '') + (a.danger ? ' danger' : '')
+        + (a.active ? ' active' : '')
         + (a.icon && !a.label ? ' icon' : '');
       if (a.id) b.id = a.id;
       if (a.title) b.title = a.title;
@@ -1191,13 +1194,25 @@ function positionPaste(bitmap, rect, {
     if (resizable) groups.push([{ size: true }]);
     // the alignment aids need something already on the map to align to
     if (aids) {
-      groups.push([
+      const aidGroup = [
         { id: 'pt-diff', icon: TOOL_SVG.diff, label: 'Difference',
           title: 'Compare against the map underneath — nudge until the overlap goes black (D)',
           fn: () => $('#pt-diff').classList.toggle('active', view.togglePlacementDiff()) },
         { icon: TOOL_SVG.align, label: 'Auto-align',
           title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign },
-      ]);
+      ];
+      // Only worth offering on something that can be resized at all. Sticky
+      // per game: whether the map zoom can change is a fact about the game,
+      // not about this one paste.
+      if (resizable) {
+        aidGroup.push({
+          id: 'pt-scale', icon: TOOL_SVG.scale, active: alignCanScale,
+          title: 'Let auto-align resize it too — slower, for games whose map zoom can change. '
+            + 'Leave off when every screenshot is at the same zoom.',
+          fn: () => setAlignCanScale(!alignCanScale),
+        });
+      }
+      groups.push(aidGroup);
     }
     const confirm = [
       { id: 'pt-place', icon: TOOL_SVG.check, label: okLabel, primary: true, fn: () => finish(true) },
@@ -1394,9 +1409,14 @@ function renderPinsGhost(riding, rect) {
 // nothing to match against — while wrong answers sat at 0.14-0.25 (0.585 for
 // one pathological sliver). 0.64 clears both sides.
 //
-// The raw overlap score can't make this call — it falls with the overlap
-// AREA, so a correct fit that mostly covers new ground scores no better than
-// junk — but it stays on as a floor against "four pixels matched perfectly".
+// The raw overlap score can't make this call on its own — it falls with the
+// overlap AREA, so a correct fit that mostly covers new ground scores no
+// better than junk. It stays on as one of two ways past the floor, guarding
+// against "four pixels matched perfectly"; `evidence` — was there simply
+// enough existing map under this to judge at all — is the other, and it does
+// the same job without caring how much brand-new ground the screenshot
+// brought with it. Either is enough, so a screenshot showing far more of the
+// map than the canvas has yet is no longer turned away for that alone.
 //
 // One bar for both the button and the move tried on paste. A stricter bar for
 // the automatic one sounds prudent and isn't: correct fits on real pairs sit
@@ -1404,23 +1424,42 @@ function renderPinsGhost(riding, rect) {
 // while a wrong one costs a single Ctrl+Z (and near-ties already keep the
 // placement the user made).
 function alignAccepted(r) {
-  return !!r && r.cover >= 0.64 && r.score >= 0.03;
+  return !!r && r.cover >= 0.64 && (r.score >= 0.03 || r.evidence >= 0.5);
+}
+
+// May auto-align change the SIZE as well as the position? Off by default:
+// most games have one map zoom, so every screenshot is already the right
+// size and searching sizes only costs time and invites a wrong answer. Games
+// whose map can be zoomed need it, so it's a per-game switch (see the Resize
+// toggle on the align toolbar).
+let alignCanScale = false;
+
+// Sizes to try, as multiples of the size you set. Coarse on purpose — the
+// winner's scale is then settled finely inside autoAlign — and centred on 1
+// so leaving the size alone stays the natural answer.
+const ALIGN_SCALES = [0.75, 0.83, 0.91, 1, 1.1, 1.2, 1.32];
+
+function setAlignCanScale(on) {
+  alignCanScale = !!on;
+  $('#pt-scale')?.classList.toggle('active', alignCanScale);
+  store.putMeta('alignScale', alignCanScale);
 }
 
 // Image-only alignment against what's already pasted — no reference map, so
-// it works for any game. It only ever MOVES the placement you made: the size
-// you set is taken as correct (one in-game zoom per game), and the search
-// stays around where you dropped it.
+// it works for any game. By default it only MOVES the placement you made: the
+// size you set is taken as correct (one in-game zoom per game), and the search
+// stays around where you dropped it. With Resize on it searches sizes too.
 function runAutoAlign() {
   const rect = view.placementRect();
   const p = view.placement;
   if (!rect || !p) return;
-  spinner(true, 'Lining it up with your map…');
+  const scaling = alignCanScale && !p.locked;
+  spinner(true, scaling ? 'Lining it up and sizing it…' : 'Lining it up with your map…');
   // let the spinner paint before the synchronous search blocks the thread
   setTimeout(() => {
     let r = null;
     try {
-      r = explored.autoAlign(p.img, rect);
+      r = explored.autoAlign(p.img, rect, scaling ? { scales: ALIGN_SCALES } : {});
     } catch (e) {
       console.error(e);
     }
@@ -1432,7 +1471,11 @@ function runAutoAlign() {
     }
     view.setPlacementRect(r);
     const moved = Math.hypot(r.x - rect.x, r.y - rect.y);
-    toast(moved < 0.6 ? 'Already lined up.' : 'Lined up with the map you already have.', 'ok');
+    const resized = Math.abs(r.w - rect.w) > rect.w * 0.005;
+    toast(
+      resized ? `Lined up and resized to ${Math.round(r.w / rect.w * 100)}% of what you set.`
+        : moved < 0.6 ? 'Already lined up.'
+        : 'Lined up with the map you already have.', 'ok');
   }, 30);
 }
 
@@ -1459,12 +1502,13 @@ async function handleManualPlace(blob) {
   let snapped = false;
   const dropped = { ...start };   // where it landed before we moved it for them
   if (!explored.isBlank()) {
-    spinner(true, 'Lining it up with your map…');
+    spinner(true, alignCanScale ? 'Lining it up and sizing it…' : 'Lining it up with your map…');
     await new Promise(r => setTimeout(r, 30)); // let the spinner paint first
     try {
-      const r = explored.autoAlign(bitmap, start);
+      const r = explored.autoAlign(bitmap, start, alignCanScale ? { scales: ALIGN_SCALES } : {});
       console.log('[map] auto-align on paste:', r);
-      if (alignAccepted(r)) { start = { ...start, x: r.x, y: r.y }; snapped = true; }
+      // when it may resize, the size it found is part of the answer
+      if (alignAccepted(r)) { start = { ...start, x: r.x, y: r.y, w: r.w, h: r.h }; snapped = true; }
     } catch (e) {
       console.warn('[map] auto-align on paste failed:', e.message);
     }
@@ -2471,6 +2515,7 @@ async function init() {
   learnedScale = (await store.getMeta('scale')) || null;
   scaleTrusted = !!(await store.getMeta('scaleTrusted'));
   scaleSamples = (await store.getMeta('scaleSamples')) || [];
+  alignCanScale = !!(await store.getMeta('alignScale'));
   const savedFog = await store.getMeta('fog');
   if (savedFog) await explored.loadFromBlob(savedFog);
   const savedHeld = await store.getMeta('heldShot');

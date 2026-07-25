@@ -434,26 +434,33 @@ export class Explored {
   // reads as "it failed, but it works once I drag it closer". Widening it is
   // affordable because each pass is sized by its TEMPLATE (see `tw`), not by
   // the window, so a bigger search area no longer means a blurrier match.
-  autoAlign(bitmap, rect, { pad = 1.6 } = {}) {
+  autoAlign(bitmap, rect, { pad = 1.6, scales = null } = {}) {
     const s = this.scale;
     const bmp = canvasOf(bitmap.width, bitmap.height);
     bmp.getContext('2d').drawImage(bitmap, 0, 0);
 
     const padPx = Math.max(rect.w, rect.h) * pad;
+    // Every size is tried around the drop's CENTRE, so a bigger or smaller
+    // guess grows symmetrically instead of pinning one corner and dragging
+    // the whole search window off to one side.
+    const c0 = { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
+    const sizeAt = k => ({ w: rect.w * k, h: rect.h * k });
+    const originAt = z => ({ x: c0.x - z.w / 2, y: c0.y - z.h / 2 });
 
-    // One search over ±winMap map px around `center`. `tw` is how wide the
-    // screenshot itself is rendered for this pass — that alone sets the
-    // resolution, so the window can grow without coarsening the template.
-    // The region examined is only ever the footprint plus that window, so a
-    // refinement pass stays cheap however wide the first sweep was.
-    const pass = (tw, center, winMap, wantPts, topK = 1) => {
+    // One search over ±winMap map px around `center`, for a footprint of size
+    // `z`. `tw` is how wide the screenshot itself is rendered for this pass —
+    // that alone sets the resolution, so the window can grow without
+    // coarsening the template. The region examined is only ever the footprint
+    // plus that window, so a refinement pass stays cheap however wide the
+    // first sweep was.
+    const pass = (z, tw, center, winMap, wantPts, topK = 1) => {
       // whole composite pixels, so the last (1:1) pass lands the paste on an
       // exact pixel rather than the region's own fractional origin
       const reg = {
         x: Math.round((center.x - winMap) * s), y: Math.round((center.y - winMap) * s),
-        w: Math.round((rect.w + 2 * winMap) * s), h: Math.round((rect.h + 2 * winMap) * s),
+        w: Math.round((z.w + 2 * winMap) * s), h: Math.round((z.h + 2 * winMap) * s),
       };
-      const f = Math.min(1, tw / (rect.w * s)); // reduced px per composite px
+      const f = Math.min(1, tw / (z.w * s)); // reduced px per composite px
       const rw = Math.max(24, Math.round(reg.w * f));
       const rh = Math.max(24, Math.round(reg.h * f));
       const ec = canvasOf(rw, rh);
@@ -471,7 +478,7 @@ export class Explored {
       if (E.n < 40) return [];
       const sat = summedArea(E.m, rw, rh);
 
-      const pw = Math.round(rect.w * s * f), ph = Math.round(rect.h * s * f);
+      const pw = Math.round(z.w * s * f), ph = Math.round(z.h * s * f);
       if (pw < 12 || ph < 12) return [];
       const nc = canvasOf(pw, ph);
       const nx = nc.getContext('2d', { willReadFrequently: true });
@@ -494,6 +501,12 @@ export class Explored {
       const by = Math.round((center.y * s - reg.y) * f);
       const R = Math.max(2, Math.round(winMap * s * f));
 
+      // How much existing map has to sit under the footprint before `cover`
+      // is worth believing. Deliberately absolute — a share of the FOOTPRINT,
+      // floored — so it doesn't move with how much brand-new ground the
+      // screenshot happens to add.
+      const EV = Math.max(50, pw * ph * 0.008);
+
       // Scan outward from the drop in rings rather than row by row: a good
       // score found near the middle prunes most of the outer ground, and when
       // two spots tie the nearer one is already the incumbent.
@@ -506,16 +519,20 @@ export class Explored {
       // footprint.
       const found = [];
       const sep = Math.max(3, Math.round(pw * 0.3));
-      let top = 0;                               // best score so far
+      let topJ = 0;                              // best Jaccard so far (prune only)
       const consider = (dx, dy) => {
         const ox = bx + dx, oy = by + dy;
-        // Upper bound on this offset's score, from four table lookups: the
-        // overlap can't exceed the existing content under the footprint, so
-        // score <= ecnt / N.n. Empty ground is rejected without touching a
-        // single point, which is most of a wide window on a sparse map. The
-        // half leaves room for the runners-up to still be recorded.
+        // Four table lookups say how much existing content is under the
+        // footprint at all. Empty ground is rejected without touching a
+        // single point, which is most of a wide window on a sparse map.
         const ecnt = satSum(sat, rw, rh, ox, oy, pw, ph);
-        if (ecnt <= top * N.n * (topK > 1 ? 0.5 : 1)) return;
+        if (ecnt < EV * 0.15) return;
+        // The Jaccard bound (score <= ecnt / N.n) prunes the rest, but
+        // LOOSELY. A correct fit whose screenshot is mostly ground the map
+        // hasn't got yet scores low on Jaccard by construction, so the tight
+        // bound this used to apply threw away exactly the placements the
+        // search is here to find.
+        if (ecnt <= topJ * N.n * 0.25) return;
         let inter = 0;
         for (let i = 0; i < px.length; i++) {
           const X = px[i] + ox, Y = py[i] + oy;
@@ -525,18 +542,41 @@ export class Explored {
         if (!inter) return;
         const est = inter * back;
         const score = est / (N.n + ecnt - est);
-        if (score > top) top = score;
+        if (score > topJ) topJ = score;
+        // How much of the map that IS under the footprint got matched —
+        // recall against the existing composite, and nothing else. Jaccard
+        // alone falls with the overlap AREA, so a correct match that only
+        // clips the existing map scores no better than junk in a dense
+        // region; this asks "of what was there to agree with, how much
+        // agreed" and stays high however much brand-new ground the
+        // screenshot brings with it.
+        //
+        // Dividing by `ecnt` alone is what makes it safe: measuring against
+        // the SHOT's content instead (min(N.n, ecnt)) turns any saturated
+        // patch of map into a perfect match, because nearly every point of
+        // the shot lands on something lit. Here a dense patch inflates the
+        // denominator and scores badly, which is the whole point.
+        const cover = Math.min(1, est / Math.max(1, ecnt));
+        // Evidence-weighted cover — the ranking signal. `cover` is what says
+        // "this fits", and it holds up however much new ground the shot adds;
+        // but it also climbs as the overlap shrinks, so a sliver of map that
+        // happens to agree would win outright. The saturating evidence term
+        // discounts exactly those and leaves a real overlap untouched.
+        const evidence = Math.min(1, ecnt / EV);
         const cand = {
-          score, f, ox, oy, x: (ox / f + reg.x) / s, y: (oy / f + reg.y) / s,
-          // How much of the map that IS under the footprint got matched.
-          // Jaccard alone falls with the overlap area, so a correct match
-          // that only clips the existing map scores no better than junk in
-          // a dense region; this says "of what was there to agree with, how
-          // much agreed" and stays high whenever the fit is right.
-          cover: est / Math.min(N.n, Math.max(1, ecnt)),
+          score, f, ox, oy, w: z.w, h: z.h,
+          x: (ox / f + reg.x) / s, y: (oy / f + reg.y) / s,
+          cover, evidence, fit: cover * evidence,
           overlap: Math.min(ecnt, N.n) / N.n,
         };
-        // one entry per neighbourhood — keep the best of each
+        // one entry per neighbourhood — keep the best of each.
+        //
+        // Ranking stays on the overlap score. `cover` is the better question
+        // to ask of ONE candidate ("did this fit?"), but it is a poor way to
+        // choose BETWEEN them: it climbs as the overlap shrinks, so whichever
+        // candidate hangs furthest off the edge of the map tends to win it.
+        // The score's weakness — it sags when the screenshot brings a lot of
+        // new ground — is handled where it belongs, at the accept gate.
         const near = found.find(c => Math.abs(c.ox - ox) < sep && Math.abs(c.oy - oy) < sep);
         if (near) {
           if (score > near.score) Object.assign(near, cand);
@@ -562,53 +602,79 @@ export class Explored {
     // One step up in resolution is enough to separate candidates; only the
     // survivor is worth taking all the way down to single pixels.
     const step = (c, tw, pts) =>
-      c.f >= 1 ? c : (pass(tw, { x: c.x, y: c.y }, 2 / (c.f * s), pts)[0] || c);
+      c.f >= 1 ? c
+        : (pass({ w: c.w, h: c.h }, tw, { x: c.x, y: c.y }, 2 / (c.f * s), pts)[0] || c);
 
-    // A proper local search around where the user put it, at a resolution
-    // that can actually judge — not the coarse sweep's verdict on it. They
-    // aimed deliberately, so the answer is usually within a nudge of the
-    // drop, and an 84px-wide template is far too blunt to confirm that: on a
-    // wide screenshot whose overlap with the map is a small strip, the
-    // correct spot doesn't reliably surface in the sweep at all. Costs almost
-    // nothing — the window is a fraction of the screenshot either way.
-    const localWin = Math.max(60, Math.max(rect.w, rect.h) * 0.16);
-    const local = pass(240, { x: rect.x, y: rect.y }, localWin, 600, 3);
+    // One candidate size, searched properly: a fine local look around the
+    // drop, at a resolution that can actually judge — not the coarse sweep's
+    // verdict on it. The user aimed deliberately, so the answer is usually
+    // within a nudge of the drop, and an 84px-wide template is far too blunt
+    // to confirm that: on a wide screenshot whose overlap with the map is a
+    // small strip, the correct spot doesn't reliably surface in the sweep at
+    // all. Then the wide sweep, for when the drop really is a long way off.
+    const atSize = z => {
+      const org = originAt(z);
+      const localWin = Math.max(60, Math.max(z.w, z.h) * 0.16);
+      const local = pass(z, 240, org, localWin, 600, 3);
+      const coarse = pass(z, 84, org, padPx, 300, 8);
+      return [...local, ...coarse.map(c => step(c, 240, 600))];
+    };
 
-    // ...and the wide sweep, for when the drop really is a long way off
-    const coarse = pass(84, { x: rect.x, y: rect.y }, padPx, 300, 8);
+    // With no ladder this is exactly the old translation-only search: one
+    // size, the one the user set.
+    const ladder = scales && scales.length ? scales : [1];
+    const judged = [];
+    for (const k of ladder) judged.push(...atSize(sizeAt(k)));
+    const usable = judged.filter(c => c && c.fit !== undefined);
+    if (!usable.length) return null;
 
-    const judged = [...local, ...coarse.map(c => step(c, 240, 600))]
-      .filter(c => c && c.score !== undefined);
-    if (!judged.length) return null;
+    // Rank on the overlap score — see the note in `consider` for why cover
+    // can't choose between candidates even though it judges one well.
+    const pick = pool => {
+      const top = Math.max(...pool.map(c => c.score));
+      // Among fits that are all about as good, keep the one nearest to what
+      // the user actually did — same place, same size. Placing it right and
+      // having it jump somewhere else is the worst thing this can do, and
+      // repetitive map corridors make near-ties common; a genuinely better
+      // spot still wins, since it has to be only slightly worse than the best
+      // to count as a tie at all.
+      const dev = c =>
+        Math.hypot(c.x + c.w / 2 - c0.x, c.y + c.h / 2 - c0.y) / Math.max(1, rect.w)
+        + Math.abs(Math.log(c.w / rect.w)) * 2;
+      return pool.filter(c => c.score >= top * 0.85).sort((a, b) => dev(a) - dev(b))[0];
+    };
 
-    // Rank on the overlap score, NOT on `cover`: cover rises as the overlap
-    // shrinks (a sliver that agrees perfectly scores ~0.95, a full correct fit
-    // ~0.85), so ranking by it hands the win to whichever candidate sits
-    // furthest off the map. Cover earns its keep as the accept gate instead,
-    // where the comparison is against a fixed bar rather than between
-    // candidates (see alignAccepted in app.js).
-    const solid = judged.filter(r => r.score >= 0.03);
-    const pool = solid.length ? solid : judged;
-    const top = Math.max(...pool.map(r => r.score));
-    // Among fits that are all about as good, keep the one nearest to where it
-    // was dropped. Placing it right and having it jump somewhere else is the
-    // worst thing this can do, and repetitive map corridors make near-ties
-    // common; a genuinely better spot still wins, since it has to be only
-    // slightly worse than the best to count as a tie at all.
-    const dist = c => Math.hypot(c.x - rect.x, c.y - rect.y);
-    let best = pool.filter(r => r.score >= top * 0.85).sort((a, b) => dist(a) - dist(b))[0];
+    let best = pick(usable);
+
+    // With resizing on, settle the SIZE finely once the neighbourhood is
+    // known: the ladder above is deliberately coarse, and the last couple of
+    // percent of scale is the difference between a seam and a blur.
+    if (ladder.length > 1) {
+      const around = [];
+      for (const k of [0.97, 0.985, 1.015, 1.03]) {
+        const z = { w: best.w * k, h: best.h * k };
+        const win = Math.max(30, Math.max(z.w, z.h) * 0.05);
+        const org = { x: best.x + (best.w - z.w) / 2, y: best.y + (best.h - z.h) / 2 };
+        around.push(...pass(z, 240, org, win, 600, 1));
+      }
+      const fine = [best, ...around].filter(c => c && c.fit !== undefined);
+      if (fine.length) best = pick(fine);
+    }
 
     best = step(best, 620, 600);
     best = step(best, Infinity, 600);
     return {
-      x: best.x, y: best.y, w: rect.w, h: rect.h,
-      score: best.score, cover: best.cover, overlap: best.overlap,
+      x: best.x, y: best.y, w: best.w, h: best.h,
+      score: best.score, cover: best.cover, evidence: best.evidence,
+      fit: best.fit, overlap: best.overlap, scale: best.w / rect.w,
       // what else was in the running — this call is hard to reason about
       // from the outside, and the choice between candidates is where it goes
       // wrong when it goes wrong
-      cands: judged.map(c => ({
+      cands: usable.map(c => ({
         dx: Math.round(c.x - rect.x), dy: Math.round(c.y - rect.y),
-        score: +c.score.toFixed(3), cover: +c.cover.toFixed(3), overlap: +c.overlap.toFixed(2),
+        k: +(c.w / rect.w).toFixed(3),
+        score: +c.score.toFixed(3), cover: +c.cover.toFixed(3),
+        ev: +c.evidence.toFixed(2), fit: +c.fit.toFixed(3),
       })),
     };
   }
