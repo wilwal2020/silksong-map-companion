@@ -1407,7 +1407,15 @@ function renderPinsGhost(riding, rect) {
 // alignments at 0.73. Correct fits across those pairs run 0.73-0.87 — down to
 // 16% overlap, where the rest of the screenshot is newly explored ground with
 // nothing to match against — while wrong answers sat at 0.14-0.25 (0.585 for
-// one pathological sliver). 0.64 clears both sides.
+// one pathological sliver). 0.64 cleared both sides.
+//
+// Now 0.50, deliberately below that. Those numbers came from Silksong, where
+// the reference matcher supplies the offsets; hand-placed pastes in a custom
+// game are a harder case that the calibration never saw, and it was refusing
+// alignments that were visibly right. The cost is real and known: the one
+// pathological sliver that scored 0.585 would now be let through. That is the
+// trade — a wrong answer costs a single Ctrl+Z, a refusal costs the whole
+// point of the button.
 //
 // The raw overlap score can't make this call on its own — it falls with the
 // overlap AREA, so a correct fit that mostly covers new ground scores no
@@ -1423,8 +1431,12 @@ function renderPinsGhost(riding, rect) {
 // close enough to it that the extra margin mostly rejects good alignments,
 // while a wrong one costs a single Ctrl+Z (and near-ties already keep the
 // placement the user made).
+// the one place the bar is written down — the refusal message quotes it, and
+// a message that disagrees with the check is worse than no message
+const ALIGN_MIN_COVER = 0.5;
+
 function alignAccepted(r) {
-  return !!r && r.cover >= 0.64 && (r.score >= 0.03 || r.evidence >= 0.5);
+  return !!r && r.cover >= ALIGN_MIN_COVER && (r.score >= 0.03 || r.evidence >= 0.5);
 }
 
 // Why it refused, in words. A bare "couldn't line it up" leaves you guessing
@@ -1434,9 +1446,9 @@ function alignAccepted(r) {
 function alignRefusal(r) {
   if (!r) return 'there is nothing on the map near it to compare against';
   const pct = n => Math.round(n * 100) + '%';
-  if (r.cover < 0.64) {
+  if (r.cover < ALIGN_MIN_COVER) {
     return `the closest fit only matched ${pct(r.cover)} of the map underneath `
-      + '(it wants 64%), so it is probably not the right spot';
+      + `(it wants ${pct(ALIGN_MIN_COVER)}), so it is probably not the right spot`;
   }
   return `there was too little map under it to be sure — ${pct(r.evidence)} `
     + 'of the overlap it wants, and too small a share of the screenshot to judge by';
