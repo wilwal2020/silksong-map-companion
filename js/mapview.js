@@ -633,7 +633,7 @@ export class MapView {
         // Shift+scroll is the FINE resize: a very small nudge per notch, so
         // corner-dragging does the big scaling and the wheel dials in the
         // last percent or two. Much gentler than the map-zoom factor below.
-        const fine = Math.exp(-e.deltaY * 0.00018);
+        const fine = Math.exp(-e.deltaY * 0.0001);
         this.scalePlacement(fine, { x: e.clientX, y: e.clientY });
       } else {
         const factor = Math.exp(-e.deltaY * 0.0012);
