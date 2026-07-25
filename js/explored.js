@@ -605,6 +605,40 @@ export class Explored {
       c.f >= 1 ? c
         : (pass({ w: c.w, h: c.h }, tw, { x: c.x, y: c.y }, 2 / (c.f * s), pts)[0] || c);
 
+    // Weigh candidate SIZES against each other on the same footing.
+    //
+    // Every measure taken inside `pass` is computed at that candidate's own
+    // resolution — the template is always ~240px wide, whatever patch of map
+    // it stands for — which makes those numbers useless for comparing sizes.
+    // A footprint small enough to sit wholly inside the revealed patch
+    // explains everything under it and scores a perfect `cover`, so when the
+    // screenshot brings a lot of new ground the search happily shrinks it
+    // onto the one patch it can explain and abandons the right answer.
+    //
+    // This re-measures a candidate at a FIXED resolution in map pixels, and
+    // reports `mass`: how much existing map it actually accounts for. A
+    // shrunken footprint explains less of it, so it can no longer win by
+    // covering less ground perfectly.
+    const fm = Math.min(1, 240 / (rect.w * s));   // reduced px per composite px
+    const measure = c => {
+      const rw = Math.max(8, Math.round(c.w * s * fm));
+      const rh = Math.max(8, Math.round(c.h * s * fm));
+      const ec = canvasOf(rw, rh);
+      const ex = ec.getContext('2d', { willReadFrequently: true });
+      ex.imageSmoothingEnabled = true;
+      ex.drawImage(this.canvas, Math.round(c.x * s), Math.round(c.y * s),
+        Math.round(c.w * s), Math.round(c.h * s), 0, 0, rw, rh);
+      const E = contrastMask(ec);
+      const nc = canvasOf(rw, rh);
+      const nx = nc.getContext('2d', { willReadFrequently: true });
+      nx.imageSmoothingEnabled = true;
+      nx.drawImage(bmp, 0, 0, rw, rh);
+      const N = contrastMask(nc);
+      let inter = 0;
+      for (let p = 0; p < E.m.length; p++) if (E.m[p] && N.m[p]) inter++;
+      return { mass: inter, cover: E.n ? Math.min(1, inter / E.n) : 0 };
+    };
+
     // One candidate size, searched properly: a fine local look around the
     // drop, at a resolution that can actually judge — not the coarse sweep's
     // verdict on it. The user aimed deliberately, so the answer is usually
@@ -626,11 +660,11 @@ export class Explored {
     // Where: the overlap score. Cover would hand it to whichever candidate
     // hangs furthest off the edge of the map (see the note in `consider`).
     //
-    // What size: cover, weighted by evidence. The overlap score cannot
-    // compare sizes at all — a smaller footprint is drawn from a smaller
-    // patch of composite, so its content comes out magnified and over-lit
-    // and the score climbs for reasons that have nothing to do with fitting.
-    // Ranked by score, the search reliably picks the smallest size offered.
+    // What size: how much existing map the candidate explains, re-measured at
+    // one fixed resolution (see `measure`). Neither the overlap score nor
+    // cover can compare sizes — both are computed at the candidate's own
+    // resolution, so a smaller footprint comes out magnified and flatters
+    // itself.
     const dist = c => Math.hypot(c.x + c.w / 2 - c0.x, c.y + c.h / 2 - c0.y);
     // Among positions that are all about as good, keep the one nearest to
     // where it was dropped: placing it right and having it jump somewhere
@@ -642,15 +676,21 @@ export class Explored {
       const top = Math.max(...pool.map(c => c.score));
       return pool.filter(c => c.score >= top * 0.85).sort((a, b) => dist(a) - dist(b))[0];
     };
-    // The size term is deliberately gentle — it breaks a genuine tie in
-    // favour of the size you set, nothing more. Weighted any harder it would
-    // pin the answer to that size and the ladder would be for show.
+    // Sizes are judged on how much map they explain, but only among those
+    // that actually fit where they sit — otherwise the biggest footprint
+    // would win every time just by swallowing more ground. The preference
+    // for the size you set is deliberately gentle: it breaks a genuine tie
+    // and nothing more, or the ladder would be for show.
     const pickSize = pool => {
       if (!pool.length) return null;
-      const top = Math.max(...pool.map(c => c.fit));
-      const dev = c => Math.abs(Math.log(c.w / rect.w)) * 0.25
-        + dist(c) / Math.max(1, rect.w);
-      return pool.filter(c => c.fit >= top * 0.95).sort((a, b) => dev(a) - dev(b))[0];
+      const rated = pool.map(c => ({ c, m: measure(c) }));
+      const fits = rated.filter(r => r.m.cover >= 0.55);
+      const use = fits.length ? fits : rated;
+      const top = Math.max(...use.map(r => r.m.mass));
+      if (top <= 0) return use[0].c;
+      const dev = r => Math.abs(Math.log(r.c.w / rect.w)) * 0.25
+        + dist(r.c) / Math.max(1, rect.w);
+      return use.filter(r => r.m.mass >= top * 0.9).sort((a, b) => dev(a) - dev(b))[0].c;
     };
 
     // With no ladder this is exactly the old translation-only search: one
@@ -671,9 +711,11 @@ export class Explored {
       for (const k of ladder) {
         const z = sizeAt(k);
         const c = pickPos(pass(z, 120, originAt(z), padPx, 300, 3));
-        if (c) probes.push({ k, fit: c.fit });
+        // ranked the same way sizes are ranked later — by how much map they
+        // explain at a fixed resolution, never by the pass's own numbers
+        if (c) probes.push({ k, mass: measure(c).mass });
       }
-      probes.sort((a, b) => b.fit - a.fit);
+      probes.sort((a, b) => b.mass - a.mass);
       const keep = new Set(probes.slice(0, 4).map(p => p.k));
       keep.add(1);              // the size you set always gets a proper run
       // Stage 2: the real search, at the few sizes that look promising.
