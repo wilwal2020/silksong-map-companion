@@ -796,6 +796,12 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
   color: var(--text); padding: 9px 11px; font: inherit; font-size: .9rem;
 }
 .cattype-field input[type="text"]:focus { outline: none; border-color: var(--accent); }
+#cattype-reuse-field { margin-bottom: 12px; }
+#cattype-reuse {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 9px 11px; font: inherit; font-size: .9rem; cursor: pointer;
+}
+#cattype-reuse:focus { outline: none; border-color: var(--accent); }
 #cattype-icon { flex: none; width: 62px; text-align: center; font-size: 1.1rem; }
 #cattype-color {
   width: 46px; height: 40px; padding: 2px; cursor: pointer;

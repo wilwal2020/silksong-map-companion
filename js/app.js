@@ -1927,6 +1927,47 @@ function wireCatRow(row, id) {
 let catTypeEditing = null;     // id of the custom type being edited, or null
 let catTypeCreatedCb = null;   // set by the pin editor to receive a new type
 
+// Pin types you defined in your OTHER games, deduped, so a new type can start
+// from one you already made instead of rebuilding it by hand. Held here so the
+// reuse dropdown's option indices map back to real types.
+let reusableTypes = [];
+async function collectReusableTypes() {
+  const seen = new Set();
+  const out = [];
+  for (const g of allGames()) {
+    if (g.id === game.id) continue;
+    let cats;
+    try { cats = await store.getMetaForGame(g.id, 'customCats'); } catch { cats = null; }
+    if (!Array.isArray(cats)) continue;
+    for (const c of cats) {
+      if (!c || !c.label) continue;
+      // same icon + name + colour from two games is one entry, not two
+      const sig = `${c.icon || ''}|${c.label}|${c.color || ''}`.toLowerCase();
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      out.push({ icon: c.icon || '📌', label: c.label, color: c.color || '#e0c37e', from: g.name });
+    }
+  }
+  out.sort((a, b) => a.label.localeCompare(b.label));
+  return out;
+}
+
+// fill (and reveal) the reuse dropdown — only when creating, and only if
+// another game actually has types to borrow. Runs after the dialog is up so
+// the read from storage never delays it opening.
+async function populateReuse() {
+  const field = $('#cattype-reuse-field');
+  const sel = $('#cattype-reuse');
+  reusableTypes = catTypeEditing ? [] : await collectReusableTypes();
+  if (!reusableTypes.length) { field.hidden = true; return; }
+  sel.innerHTML = '<option value="">Start from scratch…</option>'
+    + reusableTypes.map((t, i) =>
+        `<option value="${i}">${escapeHtml(t.icon)} ${escapeHtml(t.label)} — ${escapeHtml(t.from)}</option>`
+      ).join('');
+  sel.value = '';
+  field.hidden = false;
+}
+
 function openCatTypeDialog() {
   catTypeEditing = null;
   $('#cattype-title').textContent = 'New pin type';
@@ -1934,8 +1975,10 @@ function openCatTypeDialog() {
   $('#cattype-icon').value = '';
   $('#cattype-label').value = '';
   $('#cattype-color').value = '#e0c37e';
+  $('#cattype-reuse-field').hidden = true;   // stays hidden until populated
   $('#dlg-cattype').showModal();
   $('#cattype-label').focus();
+  populateReuse();
 }
 
 function editCustomType(id) {
@@ -1943,6 +1986,7 @@ function editCustomType(id) {
   catTypeEditing = id;
   $('#cattype-title').textContent = 'Edit pin type';
   $('#btn-cattype-save').textContent = 'Save changes';
+  $('#cattype-reuse-field').hidden = true;   // reuse is for new types only
   $('#cattype-icon').value = c.icon || '';
   $('#cattype-label').value = c.label || '';
   $('#cattype-color').value = c.color || '#e0c37e';
@@ -2269,6 +2313,16 @@ function buildToolbar() {
   wireOpacitySlider();
   $('#btn-cattype-save').addEventListener('click', saveCatType);
   $('#btn-cattype-cancel').addEventListener('click', () => { catTypeCreatedCb = null; closeDialog('#dlg-cattype'); });
+  // picking a type from another game just prefills the fields — you still
+  // hit Create, and can tweak the icon/name/colour first
+  $('#cattype-reuse').addEventListener('change', e => {
+    const t = reusableTypes[Number(e.target.value)];
+    if (!t) return;
+    $('#cattype-icon').value = t.icon;
+    $('#cattype-label').value = t.label;
+    $('#cattype-color').value = t.color;
+    $('#cattype-label').focus();
+  });
   $('#dlg-cattype').addEventListener('cancel', e => { e.preventDefault(); catTypeCreatedCb = null; closeDialog('#dlg-cattype'); });
   $('#cattype-label').addEventListener('keydown', e => { if (e.key === 'Enter') saveCatType(); });
 

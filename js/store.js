@@ -77,6 +77,12 @@ export const store = {
 
   getMeta(key) { return read('meta', s => s.get(scoped(key))); },
   putMeta(key, val) { return tx('meta', 'readwrite', s => s.put(val, scoped(key))); },
+  // read a meta value belonging to some OTHER game (not the open one) — used
+  // to reuse pin types you defined elsewhere. Same scoping rule as `scoped`.
+  getMetaForGame(id, key) {
+    const raw = (!id || id === BUILTIN_GAME_ID) ? key : `g:${id}:${key}`;
+    return read('meta', s => s.get(raw));
+  },
   // only this game's keys — another game's save (and the app-wide game list)
   // must survive a reset
   async clearMeta() {

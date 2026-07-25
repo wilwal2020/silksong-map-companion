@@ -629,12 +629,14 @@ export class MapView {
 
     c.addEventListener('wheel', e => {
       e.preventDefault();
-      const factor = Math.exp(-e.deltaY * 0.0012);
       if (this.placement && !this.placement.locked && (e.shiftKey || e.altKey)) {
-        // Shift+scroll resizes the screenshot around the cursor; a plain
-        // scroll keeps zooming the map, so the view never gets stuck
-        this.scalePlacement(factor, { x: e.clientX, y: e.clientY });
+        // Shift+scroll is the FINE resize: a very small nudge per notch, so
+        // corner-dragging does the big scaling and the wheel dials in the
+        // last percent or two. Much gentler than the map-zoom factor below.
+        const fine = Math.exp(-e.deltaY * 0.00018);
+        this.scalePlacement(fine, { x: e.clientX, y: e.clientY });
       } else {
+        const factor = Math.exp(-e.deltaY * 0.0012);
         const ns = Math.min(this.maxScale, Math.max(this.minScale, this.scale * factor));
         const k = ns / this.scale;
         this.ox = e.clientX - (e.clientX - this.ox) * k;
