@@ -1434,10 +1434,13 @@ function alignAccepted(r) {
 // toggle on the align toolbar).
 let alignCanScale = false;
 
-// Sizes to try, as multiples of the size you set. Coarse on purpose — the
-// winner's scale is then settled finely inside autoAlign — and centred on 1
-// so leaving the size alone stays the natural answer.
-const ALIGN_SCALES = [0.75, 0.83, 0.91, 1, 1.1, 1.2, 1.32];
+// Sizes to try, as multiples of the size you set: half to double, in even
+// geometric steps. Wide on purpose — a game that lets you change the map
+// zoom changes it in big steps, so "a bit off" is the wrong assumption — and
+// coarse on purpose, since autoAlign probes these cheaply and then settles
+// the winner's size finely. Centred on 1 so leaving the size alone stays the
+// natural answer.
+const ALIGN_SCALES = [0.5, 0.58, 0.67, 0.77, 0.88, 1, 1.15, 1.32, 1.52, 1.74, 2];
 
 function setAlignCanScale(on) {
   alignCanScale = !!on;

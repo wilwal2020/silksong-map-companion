@@ -620,45 +620,101 @@ export class Explored {
       return [...local, ...coarse.map(c => step(c, 240, 600))];
     };
 
+    // Choosing WHERE at a fixed size and choosing WHAT SIZE are different
+    // questions, and the same number cannot answer both.
+    //
+    // Where: the overlap score. Cover would hand it to whichever candidate
+    // hangs furthest off the edge of the map (see the note in `consider`).
+    //
+    // What size: cover, weighted by evidence. The overlap score cannot
+    // compare sizes at all — a smaller footprint is drawn from a smaller
+    // patch of composite, so its content comes out magnified and over-lit
+    // and the score climbs for reasons that have nothing to do with fitting.
+    // Ranked by score, the search reliably picks the smallest size offered.
+    const dist = c => Math.hypot(c.x + c.w / 2 - c0.x, c.y + c.h / 2 - c0.y);
+    // Among positions that are all about as good, keep the one nearest to
+    // where it was dropped: placing it right and having it jump somewhere
+    // else is the worst thing this can do, and repetitive map corridors make
+    // near-ties common. A genuinely better spot still wins, since it has to
+    // be only slightly worse than the best to count as a tie at all.
+    const pickPos = pool => {
+      if (!pool.length) return null;
+      const top = Math.max(...pool.map(c => c.score));
+      return pool.filter(c => c.score >= top * 0.85).sort((a, b) => dist(a) - dist(b))[0];
+    };
+    // The size term is deliberately gentle — it breaks a genuine tie in
+    // favour of the size you set, nothing more. Weighted any harder it would
+    // pin the answer to that size and the ladder would be for show.
+    const pickSize = pool => {
+      if (!pool.length) return null;
+      const top = Math.max(...pool.map(c => c.fit));
+      const dev = c => Math.abs(Math.log(c.w / rect.w)) * 0.25
+        + dist(c) / Math.max(1, rect.w);
+      return pool.filter(c => c.fit >= top * 0.95).sort((a, b) => dev(a) - dev(b))[0];
+    };
+
     // With no ladder this is exactly the old translation-only search: one
     // size, the one the user set.
     const ladder = scales && scales.length ? scales : [1];
     const judged = [];
-    for (const k of ladder) judged.push(...atSize(sizeAt(k)));
-    const usable = judged.filter(c => c && c.fit !== undefined);
-    if (!usable.length) return null;
-
-    // Rank on the overlap score — see the note in `consider` for why cover
-    // can't choose between candidates even though it judges one well.
-    const pick = pool => {
-      const top = Math.max(...pool.map(c => c.score));
-      // Among fits that are all about as good, keep the one nearest to what
-      // the user actually did — same place, same size. Placing it right and
-      // having it jump somewhere else is the worst thing this can do, and
-      // repetitive map corridors make near-ties common; a genuinely better
-      // spot still wins, since it has to be only slightly worse than the best
-      // to count as a tie at all.
-      const dev = c =>
-        Math.hypot(c.x + c.w / 2 - c0.x, c.y + c.h / 2 - c0.y) / Math.max(1, rect.w)
-        + Math.abs(Math.log(c.w / rect.w)) * 2;
-      return pool.filter(c => c.score >= top * 0.85).sort((a, b) => dev(a) - dev(b))[0];
-    };
-
-    let best = pick(usable);
-
-    // With resizing on, settle the SIZE finely once the neighbourhood is
-    // known: the ladder above is deliberately coarse, and the last couple of
-    // percent of scale is the difference between a seam and a blur.
+    let best = null;
     if (ladder.length > 1) {
-      const around = [];
-      for (const k of [0.97, 0.985, 1.015, 1.03]) {
-        const z = { w: best.w * k, h: best.h * k };
-        const win = Math.max(30, Math.max(z.w, z.h) * 0.05);
-        const org = { x: best.x + (best.w - z.w) / 2, y: best.y + (best.h - z.h) / 2 };
-        around.push(...pass(z, 240, org, win, 600, 1));
+      // Two stages, because running the full search at every rung is what
+      // makes a WIDE ladder unaffordable — and a wide ladder is the whole
+      // point. A game that lets you change the map zoom changes it in big
+      // steps, so the answer is regularly half or double the size you set,
+      // not a few percent off it.
+      //
+      // Stage 1: a cheap small-template probe at every size, only to find
+      // which sizes are worth a proper look.
+      const probes = [];
+      for (const k of ladder) {
+        const z = sizeAt(k);
+        const c = pickPos(pass(z, 120, originAt(z), padPx, 300, 3));
+        if (c) probes.push({ k, fit: c.fit });
       }
-      const fine = [best, ...around].filter(c => c && c.fit !== undefined);
-      if (fine.length) best = pick(fine);
+      probes.sort((a, b) => b.fit - a.fit);
+      const keep = new Set(probes.slice(0, 4).map(p => p.k));
+      keep.add(1);              // the size you set always gets a proper run
+      // Stage 2: the real search, at the few sizes that look promising.
+      const winners = [];
+      for (const k of keep) {
+        const all = atSize(sizeAt(k));
+        judged.push(...all);
+        const wnr = pickPos(all.filter(c => c && c.fit !== undefined));
+        if (wnr) winners.push(wnr);
+      }
+      best = pickSize(winners);
+    } else {
+      judged.push(...atSize(sizeAt(1)));
+      best = pickPos(judged.filter(c => c && c.fit !== undefined));
+    }
+    const usable = judged.filter(c => c && c.fit !== undefined);
+    if (!best) return null;
+
+    // Now climb to the right size at full resolution. The first bracket is
+    // wide on purpose: the stage-1 probe is cheap and its ranking of sizes is
+    // rough, so the rung that was actually right is regularly not among the
+    // ones it kept — starting narrow would strand the search next to the
+    // answer. Later rounds close in on the last couple of percent, which is
+    // the difference between a seam and a blur.
+    if (ladder.length > 1) {
+      const rounds = [
+        { ks: [0.8, 0.89, 1.13, 1.25], win: 0.12 },
+        { ks: [0.93, 0.965, 1.036, 1.075], win: 0.07 },
+        { ks: [0.97, 0.985, 1.015, 1.03], win: 0.05 },
+      ];
+      for (const { ks, win } of rounds) {
+        const around = [best];
+        for (const k of ks) {
+          const z = { w: best.w * k, h: best.h * k };
+          const wm = Math.max(30, Math.max(z.w, z.h) * win);
+          const org = { x: best.x + (best.w - z.w) / 2, y: best.y + (best.h - z.h) / 2 };
+          around.push(...pass(z, 240, org, wm, 600, 1));
+        }
+        const b2 = pickSize(around.filter(c => c && c.fit !== undefined));
+        if (b2) best = b2;
+      }
     }
 
     best = step(best, 620, 600);
