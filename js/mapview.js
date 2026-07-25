@@ -634,16 +634,17 @@ export class MapView {
         // corner-dragging does the big scaling and the wheel dials in the
         // last percent or two.
         //
-        // deltaY's SIZE can't be used for this. One notch is 100 in some
-        // browsers, 120 in others, and 3 "lines" in others again — scaling by
-        // the raw number is what made a notch come out a little over 1%. So
-        // anything big enough to be a real notch counts as exactly one,
-        // whatever it measures, and only trackpad-sized fragments (which
-        // arrive many to a swipe) are taken proportionally.
-        const d = e.deltaY;
-        const notches = e.deltaMode === 0
-          ? (Math.abs(d) >= 40 ? Math.sign(d) : d / 40)
-          : Math.sign(d);
+        // Getting "one notch" right is fiddlier than it looks. A notch is not
+        // one event: with high-resolution wheels the browser splits it into
+        // two or three smaller ones a millisecond apart, so counting events
+        // gives two or three times the step. Nor is it a fixed number —
+        // Windows sends 120 per notch, some setups 100, and Firefox reports
+        // 3 "lines" instead of pixels.
+        //
+        // Staying proportional handles the split (the pieces of one notch add
+        // up to it); dividing by the platform's real notch size handles the
+        // rest.
+        const notches = e.deltaY / (e.deltaMode === 0 ? 120 : 3);
         this.scalePlacement(Math.pow(1.01, -notches), { x: e.clientX, y: e.clientY });
       } else {
         const factor = Math.exp(-e.deltaY * 0.0012);
