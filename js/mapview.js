@@ -147,6 +147,7 @@ export class MapView {
   setPlacement(p) {
     this.placement = p;
     this.canvas.classList.toggle('placing', !!p);
+    if (!p) this.canvas.classList.remove('over-placement', 'corner-nwse', 'corner-nesw');
     if (p && this.onPlacementChanged) this.onPlacementChanged(this.placementRect());
     this.requestRender();
   }
@@ -187,6 +188,43 @@ export class MapView {
     p.x = a.x + (p.x - a.x) * k;
     p.y = a.y + (p.y - a.y) * k;
     p.w = Math.max(30, p.w * k);
+    this._placementChanged();
+  }
+
+  // Which corner of the placement is this screen point on, if any? Returns
+  // { cx, cy } with each 0 (left/top) or 1 (right/bottom), or null. The grab
+  // radius is in screen pixels, so a corner is equally easy to catch however
+  // far the map is zoomed.
+  _placementCornerAt(px, py, radius = 14) {
+    const p = this.placement;
+    if (!p || p.locked) return null;
+    const h = p.w * (p.img.height / p.img.width);
+    let best = null, bestD = radius * radius;
+    for (const cx of [0, 1]) for (const cy of [0, 1]) {
+      const s = this.mapToScreen(p.x + cx * p.w, p.y + cy * h);
+      const d = (s.x - px) ** 2 + (s.y - py) ** 2;
+      if (d <= bestD) { bestD = d; best = { cx, cy }; }
+    }
+    return best;
+  }
+
+  // Drag a corner to resize. The opposite corner stays pinned and the image's
+  // aspect ratio is kept, so the box always reaches the cursor along whichever
+  // axis is furthest out.
+  resizePlacementCorner(corner, screenPt) {
+    const p = this.placement;
+    if (!p || p.locked) return;
+    const asp = p.img.width / p.img.height;           // width per height
+    const h = p.w * (p.img.height / p.img.width);
+    // the pinned corner: opposite the one being dragged
+    const anchor = { x: p.x + (corner.cx ? 0 : p.w), y: p.y + (corner.cy ? 0 : h) };
+    const m = this.screenToMap(screenPt.x, screenPt.y);
+    let w = Math.max(Math.abs(m.x - anchor.x), Math.abs(m.y - anchor.y) * asp);
+    w = Math.max(30, w);
+    const nh = w / asp;
+    p.w = w;
+    p.x = corner.cx ? anchor.x : anchor.x - w;
+    p.y = corner.cy ? anchor.y : anchor.y - nh;
     this._placementChanged();
   }
 
@@ -478,20 +516,21 @@ export class MapView {
       ctx.strokeStyle = '#e0c37e';
       ctx.lineWidth = 2 / this.scale;
       ctx.strokeRect(p.x, p.y, p.w, h);
-      // corner ticks — they read as "grab me" and make small misalignments
-      // against the existing map easy to eyeball
-      const t = Math.min(p.w, h) * 0.09;
-      ctx.lineWidth = 3.5 / this.scale;
-      ctx.beginPath();
-      for (const [cx, cy, sx, sy] of [
-        [p.x, p.y, 1, 1], [p.x + p.w, p.y, -1, 1],
-        [p.x, p.y + h, 1, -1], [p.x + p.w, p.y + h, -1, -1],
-      ]) {
-        ctx.moveTo(cx + sx * t, cy);
-        ctx.lineTo(cx, cy);
-        ctx.lineTo(cx, cy + sy * t);
+      // corner handles — drag one to resize. Sized in screen pixels (via
+      // /scale) so they stay grabbable however far the map is zoomed, and
+      // never grow to swallow a small placement.
+      if (!p.locked) {
+        const r = 5 / this.scale;
+        ctx.fillStyle = '#e0c37e';
+        ctx.strokeStyle = 'rgba(12, 16, 22, 0.85)';
+        ctx.lineWidth = 1.5 / this.scale;
+        for (const cx of [0, 1]) for (const cy of [0, 1]) {
+          ctx.beginPath();
+          ctx.rect(p.x + cx * p.w - r, p.y + cy * h - r, r * 2, r * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
       }
-      ctx.stroke();
     }
 
     if (this.lasso) this._drawLasso(ctx);
@@ -509,7 +548,7 @@ export class MapView {
 
   _attachInput() {
     const c = this.canvas;
-    let dragging = false, movingPlacement = false, lastX = 0, lastY = 0;
+    let dragging = false, movingPlacement = false, resizingCorner = null, lastX = 0, lastY = 0;
 
     c.addEventListener('pointerdown', e => {
       // drawing a lasso takes over the drag entirely — no panning, no moving
@@ -521,13 +560,20 @@ export class MapView {
         return;
       }
       dragging = true;
-      // dragging ON the screenshot moves it; dragging anywhere else still
-      // pans the map, so you can always look around mid-placement
-      movingPlacement = this._overPlacement(e.clientX, e.clientY);
-      if (movingPlacement) this._beginEdit('drag'); // the whole drag is one step
+      // grabbing a corner resizes; dragging the body moves it; dragging
+      // anywhere else still pans the map, so you can look around mid-placement
+      resizingCorner = this.placement ? this._placementCornerAt(e.clientX, e.clientY) : null;
+      if (resizingCorner) {
+        this._beginEdit('resize'); // the whole corner-drag is one undo step
+        movingPlacement = false;
+      } else {
+        movingPlacement = this._overPlacement(e.clientX, e.clientY);
+        if (movingPlacement) this._beginEdit('drag'); // the whole drag is one step
+      }
       lastX = e.clientX; lastY = e.clientY;
       c.setPointerCapture(e.pointerId);
-      c.classList.add('panning');
+      // keep the resize cursor through a corner-drag; otherwise show grabbing
+      if (!resizingCorner) c.classList.add('panning');
     });
 
     c.addEventListener('pointermove', e => {
@@ -543,8 +589,20 @@ export class MapView {
         return;
       }
       if (!dragging) {
-        // cursor tells you which of the two drags you'd get
-        if (this.placement) c.classList.toggle('over-placement', this._overPlacement(e.clientX, e.clientY));
+        // cursor tells you which drag you'd get: a corner resize, or a move
+        if (this.placement) {
+          const corner = this._placementCornerAt(e.clientX, e.clientY);
+          // opposite corners share a diagonal, so ↘ and ↖ read the same way
+          const nwse = corner && corner.cx === corner.cy;
+          c.classList.toggle('corner-nwse', !!corner && nwse);
+          c.classList.toggle('corner-nesw', !!corner && !nwse);
+          c.classList.toggle('over-placement', !corner && this._overPlacement(e.clientX, e.clientY));
+        }
+        return;
+      }
+      if (resizingCorner) {
+        this.resizePlacementCorner(resizingCorner, { x: e.clientX, y: e.clientY });
+        lastX = e.clientX; lastY = e.clientY;
         return;
       }
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
@@ -563,6 +621,7 @@ export class MapView {
       if (this.lasso && this.lasso.drawing) { this._finishLasso(); return; }
       dragging = false;
       movingPlacement = false;
+      resizingCorner = null;
       c.classList.remove('panning');
     };
     c.addEventListener('pointerup', endDrag);

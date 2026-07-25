@@ -1013,8 +1013,6 @@ async function handleFullMap(blob) {
 // Icons for the floating align toolbar — a compact icon-forward set, so the
 // controls read at a glance without a wall of instructions.
 const TOOL_SVG = {
-  minus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/></svg>',
-  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   diff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="12" height="12" rx="1.5"/><rect x="8.5" y="8.5" width="12" height="12" rx="1.5" fill="currentColor" fill-opacity=".22"/></svg>',
   align: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
@@ -1181,22 +1179,16 @@ function positionPaste(bitmap, rect, {
       // one map pixel per press, on the map's own pixel grid — the finest
       // step that can actually land the screenshot exactly
       if (nudge) { e.preventDefault(); view.nudgePlacement(nudge[0], nudge[1]); return; }
-      else if (resizable && (e.key === '+' || e.key === '=')) { e.preventDefault(); view.scalePlacement(1.02); }
-      else if (resizable && (e.key === '-' || e.key === '_')) { e.preventDefault(); view.scalePlacement(1 / 1.02); }
       else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); $('#pt-diff')?.click(); }
       else if (deletable && (e.key === 'Delete')) { e.preventDefault(); e.stopPropagation(); finish('delete'); }
     };
     document.addEventListener('keydown', onKey, true);
 
-    // groups: [resize] · [align aids] · [confirm], each shown only when useful
+    // groups: [size readout] · [align aids] · [confirm], each shown when useful.
+    // Resizing is done by dragging the screenshot's corners; this is just the
+    // live percentage so you can see how big it's getting.
     const groups = [];
-    if (resizable) {
-      groups.push([
-        { icon: TOOL_SVG.minus, title: 'Smaller (Shift+scroll, or −)', fn: () => view.scalePlacement(1 / 1.04) },
-        { size: true },
-        { icon: TOOL_SVG.plus, title: 'Bigger (Shift+scroll, or +)', fn: () => view.scalePlacement(1.04) },
-      ]);
-    }
+    if (resizable) groups.push([{ size: true }]);
     // the alignment aids need something already on the map to align to
     if (aids) {
       groups.push([

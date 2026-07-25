@@ -937,6 +937,8 @@ body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !importa
 
 #map-canvas.placing { cursor: grab; }
 #map-canvas.placing.over-placement { cursor: move; }
+#map-canvas.placing.corner-nwse { cursor: nwse-resize; }
+#map-canvas.placing.corner-nesw { cursor: nesw-resize; }
 #map-canvas.placing.panning { cursor: grabbing; }
 
 /* floating align toolbar — hovers just above the screenshot being placed and
