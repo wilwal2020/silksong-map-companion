@@ -1427,6 +1427,21 @@ function alignAccepted(r) {
   return !!r && r.cover >= 0.64 && (r.score >= 0.03 || r.evidence >= 0.5);
 }
 
+// Why it refused, in words. A bare "couldn't line it up" leaves you guessing
+// between "move it closer", "there is nothing here to match" and "it looked
+// but disagreed" — which are three different things to do next, and the
+// numbers already know which one it was.
+function alignRefusal(r) {
+  if (!r) return 'there is nothing on the map near it to compare against';
+  const pct = n => Math.round(n * 100) + '%';
+  if (r.cover < 0.64) {
+    return `the closest fit only matched ${pct(r.cover)} of the map underneath `
+      + '(it wants 64%), so it is probably not the right spot';
+  }
+  return `there was too little map under it to be sure — ${pct(r.evidence)} `
+    + 'of the overlap it wants, and too small a share of the screenshot to judge by';
+}
+
 // May auto-align change the SIZE as well as the position? Off by default:
 // most games have one map zoom, so every screenshot is already the right
 // size and searching sizes only costs time and invites a wrong answer. Games
@@ -1469,7 +1484,19 @@ function runAutoAlign() {
     spinner(false);
     console.log('[map] auto-align:', r);
     if (!alignAccepted(r)) {
-      toast("Couldn't find anything here to line it up with — place it by eye, or move it closer first.", 'error');
+      // one compact line, easy to copy out of the console when it gets this
+      // wrong and the reason isn't obvious from the map
+      if (r) {
+        console.log('[map] auto-align REFUSED: ' + JSON.stringify({
+          cover: +r.cover.toFixed(3), evidence: +r.evidence.toFixed(3),
+          score: +r.score.toFixed(4), scale: +r.scale.toFixed(3),
+          movedPx: Math.round(Math.hypot(r.x - rect.x, r.y - rect.y)),
+          shot: [Math.round(rect.w), Math.round(rect.h)],
+          scaling, cands: (r.cands || []).slice(0, 6),
+        }));
+      }
+      toast(`Couldn't line it up — ${alignRefusal(r)}. `
+        + 'Try moving it closer to where it belongs, or place it by eye.', 'error');
       return;
     }
     view.setPlacementRect(r);
