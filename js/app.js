@@ -1129,6 +1129,9 @@ function positionPaste(bitmap, rect, {
   return new Promise(resolve => {
     placeBaseWidth = bitmap.width;
     placementMoveCb = onMove;
+    // no pin cards popping open while you're dragging a screenshot over them
+    const hoverWas = pins.suppressHover;
+    pins.suppressHover = true;
     view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w, mask });
 
     // Ctrl+Z steps back through where the screenshot has been: each drag,
@@ -1155,6 +1158,7 @@ function positionPaste(bitmap, rect, {
       document.removeEventListener('keydown', onKey, true);
       view.onPlacementEdit = null;
       placementMoveCb = null;
+      pins.suppressHover = hoverWas;
       const r = view.placementRect();
       view.setPlacement(null);
       hidePlaceTools();
