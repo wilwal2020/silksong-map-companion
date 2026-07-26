@@ -1037,6 +1037,33 @@ body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !importa
 .pt-split.merged .pt-split-side { opacity: .26; }
 .pt-split.merged:hover { background: #222939; }
 
+/* the settle-on-it panel: a setting that belongs to the button but isn't
+   wanted often enough to spend toolbar width on */
+.pt-split { position: relative; }
+.pt-pop {
+  position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+  margin-bottom: 9px; width: 268px; padding: 11px 13px 12px;
+  background: rgba(14,17,23,.98); border: 1px solid var(--border-strong);
+  border-radius: 11px; box-shadow: 0 14px 34px rgba(0,0,0,.62);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity .14s, visibility .14s;
+  z-index: 2;
+}
+/* a transparent lip across the gap, so reaching for the panel never leaves
+   the button and closes it on the way */
+.pt-pop::after {
+  content: ''; position: absolute; top: 100%; left: 0; right: 0; height: 11px;
+}
+.pt-split.pop-open .pt-pop { opacity: 1; visibility: visible; pointer-events: auto; }
+.pt-pop-title { font-size: .78rem; color: var(--text-dim); margin-bottom: 7px; }
+.pt-pop-row { display: flex; align-items: center; gap: 10px; }
+.pt-pop-row input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; }
+.pt-pop-val {
+  min-width: 40px; text-align: right; font-size: .86rem; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.pt-pop-hint { margin-top: 8px; font-size: .72rem; line-height: 1.45; color: var(--text-dim); }
+
 @media (prefers-reduced-motion: reduce) { #place-tools { animation: none; } }
 
 /* the step bar: the whole hand-placement flow lives here, docked low so it

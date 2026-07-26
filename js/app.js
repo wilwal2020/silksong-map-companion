@@ -1044,6 +1044,25 @@ function showPlaceTools(groups) {
         wrap.appendChild(part(a.left, 'pt-split-side'));
         wrap.appendChild(part(a.main, 'pt-split-main'));
         wrap.appendChild(part(a.right, 'pt-split-side'));
+        // A setting that belongs to this button but isn't wanted often enough
+        // to spend toolbar width on: rest on the button for a moment and it
+        // appears. It hangs off the button in the DOM as well as on screen, so
+        // reaching for it never counts as leaving the button.
+        if (a.panel) {
+          const pop = document.createElement('div');
+          pop.className = 'pt-pop';
+          pop.appendChild(a.panel());
+          wrap.appendChild(pop);
+          let timer = null;
+          wrap.addEventListener('pointerenter', () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => wrap.classList.add('pop-open'), 900);
+          });
+          wrap.addEventListener('pointerleave', () => {
+            clearTimeout(timer);
+            wrap.classList.remove('pop-open');
+          });
+        }
         g.appendChild(wrap);
         continue;
       }
@@ -1239,6 +1258,7 @@ function positionPaste(bitmap, rect, {
               main: { icon: TOOL_SVG.align, label: 'Auto-align', title: plain, fn: () => runAutoAlign(0) },
               right: side(TOOL_SVG.up,
                 'Auto-align, trying bigger sizes only — for a screenshot that is too small'),
+              panel: buildMatchBar,
             };
           })(),
         ];
@@ -1485,12 +1505,54 @@ function renderPinsGhost(riding, rect) {
 // close enough to it that the extra margin mostly rejects good alignments,
 // while a wrong one costs a single Ctrl+Z (and near-ties already keep the
 // placement the user made).
-// the one place the bar is written down — the refusal message quotes it, and
-// a message that disagrees with the check is worse than no message
-const ALIGN_MIN_COVER = 0.5;
+// The one place the bar is written down — the refusal message quotes it, and a
+// message that disagrees with the check is worse than no message. Adjustable
+// (the slider behind the Auto-align button) and remembered per game, because
+// how much of a screenshot overlaps what is already down is a fact about the
+// game's map, not a universal one: 50% suits most, a map of long thin
+// corridors wants less, a dense one can afford more.
+const ALIGN_MIN_COVER_DEFAULT = 0.5;
+let alignMinCover = ALIGN_MIN_COVER_DEFAULT;
+
+function setAlignMinCover(v) {
+  alignMinCover = Math.min(0.95, Math.max(0.2, v));
+  store.putMeta('alignMinCover', alignMinCover);
+}
+
+// The slider that hides behind the Auto-align button. Says what the number
+// means in both directions, because "50%" on its own tells you nothing about
+// which way to move it when a placement you know is right keeps being refused.
+function buildMatchBar() {
+  const box = document.createElement('div');
+  const title = document.createElement('div');
+  title.className = 'pt-pop-title';
+  title.textContent = 'Accept a fit that matches';
+
+  const row = document.createElement('div');
+  row.className = 'pt-pop-row';
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = '20'; input.max = '95'; input.step = '5';
+  input.value = String(Math.round(alignMinCover * 100));
+  input.setAttribute('aria-label', 'Match threshold');
+  const val = document.createElement('span');
+  val.className = 'pt-pop-val';
+  const show = () => { val.textContent = input.value + '%'; };
+  show();
+  input.addEventListener('input', () => { show(); setAlignMinCover(input.value / 100); });
+  row.append(input, val);
+
+  const hint = document.createElement('div');
+  hint.className = 'pt-pop-hint';
+  hint.textContent = 'of the map under it. Lower it when placements you know are '
+    + 'right get refused; raise it if it snaps to the wrong spot.';
+
+  box.append(title, row, hint);
+  return box;
+}
 
 function alignAccepted(r) {
-  return !!r && r.cover >= ALIGN_MIN_COVER && (r.score >= 0.03 || r.evidence >= 0.5);
+  return !!r && r.cover >= alignMinCover && (r.score >= 0.03 || r.evidence >= 0.5);
 }
 
 // Why it refused, in words. A bare "couldn't line it up" leaves you guessing
@@ -1500,9 +1562,9 @@ function alignAccepted(r) {
 function alignRefusal(r) {
   if (!r) return 'there is nothing on the map near it to compare against';
   const pct = n => Math.round(n * 100) + '%';
-  if (r.cover < ALIGN_MIN_COVER) {
+  if (r.cover < alignMinCover) {
     return `the closest fit only matched ${pct(r.cover)} of the map underneath `
-      + `(it wants ${pct(ALIGN_MIN_COVER)}), so it is probably not the right spot`;
+      + `(it wants ${pct(alignMinCover)}), so it is probably not the right spot`;
   }
   return `there was too little map under it to be sure — ${pct(r.evidence)} `
     + 'of the overlap it wants, and too small a share of the screenshot to judge by';
@@ -2724,6 +2786,8 @@ async function init() {
   // "keep" meant resizing was allowed
   const savedMode = await store.getMeta('alignSizeMode');
   alignCanScale = savedMode ? savedMode !== 'keep' : !!(await store.getMeta('alignScale'));
+  const savedBar = await store.getMeta('alignMinCover');
+  if (typeof savedBar === 'number') alignMinCover = savedBar;
   const savedFog = await store.getMeta('fog');
   if (savedFog) await explored.loadFromBlob(savedFog);
   const savedHeld = await store.getMeta('heldShot');
