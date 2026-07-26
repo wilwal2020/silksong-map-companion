@@ -835,10 +835,26 @@ export class Explored {
 
     best = step(best, 620, 600);
     best = step(best, Infinity, 600);
+
+    // ...and then settle the last pixel on the pixels themselves. The mask
+    // search cannot see this far; `polish` compares the two pictures directly
+    // and keeps whichever nudge comes out darkest where they overlap. The
+    // do-nothing candidate is in its search, so it can only ever agree with
+    // what is already here or improve on it.
+    let tuned = null;
+    try {
+      tuned = this.polish(bmp, { x: best.x, y: best.y, w: best.w, h: best.h });
+    } catch { tuned = null; }
+    const out = tuned || best;
+
     return {
-      x: best.x, y: best.y, w: best.w, h: best.h,
+      x: out.x, y: out.y, w: out.w, h: out.h,
       score: best.score, cover: best.cover, evidence: best.evidence,
-      fit: best.fit, overlap: best.overlap, scale: best.w / rect.w,
+      fit: best.fit, overlap: best.overlap, scale: out.w / rect.w,
+      // what the final pixel-level pass changed, if anything
+      polish: tuned
+        ? { dx: tuned.dx, dy: tuned.dy, k: tuned.k, diff: +tuned.diff.toFixed(2) }
+        : null,
       // what else was in the running — this call is hard to reason about
       // from the outside, and the choice between candidates is where it goes
       // wrong when it goes wrong
@@ -849,6 +865,85 @@ export class Explored {
         ev: +c.evidence.toFixed(2), fit: +c.fit.toFixed(3),
       })),
     };
+  }
+
+  // Final polish, on the ACTUAL PIXELS rather than a contrast mask.
+  //
+  // Everything before this matches structure: outlines reduced to black and
+  // white, which is what makes the search robust enough to find a screenshot
+  // anywhere on the map. It is also blunt — a mask pixel counts the same
+  // whether the line under it is dead on or a pixel out, so the answer comes
+  // back right to about a pixel and stops there. That last pixel is the
+  // difference between a seam you can see and one you can't.
+  //
+  // So this asks the question the Difference view asks: slide it a little each
+  // way, squeeze it by a hair, and keep whichever version comes out darkest
+  // where the two overlap. Only where the composite actually has something —
+  // ground the screenshot is the first to see has nothing to be wrong against,
+  // and counting it would just reward sliding off into the dark.
+  polish(bitmap, rect, { reach = 2, scales = [1, 0.996, 0.998, 1.002, 1.004] } = {}) {
+    const s = this.scale;
+    const R = Math.max(1, Math.round(reach * s));
+    const fw = Math.round(rect.w * s), fh = Math.round(rect.h * s);
+    if (fw < 24 || fh < 24) return null;
+
+    // Sample a bounded number of points, spread over the whole footprint. Full
+    // resolution matters here — this is a sub-pixel question and downscaling
+    // would blur away the very thing being measured — so it is the COUNT that
+    // is capped, not the size.
+    const WANT = 20000;
+    const stride = Math.max(1, Math.round(Math.sqrt((fw * fh) / WANT)));
+
+    let best = null;
+    for (const k of scales) {
+      const kw = Math.round(fw * k), kh = Math.round(fh * k);
+      if (kw < 24 || kh < 24) continue;
+      // keep the centre still, so a scale tweak doesn't smuggle in a shift
+      const kx = Math.round(rect.x * s + (fw - kw) / 2);
+      const ky = Math.round(rect.y * s + (fh - kh) / 2);
+
+      const sc = canvasOf(kw, kh);
+      const sx = sc.getContext('2d', { willReadFrequently: true });
+      sx.imageSmoothingEnabled = true;
+      sx.drawImage(bitmap, 0, 0, kw, kh);
+      const S = sx.getImageData(0, 0, kw, kh).data;
+
+      // the composite once per scale, over the footprint plus the search reach
+      const ec = canvasOf(kw + 2 * R, kh + 2 * R);
+      const ex = ec.getContext('2d', { willReadFrequently: true });
+      ex.drawImage(this.canvas, kx - R, ky - R, kw + 2 * R, kh + 2 * R,
+        0, 0, kw + 2 * R, kh + 2 * R);
+      const E = ex.getImageData(0, 0, kw + 2 * R, kh + 2 * R).data;
+      const EW = kw + 2 * R;
+
+      for (let dy = -R; dy <= R; dy++) {
+        for (let dx = -R; dx <= R; dx++) {
+          let wsum = 0, dsum = 0;
+          for (let y = 0; y < kh; y += stride) {
+            const erow = (y + R + dy) * EW + R + dx;
+            const srow = y * kw;
+            for (let x = 0; x < kw; x += stride) {
+              const ei = (erow + x) * 4;
+              const a = E[ei + 3];
+              if (a < 24) continue;              // nothing there to be wrong against
+              const si = (srow + x) * 4;
+              if (S[si + 3] < 24) continue;
+              const el = E[ei] * 0.299 + E[ei + 1] * 0.587 + E[ei + 2] * 0.114;
+              const sl = S[si] * 0.299 + S[si + 1] * 0.587 + S[si + 2] * 0.114;
+              const w = a / 255;                 // faded rim pixels count for less
+              wsum += w;
+              dsum += w * Math.abs(el - sl);
+            }
+          }
+          if (wsum < 200) continue;              // too little overlap to judge by
+          const diff = dsum / wsum;
+          if (!best || diff < best.diff) {
+            best = { diff, dx, dy, k, x: (kx + dx) / s, y: (ky + dy) / s, w: kw / s, h: kh / s };
+          }
+        }
+      }
+    }
+    return best;
   }
 
   // Lift the part of the composite inside a map-coordinate polygon: hand it
