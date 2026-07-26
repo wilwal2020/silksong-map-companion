@@ -193,7 +193,9 @@ html, body {
 
 .pin-card .pc-img { position: relative; background: #000; }
 /* natural aspect so the whole screenshot shows (no crop); tall shots capped */
-.pin-card .pc-img img.env { display: block; width: 100%; height: auto; max-height: 62vh; object-fit: contain; cursor: zoom-in; transition: opacity .16s; }
+/* a first guess only: pins.js replaces this with the exact height that keeps
+   the whole card on screen, as soon as the card is positioned */
+.pin-card .pc-img img.env { display: block; width: 100%; height: auto; max-height: 80vh; object-fit: contain; cursor: zoom-in; transition: opacity .16s; }
 /* remove-picture ✕ (top-right of the image): hover dims the picture, and it
    takes two clicks to confirm; a spelled-out hint shows once armed */
 .pin-card .pc-del-img {
@@ -908,15 +910,23 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 
 /* Pasted before the pin it belongs to exists (you photographed the place,
    then remembered to open the map). It parks here until the next pin. */
+/* the waiting picture sits low and centred, where the next thing you do is:
+   it is a prompt to paste your map screenshot, not a status badge to tuck in
+   a corner */
 #held-shot {
-  position: absolute; right: 16px; bottom: 20px; z-index: 24;
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  z-index: 24;
   display: flex; align-items: center; gap: 11px;
-  padding: 9px 11px 9px 9px; max-width: 320px;
+  padding: 9px 11px 9px 9px; max-width: min(320px, 92vw);
   background: rgba(12,14,19,.96); border: 1px solid var(--border-strong);
   border-left: 3px solid var(--accent); border-radius: 10px;
   box-shadow: var(--shadow);
-  animation: toast-in .3s cubic-bezier(.18,.9,.28,1.3);
+  animation: held-in .3s cubic-bezier(.18,.9,.28,1.3);
 }
+/* its own entrance, so the centring transform survives the animation */
+@keyframes held-in { from { opacity: 0; transform: translate(-50%, 12px) scale(.96); } }
+/* the paste hint lives in the same spot — step over it rather than on it */
+body.has-held #paste-hint { bottom: 96px; }
 #held-shot.hidden { display: none !important; }
 #held-shot-img {
   width: 58px; height: 44px; flex: none; object-fit: cover;

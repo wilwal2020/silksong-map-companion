@@ -6,6 +6,20 @@ import { categories, catById } from './categories.js';
 // re-export so existing importers keep working
 export { catById };
 
+// Where a hover card is allowed to sit: clear of the app toolbar at the top,
+// and a hair off every other edge.
+const CARD_TOP = 60, CARD_MARGIN = 12;
+
+// How tall the picture inside a card may be before the card would hang off the
+// bottom of the window. The deck and buttons below it don't scale with the
+// picture, so they come off the budget first. Both the zoom ceiling and the
+// card's own layout go through this, so a picture can never be the reason the
+// card doesn't fit — it gives up height instead.
+function imgRoom(card, img) {
+  const chrome = Math.max(0, card.offsetHeight - img.offsetHeight);
+  return Math.max(120, window.innerHeight - CARD_TOP - CARD_MARGIN - chrome);
+}
+
 // inline action-row icons (crisp at any size, currentColor-tinted)
 export const SVG = {
   check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.4l3.2 3.2L13 4.6"/></svg>',
@@ -478,11 +492,21 @@ export class PinManager {
     const p = this.view.mapToScreen(entry.data.x, entry.data.y);
     const card = entry.card;
     if (!card) return;
-    const w = card.offsetWidth || 320, margin = 12;
+    const margin = CARD_MARGIN;
+    // Give the picture only the height that leaves the card on screen. Without
+    // this a tall portrait shot overflowed the bottom at the card's NORMAL
+    // width, before any zooming — there was no size it could be clamped to,
+    // because the overflow was the picture's own aspect.
+    const env = card.querySelector('img.env');
+    if (env) env.style.maxHeight = imgRoom(card, env) + 'px';
+    const w = card.offsetWidth || 320, h = card.offsetHeight;
     let x = p.x + 18, y = p.y - 20;
-    if (x + w + margin > window.innerWidth) x = p.x - w - 24;
-    x = Math.max(margin, x);
-    y = Math.max(60, Math.min(y, window.innerHeight - card.offsetHeight - margin));
+    if (x + w + margin > window.innerWidth) x = p.x - w - 24;   // flip to the pin's left
+    // Then keep it on screen regardless. Flipping alone isn't enough once the
+    // card has been zoomed up: near an edge neither side has room for it, and
+    // this used to clamp only the left, so a wide card ran off to the right.
+    x = Math.max(margin, Math.min(x, window.innerWidth - w - margin));
+    y = Math.max(CARD_TOP, Math.min(y, window.innerHeight - h - margin));
     // position via left/top so `transform` stays free for the entrance pop,
     // and grow the card from the side nearest the pin
     card.style.left = x + 'px';
@@ -514,17 +538,35 @@ export class PinManager {
       img.title = 'Scroll to zoom · click to open';
       img.addEventListener('load', () => this._positionCard(entry));
       img.addEventListener('click', () => this.handlers.onLightbox(entry.imgUrl));
-      // scroll over the picture to enlarge it in place — the whole card grows
+      // Scroll over the picture to enlarge it in place — the whole card grows
       // with the image, so you can read detail without opening the lightbox.
-      // Clamped between the card's normal width and a viewport-bounded max; the
-      // card is repositioned as it grows so it can't run off the screen.
+      //
+      // The ceiling is whatever the window can actually hold, rather than a
+      // fixed 760px: the picture is the point of the card, so it should be
+      // able to fill the screen. Height is the binding constraint most of the
+      // time, and the deck and buttons below don't scale with the picture, so
+      // they come off the budget before what's left is turned back into a
+      // width through the image's own aspect.
       const BASE_W = 320;
       let zoomW = BASE_W;
+      const maxZoomW = () => {
+        const aspect = (img.naturalWidth && img.naturalHeight)
+          ? img.naturalWidth / img.naturalHeight : 16 / 9;
+        return Math.max(BASE_W, Math.min(
+          window.innerWidth - 2 * CARD_MARGIN,      // as wide as the window allows
+          imgRoom(card, img) * aspect));            // ...or as tall, whichever binds
+      };
       img.addEventListener('wheel', e => {
         e.preventDefault();
         e.stopPropagation();
-        const maxW = Math.min(760, window.innerWidth - 24);
-        zoomW = Math.max(BASE_W, Math.min(maxW, zoomW - e.deltaY * 0.6));
+        // a third bigger per notch, so two or three flicks fill the screen.
+        // The old step was a flat number of pixels per unit of delta, which
+        // crawled — and crawled relatively slower the bigger the picture got,
+        // exactly when you want it to move. Normalised the same way as the
+        // map's zoom, since one notch is 120 in some browsers, 3 "lines" in
+        // others, and split across several events on a high-resolution wheel.
+        const notches = e.deltaY / (e.deltaMode === 0 ? 120 : 3);
+        zoomW = Math.max(BASE_W, Math.min(maxZoomW(), zoomW * Math.pow(1.35, -notches)));
         card.style.width = zoomW + 'px';
         this._positionCard(entry);
       }, { passive: false });

@@ -1579,7 +1579,20 @@ function runAutoAlign(dir = 0) {
   setTimeout(() => {
     let r = null;
     try {
-      r = explored.autoAlign(p.img, rect, scales ? { scales } : {});
+      // Try the size you set FIRST, even when allowed to change it. A game's
+      // map zoom holds for a run of screenshots and only then changes, so the
+      // current size is usually still right — and settling for it is both far
+      // quicker and safer than searching sizes that cannot be wrong. Only when
+      // that comes back refused is the ladder worth the time.
+      //
+      // Not when a direction was asked for, though: pressing "smaller" says
+      // the size IS wrong, and taking a same-size answer would ignore you.
+      if (scales && dir === 0) {
+        r = explored.autoAlign(p.img, rect);
+        if (!alignAccepted(r)) r = explored.autoAlign(p.img, rect, { scales });
+      } else {
+        r = explored.autoAlign(p.img, rect, scales ? { scales } : {});
+      }
     } catch (e) {
       console.error(e);
     }
@@ -1641,7 +1654,13 @@ async function handleManualPlace(blob) {
     spinner(true, pasteScales ? 'Lining it up and sizing it…' : 'Lining it up with your map…');
     await new Promise(r => setTimeout(r, 30)); // let the spinner paint first
     try {
-      const r = explored.autoAlign(bitmap, start, pasteScales ? { scales: pasteScales } : {});
+      // the size it starts at is the size the last paste ended up, so it is
+      // usually still right — try it alone before searching sizes (see the
+      // same reasoning in runAutoAlign)
+      let r = explored.autoAlign(bitmap, start);
+      if (pasteScales && !alignAccepted(r)) {
+        r = explored.autoAlign(bitmap, start, { scales: pasteScales });
+      }
       console.log('[map] auto-align on paste:', r);
       // when it may resize, the size it found is part of the answer
       if (alignAccepted(r)) { start = { ...start, x: r.x, y: r.y, w: r.w, h: r.h }; snapped = true; }
@@ -1702,6 +1721,8 @@ let heldShot = null;      // { blob, url }
 function renderHeldShot() {
   const el = $('#held-shot');
   el.classList.toggle('hidden', !heldShot);
+  // it shares the bottom of the screen with the paste hint, which steps up
+  document.body.classList.toggle('has-held', !!heldShot);
   if (heldShot) $('#held-shot-img').src = heldShot.url;
 }
 
@@ -1764,6 +1785,17 @@ function routePaste(blob) {
     toast('Screenshot attached.', 'ok');
     return;
   }
+  // A picture is already parked waiting for its pin, and the message that
+  // parked it said to paste your map screenshot next — so this is that. Asking
+  // "what did you paste?" only to be told the same thing every time is a step
+  // for nothing. (To swap the waiting picture instead, throw it away first
+  // with its ✕ and the chooser comes back.)
+  if (heldShot) {
+    if (handPlaced()) handleManualPlace(blob);
+    else handleMapScreenshot(blob);
+    return;
+  }
+
   currentPaste = { blob, url: URL.createObjectURL(blob) };
   $('#paste-preview').src = currentPaste.url;
   $('#dlg-paste').showModal();
