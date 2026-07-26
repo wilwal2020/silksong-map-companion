@@ -1058,8 +1058,7 @@ function showPlaceTools(groups) {
           b.className = cls;
           if (spec.title) b.title = spec.title;
           b.innerHTML = (spec.icon || '') + (spec.label ? `<span>${spec.label}</span>` : '');
-          if (spec.disabled) b.disabled = true;
-          else b.addEventListener('click', spec.fn);
+          b.addEventListener('click', spec.fn);
           return b;
         };
         wrap.appendChild(part(a.left, 'pt-split-side'));
@@ -1238,31 +1237,30 @@ function positionPaste(bitmap, rect, {
           // the right, drawn joined because they are one function. Naming the
           // direction is worth doing whenever you can see which way the size
           // is wrong — it halves the sizes to search and rules out every
-          // answer that goes the wrong way. While Resize is off the sides
-          // have nothing to offer, so they fade back and the three merge into
-          // a single Auto-align button.
-          {
-            split: true, id: 'pt-align', merged: !resizable || !alignCanScale,
-            left: {
-              icon: TOOL_SVG.down, disabled: !resizable || !alignCanScale,
-              title: alignCanScale
-                ? 'Auto-align, trying smaller sizes only — for a screenshot that is too big'
-                : 'Turn on Resize to let auto-align try smaller sizes',
-              fn: () => runAutoAlign(-1),
-            },
-            main: {
-              icon: TOOL_SVG.align, label: 'Auto-align',
-              title: 'Snap it onto the screenshots already on the map',
-              fn: () => runAutoAlign(0),
-            },
-            right: {
-              icon: TOOL_SVG.up, disabled: !resizable || !alignCanScale,
-              title: alignCanScale
-                ? 'Auto-align, trying bigger sizes only — for a screenshot that is too small'
-                : 'Turn on Resize to let auto-align try bigger sizes',
-              fn: () => runAutoAlign(1),
-            },
-          },
+          // answer that goes the wrong way.
+          //
+          // With Resize off the sides have no direction to offer, so the three
+          // merge into a plain Auto-align button — but they stay the same size
+          // and stay pressable, and press the plain align. A control that
+          // moves under the cursor, or has dead corners, is worse than one
+          // that quietly does the obvious thing.
+          (() => {
+            const canDirect = resizable && alignCanScale;
+            const plain = 'Snap it onto the screenshots already on the map';
+            const side = (icon, aimed) => ({
+              icon,
+              title: canDirect ? aimed : `${plain} — turn on Resize to aim it smaller or bigger`,
+              fn: () => runAutoAlign(canDirect ? (icon === TOOL_SVG.down ? -1 : 1) : 0),
+            });
+            return {
+              split: true, id: 'pt-align', merged: !canDirect,
+              left: side(TOOL_SVG.down,
+                'Auto-align, trying smaller sizes only — for a screenshot that is too big'),
+              main: { icon: TOOL_SVG.align, label: 'Auto-align', title: plain, fn: () => runAutoAlign(0) },
+              right: side(TOOL_SVG.up,
+                'Auto-align, trying bigger sizes only — for a screenshot that is too small'),
+            };
+          })(),
         ];
         // Only worth offering on something that can be resized at all. Sticky
         // per game: whether the map zoom can change is a fact about the game,

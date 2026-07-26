@@ -993,36 +993,48 @@ body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !importa
    lean. */
 .pt-split {
   display: inline-flex; align-items: center;
-  border: 1px solid transparent; border-radius: 9px;
+  /* the frame is always there, not summoned by hover: the three only read as
+     one control if they are visibly held together while you are looking
+     somewhere else */
+  border: 1px solid var(--border); border-radius: 9px;
+  background: rgba(255,255,255,.035);
   transition: border-color .13s, background .13s;
 }
-.pt-split:hover { border-color: #2f3646; background: #161b26; }
+.pt-split:hover { border-color: #2f3646; }
 .pt-split-main, .pt-split-side {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 32px; background: transparent; border: 0; color: var(--text);
   font: inherit; font-size: .84rem; letter-spacing: .01em;
   cursor: pointer; white-space: nowrap;
-  transition: background .13s, color .13s, opacity .18s, width .18s, padding .18s;
+  transition: background .13s, color .13s, opacity .18s;
 }
-.pt-split-main { padding: 0 11px; border-radius: 8px; }
-.pt-split-side { width: 28px; padding: 0; border-radius: 8px; }
+/* the sides keep their width in both states — a control that resizes as you
+   toggle it makes the next thing along jump under the cursor */
+/* the dividers keep their 1px whether or not they are showing, so the control
+   is exactly as wide in both states */
+.pt-split-main {
+  padding: 0 11px; border-radius: 0;
+  border-left: 1px solid transparent; border-right: 1px solid transparent;
+}
+.pt-split-side { width: 28px; padding: 0; }
+.pt-split-side:first-child { border-radius: 8px 0 0 8px; }
+.pt-split-side:last-child { border-radius: 0 8px 8px 0; }
 .pt-split-main svg, .pt-split-side svg { width: 17px; height: 17px; flex: none; }
-.pt-split-main:hover, .pt-split-side:not(:disabled):hover { background: #222939; }
 .pt-split-main:active, .pt-split-side:active { transform: translateY(1px); }
 .pt-split button:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: -1px; }
-/* live: hairlines make the three read as one control with three parts */
+
+/* three jobs: hairline dividers, and each part lights on its own */
 .pt-split:not(.merged) .pt-split-main {
-  border-left: 1px solid var(--border); border-right: 1px solid var(--border);
-  border-radius: 0;
+  border-left-color: var(--border); border-right-color: var(--border);
 }
 .pt-split:not(.merged) .pt-split-side { color: var(--text-dim); }
-.pt-split:not(.merged) .pt-split-side:hover { color: var(--text); }
-/* merged: with Resize off the sides have nothing to offer, so they fade back,
-   the dividers go, and the whole thing reads as the plain button it now is */
-.pt-split.merged .pt-split-side {
-  opacity: .26; cursor: default; width: 22px;
-}
-.pt-split.merged .pt-split-side:active { transform: none; }
+.pt-split:not(.merged) .pt-split-main:hover,
+.pt-split:not(.merged) .pt-split-side:hover { background: #222939; color: var(--text); }
+
+/* one job: no dividers, the arrows fade to hints, and the whole control lights
+   as a unit — because all three of them press the same plain Auto-align */
+.pt-split.merged .pt-split-side { opacity: .26; }
+.pt-split.merged:hover { background: #222939; }
 
 @media (prefers-reduced-motion: reduce) { #place-tools { animation: none; } }
 
