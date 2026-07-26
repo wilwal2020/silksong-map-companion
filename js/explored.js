@@ -636,7 +636,17 @@ export class Explored {
       const N = contrastMask(nc);
       let inter = 0;
       for (let p = 0; p < E.m.length; p++) if (E.m[p] && N.m[p]) inter++;
-      return { mass: inter, cover: E.n ? Math.min(1, inter / E.n) : 0 };
+      // `jac` is the overlap score again, but taken HERE, at the fixed
+      // resolution — which is what makes it comparable between sizes when the
+      // one computed inside a pass is not. It is the balanced judge of "does
+      // this size agree": too big leaves screenshot content unexplained, too
+      // small leaves map content out, and both cost.
+      const union = N.n + E.n - inter;
+      return {
+        mass: inter,
+        cover: E.n ? Math.min(1, inter / E.n) : 0,
+        jac: union > 0 ? inter / union : 0,
+      };
     };
 
     // One candidate size, searched properly: a fine local look around the
@@ -684,8 +694,19 @@ export class Explored {
     const pickSize = pool => {
       if (!pool.length) return null;
       const rated = pool.map(c => ({ c, m: measure(c) }));
-      const fits = rated.filter(r => r.m.cover >= 0.55);
-      const use = fits.length ? fits : rated;
+      // Agreement is judged RELATIVELY, against the best on offer, not against
+      // a fixed bar. With a small overlap nothing reaches a fixed one, and
+      // falling back to ranking on `mass` alone hands it to the largest
+      // footprint every time — coincidental matches grow with area, so the
+      // biggest size wins on size. Sizes that agree materially worse than the
+      // best are out; among what is left, the one that explains the most map
+      // wins, which is what stops the search shrinking onto one patch.
+      //
+      // The gate is `jac`, not `cover`: cover only asks how much of the map
+      // was explained, which a too-large footprint can satisfy while leaving
+      // most of the screenshot hanging unmatched.
+      const bestJac = Math.max(...rated.map(r => r.m.jac));
+      const use = rated.filter(r => r.m.jac >= bestJac * 0.85);
       const top = Math.max(...use.map(r => r.m.mass));
       if (top <= 0) return use[0].c;
       const dev = r => Math.abs(Math.log(r.c.w / rect.w)) * 0.25
