@@ -988,28 +988,41 @@ body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !importa
   font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; user-select: none;
 }
 
-/* segmented picker — one sunken track holding mutually exclusive choices, so
-   it reads as a single setting rather than a row of buttons to press */
-.pt-seg {
-  display: inline-flex; align-items: center; gap: 2px;
-  height: 34px; padding: 2px 3px 2px 8px; border-radius: 9px;
-  background: rgba(0,0,0,.28); border: 1px solid var(--border);
+/* Auto-align, with a side to each hand: shrink left, grow right. Drawn as one
+   joined control because it is one function — the sides only say which way to
+   lean. */
+.pt-split {
+  display: inline-flex; align-items: center;
+  border: 1px solid transparent; border-radius: 9px;
+  transition: border-color .13s, background .13s;
 }
-.pt-seg-label {
-  font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--text-dim); user-select: none; margin-right: 5px;
+.pt-split:hover { border-color: #2f3646; background: #161b26; }
+.pt-split-main, .pt-split-side {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; background: transparent; border: 0; color: var(--text);
+  font: inherit; font-size: .84rem; letter-spacing: .01em;
+  cursor: pointer; white-space: nowrap;
+  transition: background .13s, color .13s, opacity .18s, width .18s, padding .18s;
 }
-.pt-seg-btn {
-  height: 26px; padding: 0 9px; border-radius: 7px;
-  background: transparent; border: 1px solid transparent; color: var(--text-dim);
-  font: inherit; font-size: .8rem; cursor: pointer; white-space: nowrap;
-  transition: background .13s, color .13s, border-color .13s;
+.pt-split-main { padding: 0 11px; border-radius: 8px; }
+.pt-split-side { width: 28px; padding: 0; border-radius: 8px; }
+.pt-split-main svg, .pt-split-side svg { width: 17px; height: 17px; flex: none; }
+.pt-split-main:hover, .pt-split-side:not(:disabled):hover { background: #222939; }
+.pt-split-main:active, .pt-split-side:active { transform: translateY(1px); }
+.pt-split button:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: -1px; }
+/* live: hairlines make the three read as one control with three parts */
+.pt-split:not(.merged) .pt-split-main {
+  border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+  border-radius: 0;
 }
-.pt-seg-btn:hover { background: #1c2230; color: var(--text); }
-.pt-seg-btn.on {
-  background: var(--accent-soft); border-color: var(--accent); color: var(--rose);
+.pt-split:not(.merged) .pt-split-side { color: var(--text-dim); }
+.pt-split:not(.merged) .pt-split-side:hover { color: var(--text); }
+/* merged: with Resize off the sides have nothing to offer, so they fade back,
+   the dividers go, and the whole thing reads as the plain button it now is */
+.pt-split.merged .pt-split-side {
+  opacity: .26; cursor: default; width: 22px;
 }
-.pt-seg-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 1px; }
+.pt-split.merged .pt-split-side:active { transform: none; }
 
 @media (prefers-reduced-motion: reduce) { #place-tools { animation: none; } }
 

@@ -1015,6 +1015,11 @@ async function handleFullMap(blob) {
 const TOOL_SVG = {
   diff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="12" height="12" rx="1.5"/><rect x="8.5" y="8.5" width="12" height="12" rx="1.5" fill="currentColor" fill-opacity=".22"/></svg>',
   align: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
+  // a double-headed diagonal — "auto-align may change the size too"
+  scale: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20L20 4"/><path d="M14 4h6v6"/><path d="M10 20H4v-6"/></svg>',
+  // the two sides of the align button — shrink it, or grow it
+  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>',
@@ -1038,28 +1043,28 @@ function showPlaceTools(groups) {
         g.appendChild(s);
         continue;
       }
-      // a segmented picker — one control, one choice, rather than a row of
-      // buttons that all look like each other and read as separate actions
-      if (a.seg) {
+      // A split button: one action with a side to either hand of it. They are
+      // drawn joined, because they ARE one thing — the sides only say which
+      // way to lean. `merged` drops the dividers and fades the sides, so when
+      // they have nothing to offer the whole control reads as the single
+      // button it then behaves as.
+      if (a.split) {
         const wrap = document.createElement('div');
-        wrap.className = 'pt-seg';
+        wrap.className = 'pt-split' + (a.merged ? ' merged' : '');
         if (a.id) wrap.id = a.id;
-        if (a.title) wrap.title = a.title;
-        if (a.label) {
-          const lab = document.createElement('span');
-          lab.className = 'pt-seg-label';
-          lab.textContent = a.label;
-          wrap.appendChild(lab);
-        }
-        for (const o of a.options) {
+        const part = (spec, cls) => {
           const b = document.createElement('button');
           b.type = 'button';
-          b.className = 'pt-seg-btn' + (o.value === a.value ? ' on' : '');
-          b.textContent = o.label;
-          if (o.title) b.title = o.title;
-          b.addEventListener('click', () => a.fn(o.value));
-          wrap.appendChild(b);
-        }
+          b.className = cls;
+          if (spec.title) b.title = spec.title;
+          b.innerHTML = (spec.icon || '') + (spec.label ? `<span>${spec.label}</span>` : '');
+          if (spec.disabled) b.disabled = true;
+          else b.addEventListener('click', spec.fn);
+          return b;
+        };
+        wrap.appendChild(part(a.left, 'pt-split-side'));
+        wrap.appendChild(part(a.main, 'pt-split-main'));
+        wrap.appendChild(part(a.right, 'pt-split-side'));
         g.appendChild(wrap);
         continue;
       }
@@ -1229,28 +1234,45 @@ function positionPaste(bitmap, rect, {
           { id: 'pt-diff', icon: TOOL_SVG.diff, label: 'Difference', active: !!view.placement?.diff,
             title: 'Compare against the map underneath — nudge until the overlap goes black (D)',
             fn: () => $('#pt-diff').classList.toggle('active', view.togglePlacementDiff()) },
-          { icon: TOOL_SVG.align, label: 'Auto-align',
-            title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign },
+          // Auto-align with a side to each hand: shrink on the left, grow on
+          // the right, drawn joined because they are one function. Naming the
+          // direction is worth doing whenever you can see which way the size
+          // is wrong — it halves the sizes to search and rules out every
+          // answer that goes the wrong way. While Resize is off the sides
+          // have nothing to offer, so they fade back and the three merge into
+          // a single Auto-align button.
+          {
+            split: true, id: 'pt-align', merged: !resizable || !alignCanScale,
+            left: {
+              icon: TOOL_SVG.down, disabled: !resizable || !alignCanScale,
+              title: alignCanScale
+                ? 'Auto-align, trying smaller sizes only — for a screenshot that is too big'
+                : 'Turn on Resize to let auto-align try smaller sizes',
+              fn: () => runAutoAlign(-1),
+            },
+            main: {
+              icon: TOOL_SVG.align, label: 'Auto-align',
+              title: 'Snap it onto the screenshots already on the map',
+              fn: () => runAutoAlign(0),
+            },
+            right: {
+              icon: TOOL_SVG.up, disabled: !resizable || !alignCanScale,
+              title: alignCanScale
+                ? 'Auto-align, trying bigger sizes only — for a screenshot that is too small'
+                : 'Turn on Resize to let auto-align try bigger sizes',
+              fn: () => runAutoAlign(1),
+            },
+          },
         ];
-        // What auto-align may do to the size. One picker, not a switch plus a
-        // row of arrows: these were never separate actions, only different
-        // permissions given to the same one. Sticky per game — whether the map
-        // zoom can change is a fact about the game, not about this one paste.
+        // Only worth offering on something that can be resized at all. Sticky
+        // per game: whether the map zoom can change is a fact about the game,
+        // not about this one paste.
         if (resizable) {
           aidGroup.push({
-            seg: true, id: 'pt-size', label: 'Size', value: alignSizeMode,
-            title: 'What auto-align may do to the size',
-            options: [
-              { value: 'keep', label: 'Keep',
-                title: 'Leave the size alone — right when every screenshot is at the same zoom, and the fastest' },
-              { value: 'any', label: 'Any',
-                title: 'Try sizes in both directions — slower; for games whose map zoom can change' },
-              { value: 'smaller', label: 'Smaller',
-                title: 'Only try smaller sizes — for a screenshot that is too big. Faster and surer than Any' },
-              { value: 'bigger', label: 'Bigger',
-                title: 'Only try bigger sizes — for a screenshot that is too small. Faster and surer than Any' },
-            ],
-            fn: setAlignSizeMode,
+            id: 'pt-scale', icon: TOOL_SVG.scale, active: alignCanScale,
+            title: 'Let auto-align resize it too — slower, for games whose map zoom can change. '
+              + 'Leave off when every screenshot is at the same zoom.',
+            fn: () => setAlignCanScale(!alignCanScale),
           });
         }
         groups.push(aidGroup);
@@ -1498,18 +1520,13 @@ function alignRefusal(r) {
     + 'of the overlap it wants, and too small a share of the screenshot to judge by';
 }
 
-// What auto-align may do to the SIZE — one setting rather than a switch and a
-// pair of buttons, because they were never separate actions: every one of them
-// is "auto-align", differing only in which sizes it is allowed to consider.
-//
-// 'keep' by default: most games have one map zoom, so every screenshot is
-// already the right size and searching sizes only costs time and invites a
-// wrong answer. Games whose map can be zoomed want one of the others, so it is
-// remembered per game. 'smaller'/'bigger' are worth reaching for whenever you
-// can see which way it is wrong — naming the direction halves the sizes to
-// search and rules out every answer that goes the wrong way.
-const ALIGN_SIZE_MODES = ['keep', 'any', 'smaller', 'bigger'];
-let alignSizeMode = 'keep';
+// May auto-align change the SIZE as well as the position? Off by default:
+// most games have one map zoom, so every screenshot is already the right size
+// and searching sizes only costs time and invites a wrong answer. Games whose
+// map can be zoomed need it, so it's a per-game switch (the Resize toggle).
+// While it is off the align button's two sides have nothing to offer and the
+// control merges into one plain button.
+let alignCanScale = false;
 
 // Sizes to try, as multiples of the size you set: half to double, in even
 // geometric steps. Wide on purpose — a game that lets you change the map
@@ -1531,18 +1548,18 @@ const ALIGN_SCALES = [0.5, 0.58, 0.67, 0.77, 0.88, 1, 1.15, 1.32, 1.52, 1.74, 2]
 const ALIGN_SCALES_DOWN = ALIGN_SCALES.filter(k => k <= 1).reverse();
 const ALIGN_SCALES_UP = ALIGN_SCALES.filter(k => k >= 1);
 
-// which sizes each mode is allowed to try (null = don't touch the size)
-function scalesForMode(mode) {
-  return mode === 'smaller' ? ALIGN_SCALES_DOWN
-    : mode === 'bigger' ? ALIGN_SCALES_UP
-    : mode === 'any' ? ALIGN_SCALES
-    : null;
+// which sizes a click is allowed to try (null = don't touch the size).
+// `dir`: -1 only smaller, +1 only bigger, 0 either way.
+function scalesForDir(dir) {
+  if (!alignCanScale) return null;
+  return dir < 0 ? ALIGN_SCALES_DOWN : dir > 0 ? ALIGN_SCALES_UP : ALIGN_SCALES;
 }
 
-function setAlignSizeMode(mode) {
-  alignSizeMode = ALIGN_SIZE_MODES.includes(mode) ? mode : 'keep';
-  store.putMeta('alignSizeMode', alignSizeMode);
-  if (rebuildPlaceTools) rebuildPlaceTools();   // repaint the chosen segment
+function setAlignCanScale(on) {
+  alignCanScale = !!on;
+  store.putMeta('alignScale', alignCanScale);
+  // the align button's sides light up or fade back with it
+  if (rebuildPlaceTools) rebuildPlaceTools();
 }
 
 // Image-only alignment against what's already pasted — no reference map, so
@@ -1550,17 +1567,16 @@ function setAlignSizeMode(mode) {
 // picker says; on 'keep' it only MOVES the placement, taking the size you set
 // as correct (one in-game zoom per game) and searching around where you
 // dropped it.
-function runAutoAlign() {
+function runAutoAlign(dir = 0) {
   const rect = view.placementRect();
   const p = view.placement;
   if (!rect || !p) return;
-  const mode = p.locked ? 'keep' : alignSizeMode;
-  const scales = scalesForMode(mode);
+  const scales = p.locked ? null : scalesForDir(dir);
   spinner(true,
-    mode === 'smaller' ? 'Lining it up, trying smaller sizes…'
-    : mode === 'bigger' ? 'Lining it up, trying bigger sizes…'
-    : mode === 'any' ? 'Lining it up and sizing it…'
-    : 'Lining it up with your map…');
+    !scales ? 'Lining it up with your map…'
+    : dir < 0 ? 'Lining it up, trying smaller sizes…'
+    : dir > 0 ? 'Lining it up, trying bigger sizes…'
+    : 'Lining it up and sizing it…');
   // let the spinner paint before the synchronous search blocks the thread
   setTimeout(() => {
     let r = null;
@@ -1580,7 +1596,7 @@ function runAutoAlign() {
           score: +r.score.toFixed(4), scale: +r.scale.toFixed(3),
           movedPx: Math.round(Math.hypot(r.x - rect.x, r.y - rect.y)),
           shot: [Math.round(rect.w), Math.round(rect.h)],
-          mode, cands: (r.cands || []).slice(0, 6),
+          dir, scaling: !!scales, cands: (r.cands || []).slice(0, 6),
         }));
       }
       toast(`Couldn't line it up — ${alignRefusal(r)}. `
@@ -1590,12 +1606,11 @@ function runAutoAlign() {
     view.setPlacementRect(r);
     const moved = Math.hypot(r.x - rect.x, r.y - rect.y);
     const resized = Math.abs(r.w - rect.w) > rect.w * 0.005;
-    const directed = mode === 'smaller' || mode === 'bigger';
     toast(
       resized ? `Lined up and resized to ${Math.round(r.w / rect.w * 100)}% of what you set.`
         // asked for a size change and it kept the size: say so, or it reads
         // as if the button did nothing
-        : directed ? `Lined up — no ${mode} size fitted better than this one.`
+        : dir ? `Lined up — no ${dir < 0 ? 'smaller' : 'bigger'} size fitted better than this one.`
         : moved < 0.6 ? 'Already lined up.'
         : 'Lined up with the map you already have.', 'ok');
   }, 30);
@@ -1624,7 +1639,7 @@ async function handleManualPlace(blob) {
   let snapped = false;
   const dropped = { ...start };   // where it landed before we moved it for them
   if (!explored.isBlank()) {
-    const pasteScales = scalesForMode(alignSizeMode);
+    const pasteScales = scalesForDir(0);   // no direction to go on yet
     spinner(true, pasteScales ? 'Lining it up and sizing it…' : 'Lining it up with your map…');
     await new Promise(r => setTimeout(r, 30)); // let the spinner paint first
     try {
@@ -2638,10 +2653,10 @@ async function init() {
   learnedScale = (await store.getMeta('scale')) || null;
   scaleTrusted = !!(await store.getMeta('scaleTrusted'));
   scaleSamples = (await store.getMeta('scaleSamples')) || [];
-  // `alignScale` was the old boolean switch; an existing "on" becomes 'any'
-  alignSizeMode = (await store.getMeta('alignSizeMode'))
-    || ((await store.getMeta('alignScale')) ? 'any' : 'keep');
-  if (!ALIGN_SIZE_MODES.includes(alignSizeMode)) alignSizeMode = 'keep';
+  // `alignSizeMode` was a short-lived four-way picker; anything but its
+  // "keep" meant resizing was allowed
+  const savedMode = await store.getMeta('alignSizeMode');
+  alignCanScale = savedMode ? savedMode !== 'keep' : !!(await store.getMeta('alignScale'));
   const savedFog = await store.getMeta('fog');
   if (savedFog) await explored.loadFromBlob(savedFog);
   const savedHeld = await store.getMeta('heldShot');
