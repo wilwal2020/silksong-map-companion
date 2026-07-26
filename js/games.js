@@ -10,16 +10,12 @@ export const BUILTIN_GAME = {
   id: 'silksong', name: 'Silksong', icon: '🪡', builtin: true,
 };
 
-// How big a custom game's world is. Screenshots are pasted at their own pixel
-// size, so this is really "how much map can fit" — the explored composite is a
-// canvas of exactly these dimensions, so bigger costs memory.
-export const WORLD_SIZES = [
-  { id: 'small',  label: 'Small',  w: 2400, h: 1600, hint: 'a short game' },
-  { id: 'medium', label: 'Medium', w: 3600, h: 2400, hint: 'most games' },
-  { id: 'large',  label: 'Large',  w: 5200, h: 3400, hint: 'a sprawling world' },
-];
-
-export const DEFAULT_SIZE = 'medium';
+// A custom game's world has no size you choose. It starts here and grows to
+// fit whatever you paste: asking up front never worked, because nobody knows
+// how big a game's map is until they have mapped it, and the answer could not
+// be changed afterwards. `w`/`h` on a game record are just how far it has
+// grown so far.
+export const START_SIZE = { w: 3600, h: 2400 };
 
 let custom = [];   // [{ id, name, icon, w, h, created }]
 
@@ -34,12 +30,12 @@ export async function loadGames() {
 
 function persist() { return store.putGlobal('games', custom); }
 
-export async function createGame({ name, icon, w, h }) {
+export async function createGame({ name, icon }) {
   const g = {
     id: 'g_' + crypto.randomUUID().slice(0, 8),
     name: name.trim() || 'New game',
     icon: icon || '🎮',
-    w, h,
+    w: START_SIZE.w, h: START_SIZE.h,
     created: Date.now(),
   };
   custom.push(g);

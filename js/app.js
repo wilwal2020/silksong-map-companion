@@ -9,7 +9,7 @@ import {
   setCustomCategories, addCustomCategory, removeCustomCategory, updateCustomCategory, setOrder,
 } from './categories.js';
 import {
-  BUILTIN_GAME, WORLD_SIZES, DEFAULT_SIZE, allGames, gameById, loadGames,
+  BUILTIN_GAME, allGames, gameById, loadGames,
   createGame, updateGame, removeGame, currentGameId, setCurrentGameId,
 } from './games.js';
 
@@ -405,35 +405,16 @@ async function flushSaves() {
 }
 
 let gameEditing = null;   // the custom game being edited, or null when creating
-let gameSizeId = DEFAULT_SIZE;
 
 function openGameDialog(g) {
   gameEditing = g;
-  gameSizeId = DEFAULT_SIZE;
   $('#game-dlg-title').textContent = g ? 'Edit game' : 'New game';
   $('#btn-game-save').textContent = g ? 'Save changes' : 'Create game';
   $('#game-intro').classList.toggle('hidden', !!g);
   $('#game-icon').value = g ? (g.icon || '') : '';
   $('#game-name').value = g ? g.name : '';
-  // the world size fixes the canvas every pin coordinate is relative to, so
-  // it can only be chosen at creation
-  $('#game-size-wrap').classList.toggle('hidden', !!g);
-  renderGameSizes();
   $('#dlg-game').showModal();
   $('#game-name').focus();
-}
-
-function renderGameSizes() {
-  const wrap = $('#game-sizes');
-  wrap.innerHTML = '';
-  for (const s of WORLD_SIZES) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'game-size' + (s.id === gameSizeId ? ' on' : '');
-    b.innerHTML = `<b>${s.label}</b><span>${s.hint}</span>`;
-    b.addEventListener('click', () => { gameSizeId = s.id; renderGameSizes(); });
-    wrap.appendChild(b);
-  }
 }
 
 async function saveGameDialog() {
@@ -449,8 +430,7 @@ async function saveGameDialog() {
     toast('Game updated.', 'ok');
     return;
   }
-  const size = WORLD_SIZES.find(s => s.id === gameSizeId) || WORLD_SIZES[1];
-  const g = await createGame({ name, icon, w: size.w, h: size.h });
+  const g = await createGame({ name, icon });
   closeDialog('#dlg-game');
   await switchGame(g.id);
 }
@@ -1387,6 +1367,16 @@ async function moveOrDeleteRegion(before, lift, riding) {
   if (!res) { explored.restore(before); carryPins(rect0); toast('Left where it was.'); return; }
   // whole pixels, so the piece goes back down exactly as it was lifted
   const at = { ...res, x: Math.round(res.x), y: Math.round(res.y) };
+  // it can be dropped past any edge, so make room — and bring everything this
+  // step still refers to along with the shift: where the piece goes, where it
+  // came from, and the undo state, which predates the growth
+  const shift = await ensureRoom(at);
+  if (shift.dx || shift.dy) {
+    at.x += shift.dx; at.y += shift.dy;
+    rect0.x += shift.dx; rect0.y += shift.dy;
+    for (const h of home) { h.x += shift.dx; h.y += shift.dy; }
+    before = explored.shiftSnapshot(before, shift.dx, shift.dy);
+  }
   explored.stamp(lift.canvas, at.x, at.y, at.w, at.h);
   carryPins(at);
   for (const e of riding) persistPin(e.data);
@@ -1627,6 +1617,38 @@ function runAutoAlign(dir = 0) {
   }, 30);
 }
 
+// A custom game's world grows to fit whatever you put in it, so a screenshot
+// can be placed past any edge. Growing at the left or the top moves everything
+// already on the canvas, so the pins and the view move with it: the map stays
+// where it looks like it is, and pin coordinates stay in the one system the
+// rest of the app already speaks. Returns the shift, which the caller adds to
+// whatever it was about to put down.
+async function ensureRoom(rect, pad = 400) {
+  if (game.builtin) return { dx: 0, dy: 0 };
+  const shift = explored.grow(rect, pad);
+  if (shift.capped) {
+    toast('This map has grown as far as it can — that is as far out as it goes.', 'error');
+  }
+  if (!shift.grew) return { dx: 0, dy: 0 };
+  if (shift.dx || shift.dy) {
+    for (const e of pins.pins.values()) {
+      e.data.x += shift.dx;
+      e.data.y += shift.dy;
+      persistPin(e.data);
+    }
+    pins.syncPositions();
+    // the ground moved under the map's coordinates, so move the view the other
+    // way and the same pixels stay under the same part of the screen
+    view.ox -= shift.dx * view.scale;
+    view.oy -= shift.dy * view.scale;
+  }
+  world = { width: explored.mapW, height: explored.mapH };
+  view.setWorld(world.width, world.height);
+  await updateGame(game.id, { w: world.width, h: world.height });
+  game = gameById(game.id);
+  return shift;
+}
+
 // Custom-game paste: you place it, then you mark where you are.
 async function handleManualPlace(blob) {
   const bitmap = await createImageBitmap(blob);
@@ -1678,6 +1700,11 @@ async function handleManualPlace(blob) {
     toast('Paste cancelled — nothing was added.');
     return;
   }
+
+  // make room for it first — this can move everything else, and the snapshot
+  // undo restores from has to be of the world as it ends up
+  const shift = await ensureRoom(rect);
+  rect.x += shift.dx; rect.y += shift.dy;
 
   snapshotForUndo();
   // land on the map's pixel grid: a drag ends on a fraction of a pixel, which
@@ -1910,8 +1937,12 @@ async function importAll(file) {
   let warn = '';
   const from = data.game;
   if (from && from.id !== game.id) {
+    // Only the built-in game can be the wrong SHAPE for a backup: its map is
+    // a fixed reference the pins were measured against. A custom world just
+    // grows to whatever the backup needs, and the map and pins inside it were
+    // saved together, so they still agree with each other.
     warn = ` This backup is from “${from.name}”`
-      + (from.w && (from.w !== world.width || from.h !== world.height)
+      + (game.builtin && from.w && (from.w !== world.width || from.h !== world.height)
         ? ', whose map is a different size — its pins and map will not line up here.'
         : '.');
   }
@@ -1922,6 +1953,9 @@ async function importAll(file) {
   pins.removeAll();
   explored.clear();
   lastUndo = null; // the old undo snapshot no longer matches anything
+  // a backup carries the size its world had grown to; grow to meet it, or the
+  // map it saved would be cropped to whatever this one happens to be
+  if (from && from.w && from.h) await ensureRoom({ x: 0, y: 0, w: from.w, h: from.h }, 0);
   if (data.fog) await explored.loadFromBlob(await dataURLToBlob(data.fog));
 
   setCustomCategories(data.customCats || []);
@@ -2639,6 +2673,9 @@ async function init() {
   explored.fadeBackground = !!game.builtin;
   if (mapImage) explored.setReference(mapImage); // guides the bg fade (never shown)
   view = new MapView($('#map-canvas'), world, explored, mapImage);
+  // a world with no chosen size has no far side to be held against — panning
+  // is limited only by keeping some of the map on screen (see _clampView)
+  view.growable = !game.builtin;
   view.onPlacementChanged = rect => {
     updatePlaceSize(rect);
     positionPlaceTools();

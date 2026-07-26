@@ -6,6 +6,10 @@
 
 const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
+// How much of a growable world must stay on screen, in screen pixels. Enough
+// to see what you are lining the next screenshot up against.
+const KEEP_VISIBLE = 150;
+
 export class MapView {
   constructor(canvas, world, explored, reference = null) {
     this.canvas = canvas;
@@ -54,6 +58,13 @@ export class MapView {
     this.requestRender();
   }
 
+  // the world has grown (or shifted); take the new bounds and re-clamp
+  setWorld(width, height) {
+    this.map = { width, height };
+    this._clampView();
+    this.requestRender();
+  }
+
   // keep the world in view: the map can't be dragged fully off-screen. When the
   // map is bigger than the viewport it must cover it (no black gaps); when it's
   // smaller it stays inside. A modest overscroll margin keeps panning from
@@ -61,6 +72,17 @@ export class MapView {
   _clampView() {
     const vw = this.canvas.clientWidth, vh = this.canvas.clientHeight;
     const mw = this.map.width * this.scale, mh = this.map.height * this.scale;
+    if (this.growable) {
+      // A world that grows to fit has no far side to be held against, and
+      // pinning it like a fixed map would stop you reaching past the edge to
+      // put the next screenshot down. The only rule left is that you can't
+      // lose it: a strip of the map always stays on screen, so there is
+      // always something to place the next paste against.
+      const keepX = Math.min(KEEP_VISIBLE, mw), keepY = Math.min(KEEP_VISIBLE, mh);
+      this.ox = Math.min(vw - keepX, Math.max(keepX - mw, this.ox));
+      this.oy = Math.min(vh - keepY, Math.max(keepY - mh, this.oy));
+      return;
+    }
     const mx = Math.min(vw, mw) * 0.3, my = Math.min(vh, mh) * 0.3;
     const loX = Math.min(0, vw - mw) - mx, hiX = Math.max(0, vw - mw) + mx;
     const loY = Math.min(0, vh - mh) - my, hiY = Math.max(0, vh - mh) + my;

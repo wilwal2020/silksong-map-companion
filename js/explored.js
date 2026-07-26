@@ -298,6 +298,11 @@ function satSum(sat, W, H, x, y, w, h) {
   return sat[y1 * S + x1] - sat[y0 * S + x1] - sat[y1 * S + x0] + sat[y0 * S + x0];
 }
 
+// How far a growing world may go. Not a design limit so much as a memory one:
+// the composite is a real canvas, and every map pixel is four bytes of it.
+const MAX_WORLD_SIDE = 12000;
+const MAX_WORLD_PIXELS = 48e6;   // ~190 MB at one canvas pixel per map pixel
+
 export class Explored {
   constructor(mapW, mapH, scale = 1) {
     this.mapW = mapW;
@@ -316,6 +321,54 @@ export class Explored {
     // nothing about, guessing which pixels are "background" would be
     // vandalism, so those composite exactly as screenshotted.
     this.fadeBackground = true;
+  }
+
+  // Make room for `rect`, with `pad` of clear ground around it, growing the
+  // composite if it doesn't fit. Returns how far everything already on the
+  // canvas had to move: growing at the left or top shifts every existing
+  // pixel, and the caller moves the pins and the view by the same amount.
+  //
+  // Shifting rather than carrying an origin is deliberate. An origin would
+  // spare the pins but would have to be subtracted at every single place that
+  // turns a map coordinate into a canvas one — the aligner alone does that in
+  // five places — and one missed subtraction is a bug that only appears once
+  // somebody's map has grown leftwards. This way map coordinates stay exactly
+  // what they always were: canvas pixels divided by `scale`.
+  grow(rect, pad = 400) {
+    const s = this.scale;
+    const want = {
+      l: Math.max(0, Math.ceil(pad - rect.x)),
+      t: Math.max(0, Math.ceil(pad - rect.y)),
+      r: Math.max(0, Math.ceil(rect.x + rect.w + pad - this.mapW)),
+      b: Math.max(0, Math.ceil(rect.y + rect.h + pad - this.mapH)),
+    };
+    if (!want.l && !want.t && !want.r && !want.b) return { dx: 0, dy: 0, grew: false };
+
+    // spend whatever headroom is left, nearest side first
+    const roomW = Math.max(0, Math.min(MAX_WORLD_SIDE, MAX_WORLD_PIXELS / this.mapH) - this.mapW);
+    const roomH = Math.max(0, Math.min(MAX_WORLD_SIDE, MAX_WORLD_PIXELS / this.mapW) - this.mapH);
+    const dx = Math.min(want.l, roomW);
+    const addR = Math.min(want.r, roomW - dx);
+    const dy = Math.min(want.t, roomH);
+    const addB = Math.min(want.b, roomH - dy);
+    const capped = (dx < want.l) || (addR < want.r) || (dy < want.t) || (addB < want.b);
+    const newW = Math.round(this.mapW + dx + addR);
+    const newH = Math.round(this.mapH + dy + addB);
+    if (newW === this.mapW && newH === this.mapH) return { dx: 0, dy: 0, grew: false, capped };
+
+    const c = document.createElement('canvas');
+    c.width = Math.round(newW * s);
+    c.height = Math.round(newH * s);
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.imageSmoothingQuality = 'high';
+    x.drawImage(this.canvas, Math.round(dx * s), Math.round(dy * s));
+    this.canvas = c;
+    this.ctx = x;
+    this.mapW = newW;
+    this.mapH = newH;
+    this._refKeep = null;      // the reference mask was cut to the old size
+    this._changed();
+    return { dx: Math.round(dx), dy: Math.round(dy), grew: true, capped };
   }
 
   // The reference map is NEVER displayed — the background fade only uses it
@@ -895,7 +948,25 @@ export class Explored {
   snapshot() {
     return this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
   }
+  // Move a snapshot to match a world that grew after it was taken. Growing at
+  // the left or top slides every pixel, and an undo state that predates the
+  // growth would otherwise put the old map back in the wrong place.
+  shiftSnapshot(snap, dx, dy) {
+    if (!dx && !dy && snap.width === this.canvas.width && snap.height === this.canvas.height) return snap;
+    const s = this.scale;
+    const old = canvasOf(snap.width, snap.height);
+    old.getContext('2d').putImageData(snap, 0, 0);
+    const c = canvasOf(this.canvas.width, this.canvas.height);
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(old, Math.round(dx * s), Math.round(dy * s));
+    return x.getImageData(0, 0, c.width, c.height);
+  }
   restore(snap) {
+    // the world may have grown since the snapshot was taken; the margin it
+    // gained was empty then and goes back to empty now
+    if (snap.width !== this.canvas.width || snap.height !== this.canvas.height) {
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    }
     this.ctx.putImageData(snap, 0, 0);
     this._changed();
   }
@@ -922,7 +993,10 @@ export class Explored {
   async loadFromBlob(blob) {
     const img = await createImageBitmap(blob);
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    this.ctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+    // at natural size, NOT stretched to the canvas: a growing world is saved
+    // at whatever size it had reached, and stretching it to a canvas that has
+    // since changed would silently rescale the whole map
+    this.ctx.drawImage(img, 0, 0);
     img.close();
     this._changed();
   }
