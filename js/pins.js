@@ -486,6 +486,7 @@ export class PinManager {
     if (this._hoverCardEntry === entry) this._hoverCardEntry = null;
     entry.card.remove();
     entry.card = null;
+    entry.cardSide = null;   // the next opening picks its side afresh
   }
 
   _positionCard(entry) {
@@ -500,11 +501,18 @@ export class PinManager {
     const env = card.querySelector('img.env');
     if (env) env.style.maxHeight = imgRoom(card, env) + 'px';
     const w = card.offsetWidth || 320, h = card.offsetHeight;
-    let x = p.x + 18, y = p.y - 20;
-    if (x + w + margin > window.innerWidth) x = p.x - w - 24;   // flip to the pin's left
-    // Then keep it on screen regardless. Flipping alone isn't enough once the
-    // card has been zoomed up: near an edge neither side has room for it, and
-    // this used to clamp only the left, so a wide card ran off to the right.
+    // Which side of the pin the card sits on is settled ONCE per opening.
+    // Deciding it afresh on every zoom step made the card jump across the pin
+    // the moment it outgrew the room on one side — and jump back on the next
+    // notch, since the flip changed which side the room was on. Zooming now
+    // only ever slides it; it never changes sides under you.
+    if (entry.cardSide == null) {
+      entry.cardSide = (p.x + 18 + w + margin > window.innerWidth) ? 'left' : 'right';
+    }
+    let x = entry.cardSide === 'left' ? p.x - w - 24 : p.x + 18;
+    let y = p.y - 20;
+    // Then keep it on screen regardless: once it is wider than the room beside
+    // the pin, neither side fits and it has to overlap the pin instead.
     x = Math.max(margin, Math.min(x, window.innerWidth - w - margin));
     y = Math.max(CARD_TOP, Math.min(y, window.innerHeight - h - margin));
     // position via left/top so `transform` stays free for the entrance pop,
