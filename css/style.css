@@ -952,6 +952,8 @@ body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !importa
    controls and nothing else. */
 #place-tools {
   position: fixed; z-index: 27; display: flex; align-items: center; gap: 3px;
+  /* the Size picker makes this wide enough to matter on a small window */
+  flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 20px);
   padding: 5px; border-radius: 13px;
   background: rgba(14,17,23,.97); border: 1px solid var(--border-strong);
   box-shadow: 0 14px 34px rgba(0,0,0,.62), inset 0 1px 0 rgba(255,255,255,.04);
@@ -985,6 +987,29 @@ body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !importa
   min-width: 46px; padding: 0 4px; text-align: center;
   font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; user-select: none;
 }
+
+/* segmented picker — one sunken track holding mutually exclusive choices, so
+   it reads as a single setting rather than a row of buttons to press */
+.pt-seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  height: 34px; padding: 2px 3px 2px 8px; border-radius: 9px;
+  background: rgba(0,0,0,.28); border: 1px solid var(--border);
+}
+.pt-seg-label {
+  font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-dim); user-select: none; margin-right: 5px;
+}
+.pt-seg-btn {
+  height: 26px; padding: 0 9px; border-radius: 7px;
+  background: transparent; border: 1px solid transparent; color: var(--text-dim);
+  font: inherit; font-size: .8rem; cursor: pointer; white-space: nowrap;
+  transition: background .13s, color .13s, border-color .13s;
+}
+.pt-seg-btn:hover { background: #1c2230; color: var(--text); }
+.pt-seg-btn.on {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--rose);
+}
+.pt-seg-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 1px; }
 
 @media (prefers-reduced-motion: reduce) { #place-tools { animation: none; } }
 

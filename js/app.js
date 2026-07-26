@@ -1015,11 +1015,6 @@ async function handleFullMap(blob) {
 const TOOL_SVG = {
   diff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="12" height="12" rx="1.5"/><rect x="8.5" y="8.5" width="12" height="12" rx="1.5" fill="currentColor" fill-opacity=".22"/></svg>',
   align: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
-  // a double-headed diagonal — "auto-align may change the size too"
-  scale: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20L20 4"/><path d="M14 4h6v6"/><path d="M10 20H4v-6"/></svg>',
-  // corners pulling in / pushing out — "align, but only shrink / only grow"
-  smaller: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l6 6M10 4v6H4"/><path d="M20 20l-6-6M14 20v-6h6"/></svg>',
-  bigger: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 10L4 4M4 10V4h6"/><path d="M14 14l6 6M20 14v6h-6"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>',
@@ -1041,6 +1036,31 @@ function showPlaceTools(groups) {
         const s = document.createElement('span');
         s.className = 'pt-size'; s.id = 'place-size';
         g.appendChild(s);
+        continue;
+      }
+      // a segmented picker — one control, one choice, rather than a row of
+      // buttons that all look like each other and read as separate actions
+      if (a.seg) {
+        const wrap = document.createElement('div');
+        wrap.className = 'pt-seg';
+        if (a.id) wrap.id = a.id;
+        if (a.title) wrap.title = a.title;
+        if (a.label) {
+          const lab = document.createElement('span');
+          lab.className = 'pt-seg-label';
+          lab.textContent = a.label;
+          wrap.appendChild(lab);
+        }
+        for (const o of a.options) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'pt-seg-btn' + (o.value === a.value ? ' on' : '');
+          b.textContent = o.label;
+          if (o.title) b.title = o.title;
+          b.addEventListener('click', () => a.fn(o.value));
+          wrap.appendChild(b);
+        }
+        g.appendChild(wrap);
         continue;
       }
       const b = document.createElement('button');
@@ -1210,30 +1230,27 @@ function positionPaste(bitmap, rect, {
             title: 'Compare against the map underneath — nudge until the overlap goes black (D)',
             fn: () => $('#pt-diff').classList.toggle('active', view.togglePlacementDiff()) },
           { icon: TOOL_SVG.align, label: 'Auto-align',
-            title: 'Snap it onto the screenshots already on the map', fn: () => runAutoAlign(0) },
+            title: 'Snap it onto the screenshots already on the map', fn: runAutoAlign },
         ];
-        // Telling it WHICH WAY the size is wrong is worth a lot: it halves the
-        // sizes to search, so the same budget buys twice the resolution, and it
-        // rules out the wrong-direction answers outright.
-        if (resizable && alignCanScale) {
-          aidGroup.push(
-            { icon: TOOL_SVG.smaller,
-              title: 'Auto-align, trying smaller sizes only — for a screenshot that is too big',
-              fn: () => runAutoAlign(-1) },
-            { icon: TOOL_SVG.bigger,
-              title: 'Auto-align, trying bigger sizes only — for a screenshot that is too small',
-              fn: () => runAutoAlign(1) },
-          );
-        }
-        // Only worth offering on something that can be resized at all. Sticky
-        // per game: whether the map zoom can change is a fact about the game,
-        // not about this one paste.
+        // What auto-align may do to the size. One picker, not a switch plus a
+        // row of arrows: these were never separate actions, only different
+        // permissions given to the same one. Sticky per game — whether the map
+        // zoom can change is a fact about the game, not about this one paste.
         if (resizable) {
           aidGroup.push({
-            id: 'pt-scale', icon: TOOL_SVG.scale, active: alignCanScale,
-            title: 'Let auto-align resize it too — slower, for games whose map zoom can change. '
-              + 'Leave off when every screenshot is at the same zoom.',
-            fn: () => setAlignCanScale(!alignCanScale),
+            seg: true, id: 'pt-size', label: 'Size', value: alignSizeMode,
+            title: 'What auto-align may do to the size',
+            options: [
+              { value: 'keep', label: 'Keep',
+                title: 'Leave the size alone — right when every screenshot is at the same zoom, and the fastest' },
+              { value: 'any', label: 'Any',
+                title: 'Try sizes in both directions — slower; for games whose map zoom can change' },
+              { value: 'smaller', label: 'Smaller',
+                title: 'Only try smaller sizes — for a screenshot that is too big. Faster and surer than Any' },
+              { value: 'bigger', label: 'Bigger',
+                title: 'Only try bigger sizes — for a screenshot that is too small. Faster and surer than Any' },
+            ],
+            fn: setAlignSizeMode,
           });
         }
         groups.push(aidGroup);
@@ -1481,12 +1498,18 @@ function alignRefusal(r) {
     + 'of the overlap it wants, and too small a share of the screenshot to judge by';
 }
 
-// May auto-align change the SIZE as well as the position? Off by default:
-// most games have one map zoom, so every screenshot is already the right
-// size and searching sizes only costs time and invites a wrong answer. Games
-// whose map can be zoomed need it, so it's a per-game switch (see the Resize
-// toggle on the align toolbar).
-let alignCanScale = false;
+// What auto-align may do to the SIZE — one setting rather than a switch and a
+// pair of buttons, because they were never separate actions: every one of them
+// is "auto-align", differing only in which sizes it is allowed to consider.
+//
+// 'keep' by default: most games have one map zoom, so every screenshot is
+// already the right size and searching sizes only costs time and invites a
+// wrong answer. Games whose map can be zoomed want one of the others, so it is
+// remembered per game. 'smaller'/'bigger' are worth reaching for whenever you
+// can see which way it is wrong — naming the direction halves the sizes to
+// search and rules out every answer that goes the wrong way.
+const ALIGN_SIZE_MODES = ['keep', 'any', 'smaller', 'bigger'];
+let alignSizeMode = 'keep';
 
 // Sizes to try, as multiples of the size you set: half to double, in even
 // geometric steps. Wide on purpose — a game that lets you change the map
@@ -1508,35 +1531,35 @@ const ALIGN_SCALES = [0.5, 0.58, 0.67, 0.77, 0.88, 1, 1.15, 1.32, 1.52, 1.74, 2]
 const ALIGN_SCALES_DOWN = ALIGN_SCALES.filter(k => k <= 1).reverse();
 const ALIGN_SCALES_UP = ALIGN_SCALES.filter(k => k >= 1);
 
-function setAlignCanScale(on) {
-  alignCanScale = !!on;
-  store.putMeta('alignScale', alignCanScale);
-  // the two direction buttons appear and disappear with it
-  if (rebuildPlaceTools) rebuildPlaceTools();
-  else $('#pt-scale')?.classList.toggle('active', alignCanScale);
+// which sizes each mode is allowed to try (null = don't touch the size)
+function scalesForMode(mode) {
+  return mode === 'smaller' ? ALIGN_SCALES_DOWN
+    : mode === 'bigger' ? ALIGN_SCALES_UP
+    : mode === 'any' ? ALIGN_SCALES
+    : null;
+}
+
+function setAlignSizeMode(mode) {
+  alignSizeMode = ALIGN_SIZE_MODES.includes(mode) ? mode : 'keep';
+  store.putMeta('alignSizeMode', alignSizeMode);
+  if (rebuildPlaceTools) rebuildPlaceTools();   // repaint the chosen segment
 }
 
 // Image-only alignment against what's already pasted — no reference map, so
-// it works for any game. By default it only MOVES the placement you made: the
-// size you set is taken as correct (one in-game zoom per game), and the search
-// stays around where you dropped it. With Resize on it searches sizes too.
-//
-// `dir` is which way you said the size is wrong: -1 too big, +1 too small, 0
-// don't know. Saying so is the single most useful thing you can tell it — it
-// halves the sizes to try and rules out every answer that goes the wrong way.
-function runAutoAlign(dir = 0) {
+// it works for any game. What it may do to the size is whatever the Size
+// picker says; on 'keep' it only MOVES the placement, taking the size you set
+// as correct (one in-game zoom per game) and searching around where you
+// dropped it.
+function runAutoAlign() {
   const rect = view.placementRect();
   const p = view.placement;
   if (!rect || !p) return;
-  const scaling = !p.locked && (dir !== 0 || alignCanScale);
-  const scales = !scaling ? null
-    : dir < 0 ? ALIGN_SCALES_DOWN
-    : dir > 0 ? ALIGN_SCALES_UP
-    : ALIGN_SCALES;
+  const mode = p.locked ? 'keep' : alignSizeMode;
+  const scales = scalesForMode(mode);
   spinner(true,
-    dir < 0 ? 'Lining it up, trying smaller sizes…'
-    : dir > 0 ? 'Lining it up, trying bigger sizes…'
-    : scaling ? 'Lining it up and sizing it…'
+    mode === 'smaller' ? 'Lining it up, trying smaller sizes…'
+    : mode === 'bigger' ? 'Lining it up, trying bigger sizes…'
+    : mode === 'any' ? 'Lining it up and sizing it…'
     : 'Lining it up with your map…');
   // let the spinner paint before the synchronous search blocks the thread
   setTimeout(() => {
@@ -1557,7 +1580,7 @@ function runAutoAlign(dir = 0) {
           score: +r.score.toFixed(4), scale: +r.scale.toFixed(3),
           movedPx: Math.round(Math.hypot(r.x - rect.x, r.y - rect.y)),
           shot: [Math.round(rect.w), Math.round(rect.h)],
-          scaling, dir, cands: (r.cands || []).slice(0, 6),
+          mode, cands: (r.cands || []).slice(0, 6),
         }));
       }
       toast(`Couldn't line it up — ${alignRefusal(r)}. `
@@ -1567,11 +1590,12 @@ function runAutoAlign(dir = 0) {
     view.setPlacementRect(r);
     const moved = Math.hypot(r.x - rect.x, r.y - rect.y);
     const resized = Math.abs(r.w - rect.w) > rect.w * 0.005;
+    const directed = mode === 'smaller' || mode === 'bigger';
     toast(
       resized ? `Lined up and resized to ${Math.round(r.w / rect.w * 100)}% of what you set.`
         // asked for a size change and it kept the size: say so, or it reads
         // as if the button did nothing
-        : dir ? `Lined up — no ${dir < 0 ? 'smaller' : 'bigger'} size fitted better than this one.`
+        : directed ? `Lined up — no ${mode} size fitted better than this one.`
         : moved < 0.6 ? 'Already lined up.'
         : 'Lined up with the map you already have.', 'ok');
   }, 30);
@@ -1600,10 +1624,11 @@ async function handleManualPlace(blob) {
   let snapped = false;
   const dropped = { ...start };   // where it landed before we moved it for them
   if (!explored.isBlank()) {
-    spinner(true, alignCanScale ? 'Lining it up and sizing it…' : 'Lining it up with your map…');
+    const pasteScales = scalesForMode(alignSizeMode);
+    spinner(true, pasteScales ? 'Lining it up and sizing it…' : 'Lining it up with your map…');
     await new Promise(r => setTimeout(r, 30)); // let the spinner paint first
     try {
-      const r = explored.autoAlign(bitmap, start, alignCanScale ? { scales: ALIGN_SCALES } : {});
+      const r = explored.autoAlign(bitmap, start, pasteScales ? { scales: pasteScales } : {});
       console.log('[map] auto-align on paste:', r);
       // when it may resize, the size it found is part of the answer
       if (alignAccepted(r)) { start = { ...start, x: r.x, y: r.y, w: r.w, h: r.h }; snapped = true; }
@@ -2613,7 +2638,10 @@ async function init() {
   learnedScale = (await store.getMeta('scale')) || null;
   scaleTrusted = !!(await store.getMeta('scaleTrusted'));
   scaleSamples = (await store.getMeta('scaleSamples')) || [];
-  alignCanScale = !!(await store.getMeta('alignScale'));
+  // `alignScale` was the old boolean switch; an existing "on" becomes 'any'
+  alignSizeMode = (await store.getMeta('alignSizeMode'))
+    || ((await store.getMeta('alignScale')) ? 'any' : 'keep');
+  if (!ALIGN_SIZE_MODES.includes(alignSizeMode)) alignSizeMode = 'keep';
   const savedFog = await store.getMeta('fog');
   if (savedFog) await explored.loadFromBlob(savedFog);
   const savedHeld = await store.getMeta('heldShot');

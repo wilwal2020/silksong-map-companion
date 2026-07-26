@@ -543,6 +543,10 @@ export class MapView {
     this.canvas.width = this.canvas.clientWidth * dpr;
     this.canvas.height = this.canvas.clientHeight * dpr;
     this._clampView();
+    // everything anchored to the map — pins, the hint, the floating toolbar —
+    // is placed in screen coordinates, so a resized window leaves all of it
+    // where the old one was until they are told
+    if (this.onViewChanged) this.onViewChanged();
     this.requestRender();
   }
 
