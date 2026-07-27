@@ -1163,7 +1163,10 @@ function positionPaste(bitmap, rect, {
     // no pin cards popping open while you're dragging a screenshot over them
     const hoverWas = pins.suppressHover;
     pins.suppressHover = true;
-    view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w, mask });
+    // `exact` rides along: a rect the aligner measured to a fraction of a
+    // pixel keeps that fraction through the confirm step, and any nudge or
+    // drag clears it (see MapView)
+    view.setPlacement({ img: bitmap, x: rect.x, y: rect.y, w: rect.w, mask, exact: !!rect.exact });
 
     // Ctrl+Z steps back through where the screenshot has been: each drag,
     // nudge, resize or auto-align records where it was first. When the paste
@@ -1765,10 +1768,12 @@ async function commitPaste(bitmap, rect, baseWidth) {
 }
 
 // Before the chooser opens, see whether this is simply a map screenshot that
-// belongs somewhere. One that lines up with what is already down can go
-// straight there — the question "what did you paste?" answers itself. A photo
-// of a room lines up with nothing, so the chooser still appears for it, and
-// "a picture of what's here" is one click away exactly as before.
+// belongs somewhere. One that lines up with what is already down answers "what
+// did you paste?" by itself, so it skips the question and arrives already
+// positioned — but still waiting on your confirmation, exactly as if you had
+// dragged it there and pressed Auto-align. A photo of a room lines up with
+// nothing, so the chooser appears for it and "a picture of what's here" is one
+// click away as before.
 //
 // The cheap pass only: sizes are not searched here. A screenshot at a size the
 // map has not seen is a real case, but it is the uncommon one, and making
@@ -1778,8 +1783,8 @@ async function tryPlaceOnPaste(blob) {
   const bitmap = await createImageBitmap(blob);
   const start = startRectFor(bitmap);
   // float it over the map while we look, the same as a screenshot being
-  // located in Silksong — so a paste that is about to place itself never just
-  // appears out of nowhere; you watch it arrive and snap down
+  // located in Silksong — so it never just appears somewhere; you watch it
+  // arrive and settle onto the spot it found
   showPasteGhost(bitmap);
   spinner(true, 'Seeing where this goes…');
   await new Promise(r => setTimeout(r, 30));   // let the spinner paint
@@ -1795,7 +1800,10 @@ async function tryPlaceOnPaste(blob) {
   if (alignAccepted(r)) {
     const rect = { x: r.x, y: r.y, w: r.w, h: r.h, exact: true };
     await view.flyGhostTo(rect);               // ...and lands on its spot
-    await commitPaste(bitmap, rect, bitmap.width);
+    // then hand it over: the ghost becomes the placement you confirm, so it
+    // is never composited on the strength of the aligner's word alone
+    view.clearGhost();
+    await placeAndCommit(bitmap, rect, { snapped: true, dropped: start });
     return true;
   }
   // Not a map screenshot, most likely — so no shake, nothing failed. It goes
@@ -1838,16 +1846,24 @@ async function handleManualPlace(blob) {
     spinner(false);
   }
 
+  await placeAndCommit(bitmap, start, { snapped, dropped });
+}
+
+// Hand it to you to confirm, then put it down. Nothing is composited until you
+// say so — a paste that lined itself up still gets the same last look as one
+// you dragged there, because "it found a spot" and "that is the right spot"
+// are not the same claim.
+async function placeAndCommit(bitmap, start, { snapped = false, dropped = null } = {}) {
   const rect = await positionPaste(bitmap, start,
     { snapped, undoBase: snapped ? dropped : null });
   if (!rect) {
     bitmap.close?.();
     updateEmptyHint();
     toast('Paste cancelled — nothing was added.');
-    return;
+    return false;
   }
-
   await commitPaste(bitmap, rect, placeBaseWidth);
+  return true;
 }
 
 // the click-your-player step. Resolves with map coords, or null if skipped.
