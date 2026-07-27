@@ -9,7 +9,7 @@ import {
   setCustomCategories, addCustomCategory, removeCustomCategory, updateCustomCategory, setOrder,
 } from './categories.js';
 import {
-  BUILTIN_GAME, allGames, gameById, loadGames,
+  BUILTIN_GAME, START_SIZE, allGames, gameById, loadGames,
   createGame, updateGame, removeGame, currentGameId, setCurrentGameId,
 } from './games.js';
 
@@ -2829,7 +2829,9 @@ async function init() {
     mapImage = await loadImage('assets/map.png');
     world = { width: mapImage.width, height: mapImage.height };
   } else {
-    world = { width: game.w, height: game.h };
+    // a game saved before worlds had a starting size has no w/h — without the
+    // fallback its canvas comes out 0×0 and nothing renders at all
+    world = { width: game.w || START_SIZE.w, height: game.h || START_SIZE.h };
   }
   explored = new Explored(world.width, world.height);
   // the background fade only knows what Silksong's map looks like — a game
