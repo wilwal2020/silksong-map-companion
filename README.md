@@ -33,10 +33,11 @@ stored locally.
    full-size lightbox.
 
    Took that picture *before* you opened the map? Paste it anyway and choose
-   **📷 A picture of what's here**. It waits in the bottom-right corner (click
-   the thumbnail to check it, ✕ to throw it away) and the **next pin you add
-   gets it automatically** — however that pin is made, and even if you reload in
-   between. No second trip into the game.
+   **📷 A picture of what's here**. It waits at the bottom of the screen (click
+   the thumbnail to check it, ✕ to throw it away, or paste with the pointer over
+   it to swap it for another) and the **next pin you add gets it automatically**
+   — however that pin is made, and even if you reload in between. No second trip
+   into the game.
 5. **Came back and dealt with it?** Open the pin and check it off as done.
 
 Pins, the revealed map, and your custom types all persist automatically in the
@@ -53,9 +54,12 @@ between them reloads the page and nothing is shared.
 A game you add has no reference map to match against, so you place screenshots
 yourself:
 
-1. Paste as usual and choose **🧩 Add this to your map — you place it**. The
-   screenshot appears **under your mouse pointer**, so point roughly at where
-   it belongs before pasting and it starts there.
+1. Paste as usual — nothing asks what you pasted here. The screenshot appears
+   **under your mouse pointer**, so point roughly at where it belongs before
+   pasting and it starts there. (Pasting a *picture of a place* instead? Hover
+   the **📷 Picture for the next pin** field at the bottom of the screen and
+   paste onto that — where you point is the whole answer, so there's no chooser
+   to click through.)
 2. **Drag** the screenshot where it belongs. `Shift`+scroll (or the − / +
    buttons) resizes it; arrow keys nudge it one map pixel at a time (`Shift`
    for ten), always snapping onto the map's own pixel grid so an exact fit is

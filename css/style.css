@@ -889,13 +889,41 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 
 /* ---------- hand-placing a screenshot ---------- */
 
-/* which paste options a game offers: with a reference map you get the two
-   automatic ones, without one there's a single "you place it" card */
-#dlg-paste[data-mode="builtin"] .paste-opt[data-type="place"],
-#dlg-paste[data-mode="custom"] .paste-opt[data-type="map"],
-#dlg-paste[data-mode="custom"] .paste-opt[data-type="full"] { display: none; }
 .paste-opt.wide { grid-column: 1 / -1; flex-direction: row; gap: 14px; min-height: 0; text-align: left; }
 .po-sub { display: block; margin-top: 2px; font-size: .76rem; font-weight: 400; color: var(--text-dim); }
+
+/* ---------- the picture for the next pin ---------- */
+
+/* Games you place by hand ask nothing on paste: a map screenshot goes on the
+   map, and a picture of a place goes here. Which one you meant is answered by
+   where the pointer is, so the target has to be a real thing on screen — it
+   sits where the Ctrl+V tutorial pill used to, and it takes that job over. */
+#shot-slot { display: none; }
+body.custom-game #shot-slot {
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  z-index: 24;
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 14px 9px 11px; max-width: min(340px, 92vw);
+  background: rgba(12,14,19,.92);
+  border: 1px dashed var(--border-strong); border-radius: 10px;
+  color: var(--text-dim); cursor: copy;
+  transition: border-color .14s, background .14s, color .14s;
+}
+/* hovering it IS the gesture — say so loudly enough to be trusted */
+body.custom-game #shot-slot:hover,
+body.custom-game #shot-slot.over {
+  border-color: var(--accent); border-style: solid;
+  background: rgba(158,43,37,.14); color: var(--text);
+}
+.ss-ico { font-size: 1.1rem; line-height: 1; filter: grayscale(.35); }
+#shot-slot:hover .ss-ico, #shot-slot.over .ss-ico { filter: none; }
+.ss-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ss-text b { font-size: .84rem; font-weight: 600; color: var(--text); }
+.ss-text span { font-size: .74rem; color: var(--text-dim); }
+/* the pill it replaces, the waiting picture it turns into, and the step bar
+   that owns the bottom of the screen while placing — one at a time */
+body.custom-game #paste-hint { display: none; }
+body.has-held #shot-slot, body.placing-paste #shot-slot { display: none !important; }
 
 /* ---------- a picture waiting for its pin ---------- */
 
@@ -919,6 +947,8 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 /* the paste hint lives in the same spot — step over it rather than on it */
 body.has-held #paste-hint { bottom: 96px; }
 #held-shot.hidden { display: none !important; }
+/* a paste over the waiting picture swaps it for the new one */
+#held-shot.over { border-color: var(--accent); background: rgba(158,43,37,.16); }
 #held-shot-img {
   width: 58px; height: 44px; flex: none; object-fit: cover;
   border-radius: 6px; border: 1px solid var(--border); cursor: zoom-in;

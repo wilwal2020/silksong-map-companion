@@ -81,6 +81,17 @@
     <span id="spinner-msg">Locating screenshot on the map&hellip;</span>
   </div>
 
+  <!-- Where the next pin's picture comes from (games you place by hand): hover
+       this and paste, and the picture waits here instead of going on the map.
+       That's the whole question the paste chooser used to ask. -->
+  <div id="shot-slot" title="Hover here and paste a picture of what's here — the next pin you add takes it">
+    <span class="ss-ico">📷</span>
+    <div class="ss-text">
+      <b>Picture for the next pin</b>
+      <span>Hover here and paste it</span>
+    </div>
+  </div>
+
   <!-- a picture pasted before its pin exists, waiting to be picked up -->
   <div id="held-shot" class="hidden">
     <img id="held-shot-img" alt="the picture waiting for its pin">
@@ -126,12 +137,6 @@
       <button class="paste-opt" data-type="full">
         <span class="po-ico bone">🗺</span>
         <span class="po-ttl">Update your map</span>
-      </button>
-      <!-- custom games have no reference map, so there's one thing to do with
-           a screenshot: put it on the map yourself -->
-      <button class="paste-opt hot wide" data-type="place">
-        <span class="po-ico">🧩</span>
-        <span class="po-ttl">Add this to your map — you place it</span>
       </button>
       <!-- took the picture of the place before opening the map? Park it here
            and the next pin picks it up -->
@@ -284,11 +289,17 @@
         <figcaption>“Craw Lake” is in frame — that name anchors it.</figcaption>
       </figure>
     </section>
-    <section class="help-slide" data-step="5">
+    <section class="help-slide" data-for="builtin" data-step="5">
       <span class="help-eyebrow">Step 5</span>
       <h2>Remember what's there</h2>
       <p>Once a pin is placed, you can attach a screenshot of what you're looking at — so you'll better remember what was there when you come back.</p>
       <p>Photographed the place <b>before</b> you opened the map? Paste it anyway and pick <b>📷 A picture of what's here</b>. It waits in the corner, and the next pin you add takes it — no second trip.</p>
+    </section>
+    <section class="help-slide" data-for="custom">
+      <span class="help-eyebrow">Step 4</span>
+      <h2>Remember what's there</h2>
+      <p>Once a pin is placed, you can attach a screenshot of what you're looking at — so you'll better remember what was there when you come back.</p>
+      <p>Photographed the place <b>before</b> you opened the map? Hover the <b>📷 Picture for the next pin</b> field at the bottom of the screen and paste it there. It waits there, and the next pin you add takes it — no second trip. Paste anywhere else and it goes on the map instead, so you're never asked which you meant.</p>
     </section>
     <section class="help-slide" data-step="6">
       <span class="help-eyebrow">Step 6</span>

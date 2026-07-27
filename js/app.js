@@ -313,8 +313,9 @@ function applyGameChrome() {
   document.title = `${game.name} — Map Companion`;
   $('.game-ico').textContent = game.icon || '🎮';
   $('.game-name').textContent = game.name;
-  // the paste chooser offers different things with and without a reference map
-  $('#dlg-paste').dataset.mode = handPlaced() ? 'custom' : 'builtin';
+  // a game placed by hand never asks what you pasted (see routePaste), and it
+  // gets the "picture for the next pin" slot in place of the Ctrl+V pill
+  document.body.classList.toggle('custom-game', handPlaced());
   // "Reveal map" lays the real world map over yours — there isn't one here.
   // "Clean map" is the same Silksong-tuned background fade, so it goes too.
   $('#btn-reveal').classList.toggle('hidden', handPlaced());
@@ -324,7 +325,6 @@ function applyGameChrome() {
     $('#empty-hint p').innerHTML =
       'Snip your in-game map with <span class="kbd">Shift + Win + S</span>, '
       + 'then paste it here and drag it into place.';
-    $('#hint-text').textContent = 'paste a screenshot of your map';
   }
 }
 
@@ -1951,6 +1951,17 @@ function routePaste(blob) {
     attachToAwaiting(blob);
     return;
   }
+  // pointing at the picture slot when you paste means "this one is a picture of
+  // a place, not the map" — it's the whole question the chooser used to ask,
+  // answered by where you were already pointing
+  if (overShotSlot()) {
+    const replaced = !!heldShot;
+    setHeldShot(blob);
+    toast(replaced
+      ? 'Kept instead — the previous waiting picture was dropped.'
+      : 'Picture kept. The next pin you add gets it.', 'ok');
+    return;
+  }
   // hovering an EMPTY pin (its marker or its open card) attaches the paste to
   // it directly — a filled pin is left alone so a fresh map screenshot isn't
   // hijacked by the last pin you looked at
@@ -1964,26 +1975,36 @@ function routePaste(blob) {
     toast('Screenshot attached.', 'ok');
     return;
   }
-  // A picture is already parked waiting for its pin, and the message that
-  // parked it said to paste your map screenshot next — so this is that. Asking
-  // "what did you paste?" only to be told the same thing every time is a step
-  // for nothing. (To swap the waiting picture instead, throw it away first
-  // with its ✕ and the chooser comes back.)
-  if (heldShot) {
-    if (handPlaced()) handleManualPlace(blob);
-    else handleMapScreenshot(blob);
+  // A game you place by hand has nothing left to ask: a picture of a place goes
+  // on the slot at the bottom of the screen, so anything pasted anywhere else
+  // is a map screenshot. It still tries to line itself up first — landing
+  // already positioned is the same either way.
+  if (handPlaced()) {
+    if (explored.isBlank()) handleManualPlace(blob);
+    else tryPlaceOnPaste(blob).then(placed => { if (!placed) handleManualPlace(blob); });
     return;
   }
 
-  // A map screenshot answers "what did you paste?" by itself — it lines up
-  // with what is already down. Try that before asking, and only ask when it
-  // doesn't fit anywhere.
-  if (handPlaced() && !explored.isBlank()) {
-    tryPlaceOnPaste(blob).then(placed => { if (!placed) openPasteChooser(blob); });
+  // A picture is already parked waiting for its pin, and the message that
+  // parked it said to paste your map screenshot next — so this is that. Asking
+  // "what did you paste?" only to be told the same thing every time is a step
+  // for nothing. (To swap the waiting picture instead, paste with the pointer
+  // over it — see overShotSlot.)
+  if (heldShot) {
+    handleMapScreenshot(blob);
     return;
   }
 
   openPasteChooser(blob);
+}
+
+// is the pointer over the picture slot (or the picture already waiting in it)
+// at the moment of the paste? A paste carries no coordinates, so this reads the
+// last-known cursor — the same one the drop point is frozen from.
+function overShotSlot() {
+  if (!cursor || document.querySelector('dialog[open]')) return false;
+  const el = document.elementFromPoint(cursor.x, cursor.y);
+  return !!(el && el.closest('#shot-slot, #held-shot'));
 }
 
 function openPasteChooser(blob) {
@@ -2004,7 +2025,6 @@ for (const b of document.querySelectorAll('#dlg-paste button[data-type]')) {
     if (type === 'map') await handleMapScreenshot(paste.blob);
     else if (type === 'env') await handleEnvScreenshot(paste.blob);
     else if (type === 'full') await handleFullMap(paste.blob);
-    else if (type === 'place') await handleManualPlace(paste.blob);
     else if (type === 'hold') {
       const replaced = !!heldShot;
       setHeldShot(paste.blob);
@@ -2708,6 +2728,15 @@ function buildToolbar() {
   // click the thumbnail to see it full size — so you can check it's the right
   // one before it lands on a pin
   $('#held-shot-img').addEventListener('click', () => heldShot && showLightbox(heldShot.url));
+
+  // dragging a file over the slot can't light it up through :hover, so say it
+  // will take the drop the same way hovering does
+  for (const el of [$('#shot-slot'), $('#held-shot')]) {
+    el.addEventListener('dragenter', () => el.classList.add('over'));
+    el.addEventListener('dragover', () => el.classList.add('over'));
+    el.addEventListener('dragleave', () => el.classList.remove('over'));
+    el.addEventListener('drop', () => el.classList.remove('over'));
+  }
 
   $('#btn-game').addEventListener('click', () => {
     $('#game-menu').classList.contains('hidden') ? openGameMenu() : closeGameMenu();
