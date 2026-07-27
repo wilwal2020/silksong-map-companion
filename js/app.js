@@ -1714,20 +1714,90 @@ async function ensureRoom(rect, pad = 400) {
 }
 
 // Custom-game paste: you place it, then you mark where you are.
-async function handleManualPlace(blob) {
-  const bitmap = await createImageBitmap(blob);
-  $('#empty-hint').classList.add('hidden');
-
-  // start it at the size the last paste ended up — every screenshot from the
-  // same game is normally taken at the same zoom, so usually there's nothing
-  // to resize. Otherwise, something that comfortably fits the viewport.
+// Where a fresh paste starts out: the size the last one ended up — every
+// screenshot from the same game is normally taken at the same zoom, so usually
+// there's nothing to resize — centred on the pointer, so pointing at roughly
+// where it belongs both puts it there and gives the aligner its best hint.
+function startRectFor(bitmap) {
   const k = learnedScale || Math.min(
     1, (view.canvas.clientWidth * 0.45) / (bitmap.width * view.scale));
   const w = bitmap.width * k, h = bitmap.height * k;
-  // centred on the pointer: point at roughly where the screenshot belongs and
-  // it lands there, which is also the best help you can give the aligner
   const c = dropPoint();
-  let start = { x: Math.round(c.x - w / 2), y: Math.round(c.y - h / 2), w, h };
+  return { x: Math.round(c.x - w / 2), y: Math.round(c.y - h / 2), w, h };
+}
+
+// Put a placed screenshot down for good: make room, composite it, remember the
+// size, then ask where you are. Shared by the hand-placed flow and by a paste
+// that lined itself up well enough not to need one.
+async function commitPaste(bitmap, rect, baseWidth) {
+  // make room for it first — this can move everything else, and the snapshot
+  // undo restores from has to be of the world as it ends up
+  const shift = await ensureRoom(rect);
+  rect.x += shift.dx; rect.y += shift.dy;
+
+  snapshotForUndo();
+  // A drag ends on whatever fraction of a pixel the mouse happened to stop at,
+  // which means nothing and only costs sharpness — the screenshot gets
+  // resampled and the next paste's stitch lands half a pixel out. So a
+  // hand-placed paste snaps to the map's pixel grid.
+  //
+  // A fraction the aligner MEASURED is the opposite: it is the difference
+  // between a seam you can see and one you can't, and rounding it away undoes
+  // the last thing the alignment did. That one is kept.
+  const px = rect.exact ? rect.x : Math.round(rect.x);
+  const py = rect.exact ? rect.y : Math.round(rect.y);
+  explored.paste(bitmap, px, py, rect.w, rect.h);
+  bitmap.close?.();
+  learnedScale = rect.w / (baseWidth || 1);
+  store.putMeta('scale', learnedScale);
+
+  // step 2 — where are you?
+  const spot = await askPlayerLocation();
+  if (!spot) {
+    toast('Screenshot added.', 'ok', { label: 'Undo', fn: undoLast });
+    return;
+  }
+  const data = await createManualPin(spot.x, spot.y);
+  if (data && lastUndo) lastUndo.pinId = data.id; // undo takes the pin with it
+}
+
+// Before the chooser opens, see whether this is simply a map screenshot that
+// belongs somewhere. One that lines up with what is already down can go
+// straight there — the question "what did you paste?" answers itself. A photo
+// of a room lines up with nothing, so the chooser still appears for it, and
+// "a picture of what's here" is one click away exactly as before.
+//
+// The cheap pass only: sizes are not searched here. A screenshot at a size the
+// map has not seen is a real case, but it is the uncommon one, and making
+// every photo of a room wait through a size ladder to be told "no" is a poor
+// trade. That case still gets the full search from inside the place flow.
+async function tryPlaceOnPaste(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const start = startRectFor(bitmap);
+  spinner(true, 'Seeing where this goes…');
+  await new Promise(r => setTimeout(r, 30));   // let the spinner paint
+  let r = null;
+  try {
+    r = explored.autoAlign(bitmap, start);
+  } catch (e) {
+    console.warn('[map] paste pre-align failed:', e.message);
+  }
+  spinner(false);
+  console.log('[map] paste pre-align:', r);
+  if (alignAccepted(r)) {
+    $('#empty-hint').classList.add('hidden');
+    await commitPaste(bitmap, { x: r.x, y: r.y, w: r.w, h: r.h, exact: true }, bitmap.width);
+    toast('Placed where it fits.', 'ok', { label: 'Undo', fn: undoLast });
+    return true;
+  }
+  bitmap.close?.();
+  return false;
+}
+
+async function handleManualPlace(blob) {
+  const bitmap = await createImageBitmap(blob);
+  $('#empty-hint').classList.add('hidden');
+  let start = startRectFor(bitmap);
 
   // Give auto-align first crack at it: if the screenshot lands anywhere near
   // where it belongs, it arrives already lined up and there's nothing to do
@@ -1765,36 +1835,7 @@ async function handleManualPlace(blob) {
     return;
   }
 
-  // make room for it first — this can move everything else, and the snapshot
-  // undo restores from has to be of the world as it ends up
-  const shift = await ensureRoom(rect);
-  rect.x += shift.dx; rect.y += shift.dy;
-
-  snapshotForUndo();
-  // A drag ends on whatever fraction of a pixel the mouse happened to stop at,
-  // which means nothing and only costs sharpness — the screenshot gets
-  // resampled and the next paste's stitch lands half a pixel out. So a
-  // hand-placed paste snaps to the map's pixel grid.
-  //
-  // A fraction the aligner MEASURED is the opposite: it is the difference
-  // between a seam you can see and one you can't, and rounding it away undoes
-  // the last thing the alignment did. That one is kept.
-  const px = rect.exact ? rect.x : Math.round(rect.x);
-  const py = rect.exact ? rect.y : Math.round(rect.y);
-  explored.paste(bitmap, px, py, rect.w, rect.h);
-  bitmap.close?.();
-  // remember the size for the next paste
-  learnedScale = rect.w / (placeBaseWidth || 1);
-  store.putMeta('scale', learnedScale);
-
-  // step 2 — where are you?
-  const spot = await askPlayerLocation();
-  if (!spot) {
-    toast('Screenshot added.', 'ok', { label: 'Undo', fn: undoLast });
-    return;
-  }
-  const data = await createManualPin(spot.x, spot.y);
-  if (data && lastUndo) lastUndo.pinId = data.id; // undo takes the pin with it
+  await commitPaste(bitmap, rect, placeBaseWidth);
 }
 
 // the click-your-player step. Resolves with map coords, or null if skipped.
@@ -1893,6 +1934,18 @@ function routePaste(blob) {
     return;
   }
 
+  // A map screenshot answers "what did you paste?" by itself — it lines up
+  // with what is already down. Try that before asking, and only ask when it
+  // doesn't fit anywhere.
+  if (handPlaced() && !explored.isBlank()) {
+    tryPlaceOnPaste(blob).then(placed => { if (!placed) openPasteChooser(blob); });
+    return;
+  }
+
+  openPasteChooser(blob);
+}
+
+function openPasteChooser(blob) {
   currentPaste = { blob, url: URL.createObjectURL(blob) };
   $('#paste-preview').src = currentPaste.url;
   $('#dlg-paste').showModal();
