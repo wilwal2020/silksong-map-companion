@@ -366,6 +366,7 @@ export class MapView {
       g.from = { x: g.x, y: g.y, w: g.w };
       g.to = { x: rect.x, y: rect.y, w: rect.w };
       g.t = 0; g.t0 = performance.now(); g.dur = dur; g.onDone = res;
+      this._armGhostGuard(g);
       this._loop();
     });
   }
@@ -378,6 +379,7 @@ export class MapView {
     return new Promise(res => {
       g.phase = 'settle'; g.noImg = true; g.t = 0; g.t0 = performance.now();
       g.dur = dur; g.onDone = res;
+      this._armGhostGuard(g);
       this._loop();
     });
   }
@@ -389,14 +391,43 @@ export class MapView {
     if (this.reduceMotion) { this.clearGhost(); return Promise.resolve(); }
     return new Promise(res => {
       g.phase = 'reject'; g.t = 0; g.t0 = performance.now(); g.dur = dur; g.onDone = res;
+      this._armGhostGuard(g);
       this._loop();
     });
   }
 
   clearGhost() {
+    if (this.ghost) clearTimeout(this.ghost.guard);
     this.ghost = null;
     if (this._ghostRaf) { cancelAnimationFrame(this._ghostRaf); this._ghostRaf = 0; }
     this.requestRender();
+  }
+
+  // Finish whatever phase the ghost is in, and release whoever is waiting on
+  // it. Reached either by the animation running out of time or by the guard
+  // below, so the two cannot both fire.
+  _endGhostPhase(g) {
+    if (this.ghost !== g || !g.onDone) return;
+    clearTimeout(g.guard); g.guard = 0;
+    const done = g.onDone; g.onDone = null;
+    if (g.phase === 'flying') {
+      g.x = g.to.x; g.y = g.to.y; g.w = g.to.w;
+      g.phase = 'landed';       // hold the frame; the loop stops until settle
+      this.render();
+    } else {
+      this.render();
+      this.clearGhost();
+    }
+    done();
+  }
+
+  // These promises gate a paste being committed, and requestAnimationFrame
+  // does not run in a hidden tab — so a paste started and then switched away
+  // from would hang forever, ghost frozen mid-flight, with nothing composited.
+  // A timer finishes the phase when the frames don't come.
+  _armGhostGuard(g) {
+    clearTimeout(g.guard);
+    g.guard = setTimeout(() => this._endGhostPhase(g), g.dur + 500);
   }
 
   _loop() {
@@ -415,14 +446,7 @@ export class MapView {
           g.y = g.from.y + (g.to.y - g.from.y) * e;
           g.w = g.from.w + (g.to.w - g.from.w) * e;
         }
-        if (g.t >= 1) {
-          const done = g.onDone; g.onDone = null;
-          if (g.phase === 'flying') g.phase = 'landed';
-          else { this.render(); this.clearGhost(); done && done(); return; }
-          this.render();
-          done && done();
-          return; // landed: hold the frame, stop the loop until settle
-        }
+        if (g.t >= 1) { this._endGhostPhase(g); return; }
       }
       this.render();
       const cur = this.ghost;

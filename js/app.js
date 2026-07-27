@@ -1747,6 +1747,9 @@ async function commitPaste(bitmap, rect, baseWidth) {
   const px = rect.exact ? rect.x : Math.round(rect.x);
   const py = rect.exact ? rect.y : Math.round(rect.y);
   explored.paste(bitmap, px, py, rect.w, rect.h);
+  // flash over what just landed, then clear itself. A no-op when the paste was
+  // placed by hand — there is no ghost floating in that case.
+  view.settleGhost();
   bitmap.close?.();
   learnedScale = rect.w / (baseWidth || 1);
   store.putMeta('scale', learnedScale);
@@ -1774,6 +1777,10 @@ async function commitPaste(bitmap, rect, baseWidth) {
 async function tryPlaceOnPaste(blob) {
   const bitmap = await createImageBitmap(blob);
   const start = startRectFor(bitmap);
+  // float it over the map while we look, the same as a screenshot being
+  // located in Silksong — so a paste that is about to place itself never just
+  // appears out of nowhere; you watch it arrive and snap down
+  showPasteGhost(bitmap);
   spinner(true, 'Seeing where this goes…');
   await new Promise(r => setTimeout(r, 30));   // let the spinner paint
   let r = null;
@@ -1783,14 +1790,19 @@ async function tryPlaceOnPaste(blob) {
     console.warn('[map] paste pre-align failed:', e.message);
   }
   spinner(false);
+  dockSpinner(false);
   console.log('[map] paste pre-align:', r);
   if (alignAccepted(r)) {
-    $('#empty-hint').classList.add('hidden');
-    await commitPaste(bitmap, { x: r.x, y: r.y, w: r.w, h: r.h, exact: true }, bitmap.width);
-    toast('Placed where it fits.', 'ok', { label: 'Undo', fn: undoLast });
+    const rect = { x: r.x, y: r.y, w: r.w, h: r.h, exact: true };
+    await view.flyGhostTo(rect);               // ...and lands on its spot
+    await commitPaste(bitmap, rect, bitmap.width);
     return true;
   }
+  // Not a map screenshot, most likely — so no shake, nothing failed. It goes
+  // quietly and the chooser asks what it was.
+  view.clearGhost();
   bitmap.close?.();
+  updateEmptyHint();
   return false;
 }
 
