@@ -597,9 +597,11 @@ dialog h2 { margin: 0 0 14px; font-family: Cinzel, serif; font-size: 1.05rem; le
 }
 
 .cat-bar-head {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 6px;
   padding: 12px 12px 10px; border-bottom: 1px solid var(--border);
 }
+/* three buttons don't fit beside the title in a narrow sidebar — the title
+   takes the whole first line then, and they sit together underneath */
 .cat-bar-title {
   font-family: Cinzel, serif; font-size: .82rem; letter-spacing: .08em;
   color: var(--text); margin-right: auto;

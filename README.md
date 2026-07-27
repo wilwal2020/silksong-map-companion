@@ -138,8 +138,12 @@ feathered), and **Clean map** isn't offered.
 
 On the left, the **Pin types** panel filters which pins show (with **All** /
 **Hide all** and a **Show done pins** toggle), and lets you create your own
-types — an emoji icon, a colour, and a name. The **map-opacity** slider dims the
-revealed map while keeping pins fully visible.
+types — an emoji icon, a colour, and a name. Drag a row to reorder the list, or
+press **Clean** to have it sorted for you: the types you have pins for stay
+checked at the top, the ones showing nothing drop to the bottom unchecked.
+Nothing is deleted, and with done pins hidden a type whose pins are all checked
+off counts as empty too. The **map-opacity** slider dims the revealed map while
+keeping pins fully visible.
 
 Bottom right, **Background** sets the colour the canvas shows wherever nothing
 has been pasted: a colour picker, six presets, and an **Eyedropper** that takes

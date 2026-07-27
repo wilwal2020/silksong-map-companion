@@ -2311,6 +2311,45 @@ function ensureCatVisible(catId) {
   persistFilter();
 }
 
+// Tidy the list down to the types you are actually using: the ones with pins
+// stay checked and rise to the top, the empty ones drop to the bottom and are
+// unchecked. Nothing is deleted — an empty type is one paste away from being
+// used again, and dragging it back up is all it takes.
+//
+// "Empty" follows the counts you can see rather than the raw pin list: with
+// done pins hidden, a type whose pins are all checked off shows nothing and
+// counts as empty, so cleaning never hides anything that was on screen.
+function cleanCatList() {
+  const live = new Set();
+  for (const e of pins.pins.values()) {
+    if (!pins.showDone && e.data.done) continue;
+    live.add(e.data.cat);
+  }
+  const ordered = categories();
+  const kept = ordered.filter(c => live.has(c.id));
+  const empty = ordered.filter(c => !live.has(c.id));
+  if (!kept.length) { toast('No pins to sort the types by yet.'); return; }
+  if (!empty.length) { toast('Every type has pins — nothing to tidy.'); return; }
+
+  // pressing it again on an already-tidy list shouldn't claim to have done
+  // the same work twice
+  const tidy = [...kept, ...empty];
+  if (ordered.every((c, i) => c.id === tidy[i].id)
+      && pins.filter.size === kept.length && kept.every(c => pins.filter.has(c.id))) {
+    toast('Already tidy — the types with pins are the ones up top.');
+    return;
+  }
+
+  setOrder(tidy.map(c => c.id));
+  pins.filter = new Set(kept.map(c => c.id));
+  soloReturn = null; soloedId = null;
+  renderCatList();          // rebuilds in the new order, checkboxes and all
+  pins.applyFilter();
+  persistCats();
+  persistFilter();
+  toast(`${empty.length} empty type${empty.length === 1 ? '' : 's'} moved down and unchecked.`, 'ok');
+}
+
 function wireCatRow(row, id) {
   row.addEventListener('pointerdown', e => {
     if (e.target.closest('.cat-check-wrap, .cat-del, .cat-edit')) return; // let controls work
@@ -2795,6 +2834,7 @@ function buildToolbar() {
     updateSoloUI();
     persistFilter();
   });
+  $('#btn-cat-clean').addEventListener('click', cleanCatList);
   $('#btn-cat-none').addEventListener('click', () => {
     pins.filter.clear();
     soloReturn = null; soloedId = null;
