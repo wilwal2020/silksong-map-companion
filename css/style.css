@@ -792,6 +792,65 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
   filter: drop-shadow(0 1px 4px rgba(0,0,0,.8));
 }
 
+/* ---------- background colour (bottom right) ---------- */
+
+/* The canvas shows this wherever nothing has been pasted. Worth changing for a
+   game whose map isn't drawn on a black void — matching the backdrop to the
+   screenshots' own is what makes separate pastes read as one map. */
+#bg-tool { position: fixed; right: 16px; bottom: 16px; z-index: 26; }
+#btn-bg {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 13px 8px 9px; border-radius: 999px;
+  background: rgba(12,14,19,.92); border: 1px solid var(--border);
+  color: var(--text-dim); font: inherit; font-size: .82rem; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,.5);
+  transition: border-color .12s, color .12s;
+}
+#btn-bg:hover, #bg-tool.open #btn-bg { border-color: var(--border-strong); color: var(--text); }
+.bg-swatch {
+  width: 17px; height: 17px; flex: none; border-radius: 50%;
+  border: 1px solid var(--border-strong); background: #05060a;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.5);
+}
+
+#bg-pop {
+  position: absolute; right: 0; bottom: calc(100% + 9px); width: 244px;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 13px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+  animation: bgp-in .14s ease-out;
+}
+#bg-pop.hidden { display: none; }
+@keyframes bgp-in { from { opacity: 0; transform: translateY(6px); } }
+.bgp-head { font-size: .74rem; letter-spacing: .09em; text-transform: uppercase; color: var(--text-dim); }
+.bgp-row { display: flex; align-items: center; gap: 9px; }
+#bg-color {
+  width: 46px; height: 36px; flex: none; padding: 2px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+}
+#btn-bg-pick { flex: 1; justify-content: center; padding: 8px 10px; font-size: .8rem; }
+#btn-bg-pick svg { width: 15px; height: 15px; }
+/* no EyeDropper in this browser — the colour input is still the whole feature */
+#btn-bg-pick.hidden { display: none; }
+
+.bgp-swatches { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.bgp-sw {
+  aspect-ratio: 1; border-radius: 6px; padding: 0; cursor: pointer;
+  border: 1px solid var(--border-strong);
+  transition: transform .1s, border-color .1s;
+}
+.bgp-sw:hover { transform: scale(1.12); border-color: var(--text-dim); }
+.bgp-sw.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.bgp-reset {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--text-dim); font: inherit; font-size: .78rem; text-align: left;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.bgp-reset:hover { color: var(--text); }
+/* the step bar and the placement toolbar own the bottom while placing */
+body.placing-paste #bg-tool { display: none; }
+
 /* ---------- new-type dialog ---------- */
 
 .cattype-grid { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }

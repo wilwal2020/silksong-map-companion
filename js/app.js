@@ -1,5 +1,5 @@
 import { Explored } from './explored.js';
-import { MapView } from './mapview.js';
+import { MapView, DEFAULT_BG } from './mapview.js';
 import { store, setStoreGame } from './store.js';
 import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT, refinePlacement } from './match.js';
 import { ocrLocate, loadLabels } from './ocr.js';
@@ -2090,6 +2090,7 @@ async function exportAll() {
     // say so (pin coordinates only mean anything within the same world size)
     game: { id: game.id, name: game.name, icon: game.icon, w: world.width, h: world.height },
     fog: await blobToDataURL(await explored.toBlob()),
+    bgColor,
     customCats: customCategories(),
     catOrder: currentOrder(),
     pins: await Promise.all(allPins.map(async p => ({
@@ -2141,6 +2142,10 @@ async function importAll(file) {
   // map it saved would be cropped to whatever this one happens to be
   if (from && from.w && from.h) await ensureRoom({ x: 0, y: 0, w: from.w, h: from.h }, 0);
   if (data.fog) await explored.loadFromBlob(await dataURLToBlob(data.fog));
+
+  // the backdrop was part of how that map looked — an older backup has none,
+  // and then whatever is set here is left alone
+  if (data.bgColor) setBgColor(data.bgColor);
 
   setCustomCategories(data.customCats || []);
   setOrder(data.catOrder || []);
@@ -2678,6 +2683,88 @@ function wireOpacitySlider() {
   range.addEventListener('change', () => store.putMeta('mapOpacity', +range.value));
 }
 
+// ------------------------------------------------------ background colour
+
+// The canvas shows this wherever nothing has been pasted. It is a view
+// setting, not map data: nothing composited is touched, so changing it back
+// costs nothing and an export carries your choice without baking it in.
+
+// worth having without reaching for the picker: the default void, true black,
+// and the grounds that maps which aren't drawn on a black void tend to sit on
+const BG_PRESETS = ['#05060a', '#000000', '#101826', '#1b1712', '#3a3f4b', '#e8e2d4'];
+
+let bgColor = DEFAULT_BG;
+
+function setBgColor(hex, { persist = true } = {}) {
+  hex = String(hex || '').trim().toLowerCase();
+  if (!/^#[0-9a-f]{6}$/.test(hex)) return;
+  bgColor = hex;
+  view.bgColor = hex;
+  view.requestRender();
+  $('#bg-swatch').style.background = hex;
+  $('#bg-color').value = hex;
+  for (const sw of $('#bg-presets').children) sw.classList.toggle('on', sw.dataset.color === hex);
+  if (persist) store.putMeta('bgColor', hex);
+}
+
+function closeBgPop() {
+  $('#bg-pop').classList.add('hidden');
+  $('#bg-tool').classList.remove('open');
+  document.removeEventListener('pointerdown', onBgOutside, true);
+  document.removeEventListener('keydown', onBgKey, true);
+}
+function onBgOutside(e) { if (!e.target.closest('#bg-tool')) closeBgPop(); }
+function onBgKey(e) { if (e.key === 'Escape') { e.stopPropagation(); closeBgPop(); } }
+
+function openBgPop() {
+  $('#bg-pop').classList.remove('hidden');
+  $('#bg-tool').classList.add('open');
+  document.addEventListener('pointerdown', onBgOutside, true);
+  document.addEventListener('keydown', onBgKey, true);
+}
+
+function wireBgTool() {
+  const presets = $('#bg-presets');
+  for (const c of BG_PRESETS) {
+    const sw = document.createElement('button');
+    sw.className = 'bgp-sw';
+    sw.dataset.color = c;
+    sw.style.background = c;
+    sw.title = c;
+    sw.addEventListener('click', () => setBgColor(c));
+    presets.appendChild(sw);
+  }
+
+  $('#btn-bg').addEventListener('click', () => {
+    $('#bg-pop').classList.contains('hidden') ? openBgPop() : closeBgPop();
+  });
+
+  const input = $('#bg-color');
+  // follow the picker live, and only write it down once you settle
+  input.addEventListener('input', () => setBgColor(input.value, { persist: false }));
+  input.addEventListener('change', () => setBgColor(input.value));
+
+  $('#btn-bg-reset').addEventListener('click', () => setBgColor(DEFAULT_BG));
+
+  // The eyedropper is the point of this for a game whose map isn't on a black
+  // void: take the colour from the screenshot's own background and the pastes
+  // stop looking like rectangles. Chromium-only, so the button goes away
+  // entirely where it wouldn't work rather than failing when pressed.
+  const pick = $('#btn-bg-pick');
+  if (!window.EyeDropper) {
+    pick.remove();
+  } else {
+    pick.addEventListener('click', async () => {
+      try {
+        const { sRGBHex } = await new EyeDropper().open();
+        setBgColor(sRGBHex);
+      } catch {
+        // dismissed with Esc — picking nothing isn't a failure worth a toast
+      }
+    });
+  }
+}
+
 // tell the user how to open their OS emoji keyboard in emoji-friendly fields
 function emojiKeyboardTip() {
   const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
@@ -2750,6 +2837,7 @@ function buildToolbar() {
 
   wireSidebarResize();
   wireOpacitySlider();
+  wireBgTool();
   $('#btn-cattype-save').addEventListener('click', saveCatType);
   $('#btn-cattype-cancel').addEventListener('click', () => { catTypeCreatedCb = null; closeDialog('#dlg-cattype'); });
   // picking a type from another game just prefills the fields — you still
@@ -2956,6 +3044,8 @@ async function init() {
 
   buildToolbar();
   applyGameChrome();
+  // the backdrop this game was left on (the swatches are built by now)
+  setBgColor((await store.getMeta('bgColor')) || DEFAULT_BG, { persist: false });
   if (game.builtin) loadLabels(); // warm the area-name table for OCR matching
   updateEmptyHint();
 

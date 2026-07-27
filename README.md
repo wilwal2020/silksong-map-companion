@@ -141,6 +141,14 @@ On the left, the **Pin types** panel filters which pins show (with **All** /
 types — an emoji icon, a colour, and a name. The **map-opacity** slider dims the
 revealed map while keeping pins fully visible.
 
+Bottom right, **Background** sets the colour the canvas shows wherever nothing
+has been pasted: a colour picker, six presets, and an **Eyedropper** that takes
+the colour from anywhere on your screen — point it at a screenshot's own
+background and your pastes stop reading as rectangles on a black void. It's per
+game, kept across reloads and carried in backups; nothing you've pasted is
+touched, so it's free to change back. (The eyedropper is a Chromium feature; in
+other browsers the button isn't shown and the picker still works.)
+
 ## Running it
 
 It's a static site — no build step.

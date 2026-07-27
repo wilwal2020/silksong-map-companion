@@ -10,6 +10,9 @@ const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 
 // to see what you are lining the next screenshot up against.
 const KEEP_VISIBLE = 150;
 
+// the backdrop behind everything, and what "reset" goes back to
+export const DEFAULT_BG = '#05060a';
+
 export class MapView {
   constructor(canvas, world, explored, reference = null) {
     this.canvas = canvas;
@@ -36,6 +39,10 @@ export class MapView {
 
     // "Reveal map": lay the full world map over yours to compare them
     this.debugReveal = false;
+
+    // what shows through wherever nothing has been pasted — the default void,
+    // until you set your own (see the background button, bottom right)
+    this.bgColor = DEFAULT_BG;
 
     this.onViewChanged = null;
     this._raf = 0;
@@ -522,7 +529,7 @@ export class MapView {
   render() {
     const ctx = this.ctx, dpr = window.devicePixelRatio || 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#05060a';
+    ctx.fillStyle = this.bgColor || DEFAULT_BG;
     ctx.fillRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
 
     ctx.setTransform(dpr * this.scale, 0, 0, dpr * this.scale, dpr * this.ox, dpr * this.oy);
