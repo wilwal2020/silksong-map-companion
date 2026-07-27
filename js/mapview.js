@@ -177,7 +177,9 @@ export class MapView {
   placementRect() {
     const p = this.placement;
     if (!p) return null;
-    return { x: p.x, y: p.y, w: p.w, h: p.w * (p.img.height / p.img.width) };
+    // `exact` marks a position that was MEASURED to a fraction of a pixel
+    // rather than landed on by hand, so the paste knows not to round it off
+    return { x: p.x, y: p.y, w: p.w, h: p.w * (p.img.height / p.img.width), exact: !!p.exact };
   }
 
   // Announce a discrete change to the placement BEFORE it happens, with the
@@ -189,11 +191,12 @@ export class MapView {
 
   // move it to an exact rect (used by auto-align and by undo). `record:false`
   // for an undo itself — putting a position back isn't a new step.
-  setPlacementRect(r, { record = true } = {}) {
+  setPlacementRect(r, { record = true, exact = false } = {}) {
     const p = this.placement;
     if (!p) return;
     if (record) this._beginEdit('set');
     p.x = r.x; p.y = r.y; p.w = r.w;
+    p.exact = exact;
     this._placementChanged();
   }
 
@@ -201,6 +204,7 @@ export class MapView {
   scalePlacement(factor, anchorScreen = null) {
     const p = this.placement;
     if (!p || p.locked) return;
+    p.exact = false;   // moved by hand: no longer a measured position
     this._beginEdit('resize');
     const h = p.w * (p.img.height / p.img.width);
     const a = anchorScreen
@@ -236,6 +240,7 @@ export class MapView {
   resizePlacementCorner(corner, screenPt) {
     const p = this.placement;
     if (!p || p.locked) return;
+    p.exact = false;   // moved by hand: no longer a measured position
     const asp = p.img.width / p.img.height;           // width per height
     const h = p.w * (p.img.height / p.img.width);
     // the pinned corner: opposite the one being dragged
@@ -253,6 +258,7 @@ export class MapView {
   movePlacement(dx, dy) {
     const p = this.placement;
     if (!p || p.locked) return;
+    p.exact = false;   // moved by hand: no longer a measured position
     p.x += dx; p.y += dy;
     this._placementChanged();
   }
@@ -266,6 +272,7 @@ export class MapView {
   nudgePlacement(dx, dy) {
     const p = this.placement;
     if (!p || p.locked) return;
+    p.exact = false;   // moved by hand: no longer a measured position
     this._beginEdit('nudge');
     p.x = Math.round(p.x) + dx;
     p.y = Math.round(p.y) + dy;

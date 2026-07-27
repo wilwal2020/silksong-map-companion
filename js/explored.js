@@ -303,6 +303,11 @@ function satSum(sat, W, H, x, y, w, h) {
 const MAX_WORLD_SIDE = 12000;
 const MAX_WORLD_PIXELS = 48e6;   // ~190 MB at one canvas pixel per map pixel
 
+// Side of the centred patch the sub-pixel stage judges on. Which fraction of a
+// pixel fits best is a local question — a patch this size answers it as well as
+// the whole footprint would, for a fraction of the redrawing.
+const SUB_WINDOW = 384;
+
 export class Explored {
   constructor(mapW, mapH, scale = 1) {
     this.mapW = mapW;
@@ -894,56 +899,144 @@ export class Explored {
     const WANT = 20000;
     const stride = Math.max(1, Math.round(Math.sqrt((fw * fh) / WANT)));
 
-    let best = null;
-    for (const k of scales) {
+    // the composite around one candidate size, read back once
+    const prep = k => {
       const kw = Math.round(fw * k), kh = Math.round(fh * k);
-      if (kw < 24 || kh < 24) continue;
+      if (kw < 24 || kh < 24) return null;
       // keep the centre still, so a scale tweak doesn't smuggle in a shift
       const kx = Math.round(rect.x * s + (fw - kw) / 2);
       const ky = Math.round(rect.y * s + (fh - kh) / 2);
-
-      const sc = canvasOf(kw, kh);
-      const sx = sc.getContext('2d', { willReadFrequently: true });
-      sx.imageSmoothingEnabled = true;
-      sx.drawImage(bitmap, 0, 0, kw, kh);
-      const S = sx.getImageData(0, 0, kw, kh).data;
-
-      // the composite once per scale, over the footprint plus the search reach
-      const ec = canvasOf(kw + 2 * R, kh + 2 * R);
+      const ew = kw + 2 * R + 2, eh = kh + 2 * R + 2;
+      const ec = canvasOf(ew, eh);
       const ex = ec.getContext('2d', { willReadFrequently: true });
-      ex.drawImage(this.canvas, kx - R, ky - R, kw + 2 * R, kh + 2 * R,
-        0, 0, kw + 2 * R, kh + 2 * R);
-      const E = ex.getImageData(0, 0, kw + 2 * R, kh + 2 * R).data;
-      const EW = kw + 2 * R;
+      // a source rect reaching past the composite's edge is clipped in step
+      // with the destination, so this stays aligned at the map borders
+      ex.drawImage(this.canvas, kx - R, ky - R, ew, eh, 0, 0, ew, eh);
+      return { k, kw, kh, kx, ky, ew, E: ex.getImageData(0, 0, ew, eh).data };
+    };
 
+    // The screenshot drawn with a FRACTIONAL offset baked into the draw, which
+    // is how this gets below a whole pixel: the canvas resamples it a quarter
+    // of a pixel over, and that resampled version is what gets compared. Whole
+    // steps can only ever land within half a pixel of right, and half a pixel
+    // of blur is exactly what makes a seam visible.
+    const shotAt = (p, fx, fy) => {
+      const c = canvasOf(p.kw + 1, p.kh + 1);
+      const x = c.getContext('2d', { willReadFrequently: true });
+      x.imageSmoothingEnabled = true;
+      x.drawImage(bitmap, fx, fy, p.kw, p.kh);
+      return x.getImageData(0, 0, p.kw + 1, p.kh + 1).data;
+    };
+
+    // mean |difference| of that shot buffer against the composite, with the
+    // shot's top-left at whole-pixel offset (ix, iy) from the candidate origin
+    const score = (p, S, ix, iy) => {
+      const SW = p.kw + 1;
+      let wsum = 0, dsum = 0;
+      // the outermost row and column carry only part of a resampled pixel
+      for (let y = 1; y < p.kh; y += stride) {
+        const erow = (y + R + iy) * p.ew + R + ix;
+        const srow = y * SW;
+        for (let x = 1; x < p.kw; x += stride) {
+          const ei = (erow + x) * 4;
+          const a = p.E[ei + 3];
+          if (a < 24) continue;                // nothing there to be wrong against
+          const si = (srow + x) * 4;
+          if (S[si + 3] < 24) continue;
+          const el = p.E[ei] * 0.299 + p.E[ei + 1] * 0.587 + p.E[ei + 2] * 0.114;
+          const sl = S[si] * 0.299 + S[si + 1] * 0.587 + S[si + 2] * 0.114;
+          const w = a / 255;                   // faded rim pixels count for less
+          wsum += w;
+          dsum += w * Math.abs(el - sl);
+        }
+      }
+      return wsum < 200 ? null : dsum / wsum;  // too little overlap to judge by
+    };
+
+    // whole pixels first, across every candidate size
+    let best = null;
+    for (const k of scales) {
+      const p = prep(k);
+      if (!p) continue;
+      const S0 = shotAt(p, 0, 0);
       for (let dy = -R; dy <= R; dy++) {
         for (let dx = -R; dx <= R; dx++) {
-          let wsum = 0, dsum = 0;
-          for (let y = 0; y < kh; y += stride) {
-            const erow = (y + R + dy) * EW + R + dx;
-            const srow = y * kw;
-            for (let x = 0; x < kw; x += stride) {
-              const ei = (erow + x) * 4;
-              const a = E[ei + 3];
-              if (a < 24) continue;              // nothing there to be wrong against
-              const si = (srow + x) * 4;
-              if (S[si + 3] < 24) continue;
-              const el = E[ei] * 0.299 + E[ei + 1] * 0.587 + E[ei + 2] * 0.114;
-              const sl = S[si] * 0.299 + S[si + 1] * 0.587 + S[si + 2] * 0.114;
-              const w = a / 255;                 // faded rim pixels count for less
-              wsum += w;
-              dsum += w * Math.abs(el - sl);
-            }
-          }
-          if (wsum < 200) continue;              // too little overlap to judge by
-          const diff = dsum / wsum;
-          if (!best || diff < best.diff) {
-            best = { diff, dx, dy, k, x: (kx + dx) / s, y: (ky + dy) / s, w: kw / s, h: kh / s };
-          }
+          const diff = score(p, S0, dx, dy);
+          if (diff != null && (!best || diff < best.diff)) best = { diff, p, ox: dx, oy: dy };
         }
       }
     }
-    return best;
+    if (!best) return null;
+
+    // ...then close in on the fraction, at the size that won.
+    //
+    // Judged on a centred window rather than the whole footprint: which
+    // fraction of a pixel fits best is a local question, and the answer over a
+    // 384px patch is the answer over all of it — while re-rendering the whole
+    // screenshot sixteen times to find out is most of what this costs.
+    const P = best.p;
+    const sw = Math.min(P.kw - 2, SUB_WINDOW), sh = Math.min(P.kh - 2, SUB_WINDOW);
+    if (sw >= 24 && sh >= 24) {
+      const ax = Math.floor((P.kw - sw) / 2), ay = Math.floor((P.kh - sh) / 2);
+      const wStride = Math.max(1, Math.round(Math.sqrt((sw * sh) / WANT)));
+      // the same fractional draw as above, but only the middle of it kept
+      const winAt = (fx, fy) => {
+        const c = canvasOf(sw, sh);
+        const x = c.getContext('2d', { willReadFrequently: true });
+        x.imageSmoothingEnabled = true;
+        x.drawImage(bitmap, fx - ax, fy - ay, P.kw, P.kh);
+        return x.getImageData(0, 0, sw, sh).data;
+      };
+      const winScore = (S, ix, iy) => {
+        let wsum = 0, dsum = 0;
+        for (let y = 0; y < sh; y += wStride) {
+          const erow = (y + ay + R + iy) * P.ew + ax + R + ix;
+          const srow = y * sw;
+          for (let x = 0; x < sw; x += wStride) {
+            const ei = (erow + x) * 4;
+            const a = P.E[ei + 3];
+            if (a < 24) continue;
+            const si = (srow + x) * 4;
+            if (S[si + 3] < 24) continue;
+            const el = P.E[ei] * 0.299 + P.E[ei + 1] * 0.587 + P.E[ei + 2] * 0.114;
+            const sl = S[si] * 0.299 + S[si + 1] * 0.587 + S[si + 2] * 0.114;
+            const w = a / 255;
+            wsum += w;
+            dsum += w * Math.abs(el - sl);
+          }
+        }
+        return wsum < 200 ? null : dsum / wsum;
+      };
+      // the incumbent has to be re-measured on the window too, or it would be
+      // compared against scores from a different set of pixels
+      let cur = { ox: best.ox, oy: best.oy };
+      cur.diff = winScore(winAt(0, 0), cur.ox, cur.oy);
+      if (cur.diff != null) {
+        // Two rounds of a shrinking ring settle it to an eighth of a pixel,
+        // which is well past anything the eye picks out of a seam.
+        for (const step of [0.5, 0.25]) {
+          let round = cur;
+          for (const dy of [-step, 0, step]) {
+            for (const dx of [-step, 0, step]) {
+              if (!dx && !dy) continue;
+              const ox = cur.ox + dx, oy = cur.oy + dy;
+              if (Math.abs(ox) > R || Math.abs(oy) > R) continue;
+              const ix = Math.floor(ox), iy = Math.floor(oy);
+              const diff = winScore(winAt(ox - ix, oy - iy), ix, iy);
+              if (diff != null && diff < round.diff) round = { diff, ox, oy };
+            }
+          }
+          cur = round;
+        }
+        best = { diff: best.diff, p: P, ox: cur.ox, oy: cur.oy };
+      }
+    }
+
+    const p = best.p;
+    return {
+      diff: best.diff, dx: best.ox, dy: best.oy, k: p.k,
+      x: (p.kx + best.ox) / s, y: (p.ky + best.oy) / s, w: p.kw / s, h: p.kh / s,
+    };
   }
 
   // Lift the part of the composite inside a map-coordinate polygon: hand it

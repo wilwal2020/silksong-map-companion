@@ -1666,7 +1666,9 @@ function runAutoAlign(dir = 0) {
         + 'Try moving it closer to where it belongs, or place it by eye.', 'error');
       return;
     }
-    view.setPlacementRect(r);
+    // `exact`: the last pass measured this down to a fraction of a pixel, so
+    // the paste keeps the fraction instead of rounding it away
+    view.setPlacementRect(r, { exact: true });
     const moved = Math.hypot(r.x - rect.x, r.y - rect.y);
     const resized = Math.abs(r.w - rect.w) > rect.w * 0.005;
     toast(
@@ -1769,11 +1771,17 @@ async function handleManualPlace(blob) {
   rect.x += shift.dx; rect.y += shift.dy;
 
   snapshotForUndo();
-  // land on the map's pixel grid: a drag ends on a fraction of a pixel, which
-  // resamples the screenshot (softening it) and puts the next paste's stitch
-  // half a pixel out. Auto-align and the arrow keys already work in whole
-  // pixels, so this only ever moves a free-dragged paste by <1px.
-  explored.paste(bitmap, Math.round(rect.x), Math.round(rect.y), rect.w, rect.h);
+  // A drag ends on whatever fraction of a pixel the mouse happened to stop at,
+  // which means nothing and only costs sharpness — the screenshot gets
+  // resampled and the next paste's stitch lands half a pixel out. So a
+  // hand-placed paste snaps to the map's pixel grid.
+  //
+  // A fraction the aligner MEASURED is the opposite: it is the difference
+  // between a seam you can see and one you can't, and rounding it away undoes
+  // the last thing the alignment did. That one is kept.
+  const px = rect.exact ? rect.x : Math.round(rect.x);
+  const py = rect.exact ? rect.y : Math.round(rect.y);
+  explored.paste(bitmap, px, py, rect.w, rect.h);
   bitmap.close?.();
   // remember the size for the next paste
   learnedScale = rect.w / (placeBaseWidth || 1);
