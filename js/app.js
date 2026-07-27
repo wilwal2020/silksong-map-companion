@@ -1554,8 +1554,16 @@ function buildMatchBar() {
   return box;
 }
 
+// `sharp` is the guard against agreeing by accident: how much worse the fit
+// gets a stride away. A real screenshot's lines stop meeting the moment it is
+// moved, so the difference jumps; a photo of a room is a wash of texture that
+// covers whatever is under it wherever it lands, so moving it changes nothing.
+// Every other measure asks how GOOD the fit is, and answers well for both.
+const ALIGN_MIN_SHARP = 0.12;
+
 function alignAccepted(r) {
-  return !!r && r.cover >= alignMinCover && (r.score >= 0.03 || r.evidence >= 0.5);
+  return !!r && r.cover >= alignMinCover && (r.sharp ?? 1) >= ALIGN_MIN_SHARP
+    && (r.score >= 0.03 || r.evidence >= 0.5);
 }
 
 // Why it refused, in words. A bare "couldn't line it up" leaves you guessing
@@ -1568,6 +1576,11 @@ function alignRefusal(r) {
   if (r.cover < alignMinCover) {
     return `the closest fit only matched ${pct(r.cover)} of the map underneath `
       + `(it wants ${pct(alignMinCover)}), so it is probably not the right spot`;
+  }
+  if ((r.sharp ?? 1) < ALIGN_MIN_SHARP) {
+    return 'it fits that spot no better than the ones beside it — this looks '
+      + 'like a picture rather than a screenshot of the map, so there is '
+      + 'nothing in it to line up';
   }
   return `there was too little map under it to be sure — ${pct(r.evidence)} `
     + 'of the overlap it wants, and too small a share of the screenshot to judge by';

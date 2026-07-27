@@ -565,6 +565,11 @@ export class Explored {
       // screenshot happens to add.
       const EV = Math.max(50, pw * ph * 0.008);
 
+      // What share of the screenshot counts as content at all. A map is mostly
+      // empty; a photograph is not. This is what any position would agree with
+      // by chance, and `lift` below measures the agreement against it.
+      const density = N.n / Math.max(1, pw * ph);
+
       // Scan outward from the drop in rings rather than row by row: a good
       // score found near the middle prunes most of the outer ground, and when
       // two spots tie the nearer one is already the incumbent.
@@ -624,7 +629,7 @@ export class Explored {
         const cand = {
           score, f, ox, oy, w: z.w, h: z.h,
           x: (ox / f + reg.x) / s, y: (oy / f + reg.y) / s,
-          cover, evidence, fit: cover * evidence,
+          cover, evidence, density, fit: cover * evidence,
           overlap: Math.min(ecnt, N.n) / N.n,
         };
         // one entry per neighbourhood — keep the best of each.
@@ -852,9 +857,16 @@ export class Explored {
     } catch { tuned = null; }
     const out = tuned || best;
 
+    // is this spot actually better than its neighbours, or would anywhere do?
+    let sharp = null;
+    try {
+      sharp = this.distinctness(bmp, { x: out.x, y: out.y, w: out.w, h: out.h });
+    } catch { sharp = null; }
+
     return {
       x: out.x, y: out.y, w: out.w, h: out.h,
       score: best.score, cover: best.cover, evidence: best.evidence,
+      density: best.density, sharp: sharp ? +sharp.sharp.toFixed(3) : null,
       fit: best.fit, overlap: best.overlap, scale: out.w / rect.w,
       // what the final pixel-level pass changed, if anything
       polish: tuned
@@ -1037,6 +1049,74 @@ export class Explored {
       diff: best.diff, dx: best.ox, dy: best.oy, k: p.k,
       x: (p.kx + best.ox) / s, y: (p.ky + best.oy) / s, w: p.kw / s, h: p.kh / s,
     };
+  }
+
+  // Does this fit DEPEND on being here? — the guard against agreeing by
+  // accident.
+  //
+  // Every measure up to now asks how well the screenshot matches at the spot
+  // that was found, and a picture with content nearly everywhere answers well
+  // wherever it lands: a photo of a room is a wash of texture, so whatever map
+  // is under it is "explained" by something. Asked only how good the fit is,
+  // such a picture matches perfectly, anywhere on the map.
+  //
+  // What separates it from a real screenshot is not how well the winner
+  // scores but how badly its NEIGHBOURS do. Shift a real map screenshot a good
+  // way off and the lines stop meeting: the difference jumps. Shift a wash of
+  // texture and nothing changes, because nothing was ever lining up. So this
+  // compares the chosen spot against the same measure a stride away in eight
+  // directions, and reports how much better being in the right place made it.
+  distinctness(bitmap, rect, { reach = 30 } = {}) {
+    const s = this.scale;
+    const D = Math.max(6, Math.round(reach * s));
+    const kw = Math.round(rect.w * s), kh = Math.round(rect.h * s);
+    if (kw < 24 || kh < 24) return null;
+    const kx = Math.round(rect.x * s), ky = Math.round(rect.y * s);
+    const ew = kw + 2 * D, eh = kh + 2 * D;
+    const ec = canvasOf(ew, eh);
+    const ex = ec.getContext('2d', { willReadFrequently: true });
+    ex.drawImage(this.canvas, kx - D, ky - D, ew, eh, 0, 0, ew, eh);
+    const E = ex.getImageData(0, 0, ew, eh).data;
+    const sc = canvasOf(kw, kh);
+    const sx = sc.getContext('2d', { willReadFrequently: true });
+    sx.imageSmoothingEnabled = true;
+    sx.drawImage(bitmap, 0, 0, kw, kh);
+    const S = sx.getImageData(0, 0, kw, kh).data;
+    const stride = Math.max(1, Math.round(Math.sqrt((kw * kh) / 20000)));
+
+    const at = (dx, dy) => {
+      let wsum = 0, dsum = 0;
+      for (let y = 0; y < kh; y += stride) {
+        const erow = (y + D + dy) * ew + D + dx, srow = y * kw;
+        for (let x = 0; x < kw; x += stride) {
+          const ei = (erow + x) * 4;
+          const a = E[ei + 3];
+          if (a < 24) continue;
+          const si = (srow + x) * 4;
+          if (S[si + 3] < 24) continue;
+          const el = E[ei] * 0.299 + E[ei + 1] * 0.587 + E[ei + 2] * 0.114;
+          const sl = S[si] * 0.299 + S[si + 1] * 0.587 + S[si + 2] * 0.114;
+          const wt = a / 255;
+          wsum += wt;
+          dsum += wt * Math.abs(el - sl);
+        }
+      }
+      return wsum < 200 ? null : dsum / wsum;
+    };
+
+    const here = at(0, 0);
+    if (here == null) return null;
+    const away = [];
+    for (const [dx, dy] of [[D, 0], [-D, 0], [0, D], [0, -D], [D, D], [-D, -D], [D, -D], [-D, D]]) {
+      const v = at(dx, dy);
+      if (v != null) away.push(v);
+    }
+    if (!away.length) return null;
+    away.sort((a, b) => a - b);
+    // the median of the neighbours, so one that happens to also line up (a
+    // corridor repeating, say) doesn't speak for all eight
+    const near = away[away.length >> 1];
+    return { here, near, sharp: near > 0 ? Math.max(0, (near - here) / near) : 0 };
   }
 
   // Lift the part of the composite inside a map-coordinate polygon: hand it
