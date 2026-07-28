@@ -109,7 +109,13 @@ feathered), and **Clean map** isn't offered.
 ## The toolbar
 
 - **📍 Add pin** — drop a pin by hand: click, then click the spot on the map
-  (right-click or `Esc` cancels).
+  (right-click or `Esc` cancels). Carry it out to the **edge of the screen**
+  instead and a grid of slots lights up along the rim: drop it in one and you
+  get a **persistent** pin — square, and nailed to the screen rather than to
+  the map, so it stays in sight however far you pan. The slots keep clear of
+  the buttons, and two pins never share one. The pin's own menu has the same
+  switch (**Keep on screen**) for changing your mind either way; moving a
+  persistent pin needs no ✓/✗ confirmation, since it can only land in a slot.
 - **Reveal map** — overlay the reference map to check your alignment (a testing
   aid; it's never part of your saved map). Silksong only — games you add have no
   reference map.

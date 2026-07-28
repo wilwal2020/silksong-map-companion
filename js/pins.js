@@ -57,8 +57,13 @@ const GRID_FRAME = ['#toolbar', '#cat-bar'];
 // ...and then every cell that would sit under a floating control is dropped,
 // so a pin can never land on top of a button. Keep this in step with the
 // chrome in index.html: a widget missing from here is a widget pins cover.
+//
+// Only what STAYS on screen belongs here. Toasts and the spinner used to be on
+// the list, and the result was that pressing Add pin punched a hole through the
+// top of its own grid: the toast explaining the gesture appeared over the row
+// you were about to use, and took fifteen of its twenty-two slots with it.
 const GRID_AVOID = ['#map-opacity', '#bg-tool', '#shot-slot', '#held-shot', '#paste-hint',
-  '#empty-hint', '#place-bar', '#place-tools', '#spinner', '#toasts'];
+  '#empty-hint', '#place-bar', '#place-tools'];
 const CELL = 46;       // one snap cell — a shade roomier than the 38px marker
 const GRID_GAP = 7;    // breathing room from the rim and from the chrome
 
@@ -80,11 +85,18 @@ export class PinGrid {
     this.shown = false;
     this._stale = true;
     this._target = null;
-    // a resized window is a different grid — a stale one would put pins under
-    // the chrome, or (when it had no room to exist) refuse them altogether
+    // A resized window is a different grid — a stale one would put pins under
+    // the chrome, or (when it had no room to exist) refuse them altogether.
+    // Rebuilt straight away rather than at the next gesture, because the pins
+    // standing on it are realigned off the back of this: leaving that until
+    // someone next reached for the grid would mean seeing them out of true in
+    // the meantime. Settled on a timer, not a frame — dragging a window edge
+    // fires this continuously and each rebuild saves the pins it moves, and a
+    // frame never arrives at all while the tab is in the background.
     window.addEventListener('resize', () => {
       this._stale = true;
-      if (this.shown) this.build();
+      clearTimeout(this._pending);
+      this._pending = setTimeout(() => this.build(), 80);
     });
   }
 
@@ -104,8 +116,21 @@ export class PinGrid {
       right: window.innerWidth - GRID_GAP, bottom: window.innerHeight - GRID_GAP };
   }
 
-  // (Re)compute the cells. Cheap enough to run every time the grid is shown,
-  // which is what keeps it honest about chrome that comes and goes.
+  // Where the columns and rows sit. Each side is measured from the edge it
+  // hugs — the first from the near edge, the last flush against the far one —
+  // so a change at one side of the window cannot shift the other.
+  //
+  // They used to be laid out from a centred origin, and that made the whole
+  // grid creep by half of whatever the window gained: a pin dropped before the
+  // creep no longer lined up with one dropped after it.
+  _lines(near, far, n) {
+    const out = [];
+    for (let i = 0; i < n - 1; i++) out.push(near + i * CELL);
+    out.push(far - CELL);
+    return out;
+  }
+
+  // (Re)compute the cells.
   build() {
     const f = this._frame();
     const w = f.right - f.left, h = f.bottom - f.top;
@@ -113,16 +138,15 @@ export class PinGrid {
     this.cells = [];
     this.band = null;
     this._stale = false;
-    if (cols < 3 || rows < 3) { this._render(); return; }   // no room for a ring
-    // centre the ring in the free space so it hugs both rims evenly
-    const ox = f.left + (w - cols * CELL) / 2, oy = f.top + (h - rows * CELL) / 2;
+    if (cols < 3 || rows < 3) { this.geomKey = null; this._render(); return; } // no room for a ring
+    const xs = this._lines(f.left, f.right, cols), ys = this._lines(f.top, f.bottom, rows);
     const blockers = GRID_AVOID.map(s => document.querySelector(s))
       .filter(onScreen).map(el => el.getBoundingClientRect());
     for (let cy = 0; cy < rows; cy++) {
       for (let cx = 0; cx < cols; cx++) {
         // the ring only — the middle of the screen stays clear for the map
         if (cx > 0 && cx < cols - 1 && cy > 0 && cy < rows - 1) continue;
-        const x = ox + cx * CELL, y = oy + cy * CELL;
+        const x = xs[cx], y = ys[cy];
         if (blockers.some(b => overlaps({ x, y }, b, GRID_GAP))) continue;
         this.cells.push({ key: `${cx},${cy}`, x: x + CELL / 2, y: y + CELL / 2 });
       }
@@ -130,10 +154,17 @@ export class PinGrid {
     // over the grid = inside the free space but outside the hole in the middle
     this.band = {
       left: f.left, top: f.top, right: f.right, bottom: f.bottom,
-      hole: { left: ox + CELL, top: oy + CELL,
-        right: ox + (cols - 1) * CELL, bottom: oy + (rows - 1) * CELL },
+      hole: { left: xs[1], top: ys[1], right: xs[cols - 1], bottom: ys[rows - 1] },
     };
     this._render();
+    // Only where the cells ARE counts as a new grid — not which of them happen
+    // to be free. Chrome coming and going changes what a pin may snap to; it
+    // must never pick up the pins already standing there.
+    const key = `${xs[0]},${ys[0]},${xs[cols - 1]},${ys[rows - 1]},${cols},${rows}`;
+    if (key !== this.geomKey) {
+      this.geomKey = key;
+      this.onGeometryChange?.();
+    }
   }
 
   _render() {
@@ -183,8 +214,11 @@ export class PinGrid {
     if (this._stale) this.build();
   }
 
+  // `ensure`, not `build`: showing the grid must not re-measure it. Raising it
+  // mid-gesture would let a popup that appeared a moment ago take slots out of
+  // the row you are reaching for.
   show() {
-    this.build();
+    this.ensure();
     this.shown = true;
     this.el.classList.add('on');
   }
@@ -253,6 +287,9 @@ export class PinManager {
     this._stickyCard = null;
     this._hoverCardEntry = null; // pin whose card is open from a plain hover
     this.grid = new PinGrid(layer);   // where persistent pins snap
+    // a window that changes shape moves the slots; the pins standing in them
+    // come along, so a row of them is still a row afterwards
+    this.grid.onGeometryChange = () => this.realignFixed();
 
     document.addEventListener('pointerdown', e => {
       this.lastPlacedId = null; // any click means the user has moved on
@@ -489,6 +526,40 @@ export class PinManager {
     return this.grid.nearest(px, py, this.takenCells(exceptId));
   }
 
+  // Put every persistent pin back on a slot centre. Called when the grid's
+  // geometry changes under them — without it they keep the fraction of the
+  // window they were saved at, which is close to right but no longer exactly
+  // on a slot, and a row of pins ends up visibly ragged.
+  //
+  // Nearest-first, so the pin with the strongest claim to a slot gets it and
+  // the others settle around it rather than by whoever was created first.
+  realignFixed() {
+    if (this._realigning || this._draggingId) return;
+    const fixed = [...this.pins.values()].filter(e => e.data.fixed);
+    if (!fixed.length || !this.grid.cells.length) return;
+    this._realigning = true;
+    try {
+      const want = fixed.map(e => {
+        const p = this.screenPos(e.data);
+        const c = this.grid.nearest(p.x, p.y);
+        return { e, p, d: Math.hypot(c.x - p.x, c.y - p.y) };
+      }).sort((a, b) => a.d - b.d);
+      const taken = new Set();
+      for (const { e, p } of want) {
+        const cell = this.grid.nearest(p.x, p.y, taken);
+        if (!cell) continue;
+        taken.add(cell.key);
+        const at = fixedAnchor(cell.x, cell.y);
+        if (at.fx === e.data.fx && at.fy === e.data.fy) continue;
+        Object.assign(e.data, at);
+        this.handlers.onChange?.(e.data);
+      }
+      this.syncPositions();
+    } finally {
+      this._realigning = false;
+    }
+  }
+
   syncPositions() {
     for (const e of this.pins.values()) {
       const p = this.screenPos(e.data);
@@ -548,7 +619,7 @@ export class PinManager {
           this._hideMoveConfirm(entry);      // tuck any ✓/✗ away while dragging
           this._hideCard(entry, true);       // and drop the card so it's unobstructed
           // a pin is over the grid now, so the grid shows itself
-          if (entry.data.fixed) this.grid.show();
+          if (entry.data.fixed) { this._draggingId = entry.data.id; this.grid.show(); }
         }
       }
       if (dragging && moved) {
@@ -573,8 +644,19 @@ export class PinManager {
       down = false;
       try { el.releasePointerCapture(e.pointerId); } catch {}
       this.grid.hide();
+      this._draggingId = null;
       if (dragging && moved) {
         entry.el.classList.remove('moving');
+        // A persistent pin skips the ✓/✗ entirely. There is nothing to weigh
+        // up: it can only land in a slot, the slot it will land in was lit the
+        // whole way, and it is not covering a piece of map you would want to
+        // check it against. Ctrl+Z still puts it back.
+        if (entry.data.fixed) {
+          this._lastMove = { id: entry.data.id, from: origin };
+          this.handlers.onChange(entry.data);
+          this.deselect();
+          return;
+        }
         // a nudge during a pending move just re-pops its ✓/✗; the first drag
         // off the armed pin opens the confirm, remembering where it started
         if (entry.pendingMove) this._showMoveConfirm(entry);
