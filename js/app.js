@@ -539,6 +539,8 @@ function openPinEditor(data, isNew) {
   }
   renderCats();
   $('#pin-note').value = data.note || '';
+  $('#pin-keep').checked = !!data.fixed;
+  syncKeepRow();
 
   return new Promise(resolve => {
     const done = save => {
@@ -547,7 +549,9 @@ function openPinEditor(data, isNew) {
       okBtn.removeEventListener('click', onOk);
       cancelBtn.removeEventListener('click', onCancel);
       dlg.removeEventListener('cancel', onDlgCancel);
-      resolve(save ? { cat: selected, note: $('#pin-note').value.trim() } : null);
+      resolve(save
+        ? { cat: selected, note: $('#pin-note').value.trim(), fixed: $('#pin-keep').checked }
+        : null);
     };
     const onOk = () => done(true);
     const onCancel = () => done(false);
@@ -568,6 +572,42 @@ function openPinEditor(data, isNew) {
     dlg.showModal();
     $('#pin-note').focus();
   });
+}
+
+// the "keep on screen" row lights up with its checkbox
+function syncKeepRow() {
+  $('#pin-keep').closest('.pin-keep').classList.toggle('on', $('#pin-keep').checked);
+}
+
+// Move a pin between the two worlds when the editor's "keep on screen" switch
+// is flipped. A pin only ever holds one pair of coordinates — a spot on the
+// map, or a fraction of the window — so the other pair is dropped, and the
+// position is carried across through where the pin is on screen right now:
+// turning the switch on takes it to the nearest free cell on the edge grid,
+// turning it off leaves it on whatever part of the map it was covering.
+function setPinFixed(data, fixed) {
+  if (!!data.fixed === !!fixed) return;
+  const p = pins.screenPos(data);
+  if (fixed) {
+    // fresh, since the window (and the chrome on it) may have changed since
+    // the grid was last drawn
+    pins.grid.build();
+    const cell = pins.snapCell(p.x, p.y, data.id);
+    delete data.x; delete data.y;
+    data.fixed = true;
+    Object.assign(data, fixedAnchor(cell ? cell.x : p.x, cell ? cell.y : p.y));
+  } else {
+    const m = view.screenToMap(p.x, p.y);
+    delete data.fixed; delete data.fx; delete data.fy;
+    data.x = m.x; data.y = m.y;
+  }
+}
+
+// everything the pin editor can change, applied in one place
+function applyPinEdit(data, edit) {
+  data.cat = edit.cat;
+  data.note = edit.note;
+  setPinFixed(data, edit.fixed);
 }
 
 // ------------------------------------------------------------- paste flows
@@ -674,8 +714,7 @@ async function applyMapPlacement(bitmap, rect, marker) {
   // separate "add a picture" step
   const edit = await openPinEditor(data, true);
   if (edit) {
-    data.cat = edit.cat;
-    data.note = edit.note;
+    applyPinEdit(data, edit);
     pins.update(data);
     persistPin(data);
     ensureCatVisible(data.cat);
@@ -884,8 +923,7 @@ async function attachToAwaiting(blob) {
     newPinPending = null;
     const edit = await openPinEditor(entry.data, true);
     if (edit) {
-      entry.data.cat = edit.cat;
-      entry.data.note = edit.note;
+      applyPinEdit(entry.data, edit);
       pins.update(entry.data);
       persistPin(entry.data);
     }
@@ -904,8 +942,7 @@ function skipAwaitingEnv() {
     newPinPending = null;
     openPinEditor(wasNew, true).then(edit => {
       if (!edit) return;
-      wasNew.cat = edit.cat;
-      wasNew.note = edit.note;
+      applyPinEdit(wasNew, edit);
       pins.update(wasNew);
       persistPin(wasNew);
     });
@@ -2525,58 +2562,44 @@ let placing = false;
 let ghostPin = null;
 let placeClickCb = null;   // where the next map click goes (null = new pin)
 let placeCancelCb = null;
-// A persistent pin belongs to the screen rather than to the map: it stays
-// where you put it however far you pan or zoom away. The choice sticks for the
-// session, since you rarely add just one — the chooser and the square ghost
-// say which kind you're about to drop, so it's never a surprise.
-let placeFixed = false;
+// The grid cell the ghost is currently sitting in, or null out on the map.
+// Carrying the ghost to the rim is what makes the pin a persistent one — there
+// is nothing to set beforehand, and the square ghost in a lit cell says so
+// before you commit to it.
+let placeCell = null;
 
 function onPlacingMove(e) {
   if (!ghostPin) return;
   // over the Cancel button the ghost fades out (and smoothly back on leave)
   ghostPin.classList.toggle('ghost-hidden', !!e.target.closest('#btn-add-pin'));
-  ghostPin.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+  // out at the rim the grid surfaces under the ghost and the ghost steps into
+  // the nearest free cell; back over the map it's an ordinary pin again
+  placeCell = (!placeClickCb && pins.grid.contains(e.clientX, e.clientY))
+    ? pins.snapCell(e.clientX, e.clientY) : null;
+  if (placeCell) {
+    if (!pins.grid.shown) pins.grid.show();
+    pins.grid.highlight(placeCell);
+  } else if (pins.grid.shown) {
+    pins.grid.hide();
+  }
+  ghostPin.classList.toggle('ghost-fixed', !!placeCell);
+  ghostPin.querySelector('.pin-ico').textContent = placeCell ? '📌' : '📍';
+  const p = placeCell || { x: e.clientX, y: e.clientY };
+  ghostPin.style.transform = `translate(${p.x}px, ${p.y}px)`;
 }
 
 function onPlacingClick(e) {
   // clicks on chrome (toolbar, sidebar, dialogs, sliders) don't place a pin
-  if (e.target.closest('#toolbar, #cat-bar, #map-opacity, #place-bar, #pin-mode, #bg-tool, dialog, .toast')) return;
+  if (e.target.closest('#toolbar, #cat-bar, #map-opacity, #place-bar, #bg-tool, dialog, .toast')) return;
   e.preventDefault();
   e.stopPropagation();
   const m = view.screenToMap(e.clientX, e.clientY);
   const cb = placeClickCb;
-  const fixed = !cb && placeFixed;
-  const at = { x: e.clientX, y: e.clientY };
+  const cell = cb ? null : placeCell;
   placeClickCb = null;
   placeCancelCb = null;   // this is a completion, not a cancel
   stopPlacing();
-  if (cb) cb(m); else createManualPin(m.x, m.y, fixed ? at : null);
-}
-
-// ---- pin kind chooser (shown while placing a pin by hand) ----------------
-
-function updatePinMode() {
-  $('#pm-map').classList.toggle('on', !placeFixed);
-  $('#pm-map').setAttribute('aria-checked', String(!placeFixed));
-  $('#pm-fixed').classList.toggle('on', placeFixed);
-  $('#pm-fixed').setAttribute('aria-checked', String(placeFixed));
-  if (ghostPin) {
-    ghostPin.classList.toggle('ghost-fixed', placeFixed);
-    ghostPin.querySelector('.pin-ico').textContent = placeFixed ? '📌' : '📍';
-  }
-}
-
-function wirePinMode() {
-  const pick = fixed => {
-    if (placeFixed === fixed) return;
-    placeFixed = fixed;
-    updatePinMode();
-    toast(fixed
-      ? 'This pin will stay on your screen — pan or zoom all you like.'
-      : 'This pin will sit on the map, and move with it.');
-  };
-  $('#pm-map').addEventListener('click', () => pick(false));
-  $('#pm-fixed').addEventListener('click', () => pick(true));
+  if (cb) cb(m); else createManualPin(m.x, m.y, cell);
 }
 
 // right-click anywhere cancels placing (same as Esc) instead of opening the
@@ -2600,9 +2623,10 @@ function startPlacing(onPlace = null, { toast: withToast = true, onCancel = null
   ghostPin.style.setProperty('--pc', '#e0c37e');
   ghostPin.innerHTML = '<span class="pin-ico">📍</span>';
   document.body.appendChild(ghostPin);
-  // only a plain new pin gets the choice — the "click your player" step is
+  placeCell = null;
+  // only a plain new pin can go to the rim — the "click your player" step is
   // always a spot on the map
-  if (!onPlace) { $('#pin-mode').classList.remove('hidden'); updatePinMode(); }
+  if (!onPlace) pins.grid.build();
   document.addEventListener('pointermove', onPlacingMove);
   // capture so the map's own handlers don't also react to the placing click
   document.addEventListener('click', onPlacingClick, true);
@@ -2614,9 +2638,9 @@ function startPlacing(onPlace = null, { toast: withToast = true, onCancel = null
   btn.querySelector('.add-pin-label').textContent = 'Cancel';
   btn.dataset.tip = 'Click the map to drop the pin — or right-click / Esc to cancel';
   if (withToast) {
-    toast(!onPlace && placeFixed
-      ? 'Click where on your screen the pin should stay. Right-click or Esc to cancel.'
-      : 'Click the spot on the map to drop your pin. Right-click or Esc to cancel.');
+    toast(onPlace
+      ? 'Click the spot on the map to drop your pin. Right-click or Esc to cancel.'
+      : 'Click the spot on the map to drop your pin — or take it out to the edge of the screen to keep it in sight. Right-click or Esc to cancel.');
   }
 }
 
@@ -2631,7 +2655,8 @@ function stopPlacing() {
   document.removeEventListener('click', onPlacingClick, true);
   document.removeEventListener('contextmenu', onPlacingContext, true);
   if (ghostPin) { ghostPin.remove(); ghostPin = null; }
-  $('#pin-mode').classList.add('hidden');
+  pins.grid.hide();
+  placeCell = null;
   document.body.classList.remove('placing-mode');
   const btn = $('#btn-add-pin');
   btn.classList.remove('active');
@@ -2643,14 +2668,14 @@ function stopPlacing() {
 }
 
 // Resolves with the pin's data, or null if the editor was cancelled.
-// `screenAt` (the click's window coordinates) makes it a persistent pin: it is
-// anchored to that fraction of the window instead of to the spot on the map,
-// so it holds its place through every pan and zoom.
-async function createManualPin(x, y, screenAt = null) {
+// A `cell` — the edge-grid cell the ghost was standing in — makes it a
+// persistent pin: it is anchored to that fraction of the window instead of to
+// the spot on the map, so it holds its place through every pan and zoom.
+async function createManualPin(x, y, cell = null) {
   const held = takeHeldShot();  // a picture pasted before this pin existed
   const data = {
     id: crypto.randomUUID(),
-    ...(screenAt ? { fixed: true, ...fixedAnchor(screenAt.x, screenAt.y) } : { x, y }),
+    ...(cell ? { fixed: true, ...fixedAnchor(cell.x, cell.y) } : { x, y }),
     cat: 'other', note: '', done: false, img: held,
     created: Date.now(),
   };
@@ -2659,8 +2684,7 @@ async function createManualPin(x, y, screenAt = null) {
   if (held) toast('The picture you kept earlier is on this pin.', 'ok');
   const edit = await openPinEditor(data, true);
   if (edit) {
-    data.cat = edit.cat;
-    data.note = edit.note;
+    applyPinEdit(data, edit);
     pins.update(data);
     persistPin(data);
     ensureCatVisible(data.cat);
@@ -2895,7 +2919,7 @@ function buildToolbar() {
   $('#cattype-hint').innerHTML = emojiKeyboardTipHtml();
   $('#cattype-hint').classList.add('emoji-tip');
   $('#btn-add-pin').addEventListener('click', () => placing ? stopPlacing() : startPlacing());
-  wirePinMode();
+  $('#pin-keep').addEventListener('change', syncKeepRow);
 
   $('#held-shot-x').addEventListener('click', () => {
     clearHeldShot();
@@ -3071,8 +3095,7 @@ async function init() {
     onEdit: async data => {
       const edit = await openPinEditor(data, false);
       if (!edit) return;
-      data.cat = edit.cat;
-      data.note = edit.note;
+      applyPinEdit(data, edit);
       pins.update(data);
       persistPin(data);
       ensureCatVisible(data.cat);

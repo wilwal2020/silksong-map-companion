@@ -48,6 +48,161 @@ export function fixedAnchor(px, py) {
   return { fx: p.x / window.innerWidth, fy: p.y / window.innerHeight };
 }
 
+// ---------------------------------------------------------------- edge grid
+
+// Persistent pins live in a ring of cells around the rim of the screen, so a
+// row of them lines up instead of scattering. The ring is laid inside what is
+// left of the window once the two fixed panels are taken off it...
+const GRID_FRAME = ['#toolbar', '#cat-bar'];
+// ...and then every cell that would sit under a floating control is dropped,
+// so a pin can never land on top of a button. Keep this in step with the
+// chrome in index.html: a widget missing from here is a widget pins cover.
+const GRID_AVOID = ['#map-opacity', '#bg-tool', '#shot-slot', '#held-shot', '#paste-hint',
+  '#empty-hint', '#place-bar', '#place-tools', '#spinner', '#toasts'];
+const CELL = 46;       // one snap cell — a shade roomier than the 38px marker
+const GRID_GAP = 7;    // breathing room from the rim and from the chrome
+
+const onScreen = el => {
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+};
+const overlaps = (a, b, pad) =>
+  a.x < b.right + pad && a.x + CELL > b.left - pad &&
+  a.y < b.bottom + pad && a.y + CELL > b.top - pad;
+
+export class PinGrid {
+  constructor(layer) {
+    this.layer = layer;    // the pin layer — the grid is slipped in behind it
+    this.el = null;
+    this.cells = [];       // { key, x, y, el } — x/y are the cell's CENTRE
+    this.band = null;      // where the pointer counts as "over the grid"
+    this.shown = false;
+    this._stale = true;
+    this._target = null;
+    // a resized window is a different grid — a stale one would put pins under
+    // the chrome, or (when it had no room to exist) refuse them altogether
+    window.addEventListener('resize', () => {
+      this._stale = true;
+      if (this.shown) this.build();
+    });
+  }
+
+  // The usable rectangle: the window, less the toolbar along the top and the
+  // sidebar down the left, since neither ever moves out of the way.
+  _frame() {
+    let left = 0, top = 0;
+    for (const sel of GRID_FRAME) {
+      const el = document.querySelector(sel);
+      if (!onScreen(el)) continue;
+      const r = el.getBoundingClientRect();
+      // whichever edge it is pinned to is the one it eats into
+      if (r.width >= window.innerWidth - 1) top = Math.max(top, r.bottom);
+      else left = Math.max(left, r.right);
+    }
+    return { left: left + GRID_GAP, top: top + GRID_GAP,
+      right: window.innerWidth - GRID_GAP, bottom: window.innerHeight - GRID_GAP };
+  }
+
+  // (Re)compute the cells. Cheap enough to run every time the grid is shown,
+  // which is what keeps it honest about chrome that comes and goes.
+  build() {
+    const f = this._frame();
+    const w = f.right - f.left, h = f.bottom - f.top;
+    const cols = Math.floor(w / CELL), rows = Math.floor(h / CELL);
+    this.cells = [];
+    this.band = null;
+    this._stale = false;
+    if (cols < 3 || rows < 3) { this._render(); return; }   // no room for a ring
+    // centre the ring in the free space so it hugs both rims evenly
+    const ox = f.left + (w - cols * CELL) / 2, oy = f.top + (h - rows * CELL) / 2;
+    const blockers = GRID_AVOID.map(s => document.querySelector(s))
+      .filter(onScreen).map(el => el.getBoundingClientRect());
+    for (let cy = 0; cy < rows; cy++) {
+      for (let cx = 0; cx < cols; cx++) {
+        // the ring only — the middle of the screen stays clear for the map
+        if (cx > 0 && cx < cols - 1 && cy > 0 && cy < rows - 1) continue;
+        const x = ox + cx * CELL, y = oy + cy * CELL;
+        if (blockers.some(b => overlaps({ x, y }, b, GRID_GAP))) continue;
+        this.cells.push({ key: `${cx},${cy}`, x: x + CELL / 2, y: y + CELL / 2 });
+      }
+    }
+    // over the grid = inside the free space but outside the hole in the middle
+    this.band = {
+      left: f.left, top: f.top, right: f.right, bottom: f.bottom,
+      hole: { left: ox + CELL, top: oy + CELL,
+        right: ox + (cols - 1) * CELL, bottom: oy + (rows - 1) * CELL },
+    };
+    this._render();
+  }
+
+  _render() {
+    if (!this.el) {
+      this.el = document.createElement('div');
+      this.el.id = 'pin-grid';
+      // behind every marker, in front of the map: a pin always sits on top of
+      // the cell it is dropping into
+      this.layer.parentNode.insertBefore(this.el, this.layer);
+    }
+    this.el.textContent = '';
+    for (const c of this.cells) {
+      const d = document.createElement('div');
+      d.className = 'pg-cell';
+      d.style.left = (c.x - CELL / 2) + 'px';
+      d.style.top = (c.y - CELL / 2) + 'px';
+      d.style.width = d.style.height = CELL + 'px';
+      c.el = d;
+      this.el.appendChild(d);
+    }
+  }
+
+  // is this point over the grid — i.e. out at the rim rather than on the map?
+  contains(px, py) {
+    this.ensure();
+    const b = this.band;
+    if (!b) return false;
+    if (px < b.left || px > b.right || py < b.top || py > b.bottom) return false;
+    const h = b.hole;
+    return !(px > h.left && px < h.right && py > h.top && py < h.bottom);
+  }
+
+  // the closest cell nothing is standing in; falls back to the closest cell of
+  // all, so a full grid still snaps somewhere rather than dropping the gesture
+  nearest(px, py, taken = new Set()) {
+    let best = null, bestD = Infinity, any = null, anyD = Infinity;
+    for (const c of this.cells) {
+      const d = (c.x - px) ** 2 + (c.y - py) ** 2;
+      if (d < anyD) { anyD = d; any = c; }
+      if (!taken.has(c.key) && d < bestD) { bestD = d; best = c; }
+    }
+    return best || any;
+  }
+
+  // there are cells to snap to even when nothing has asked to see them
+  ensure() {
+    if (this._stale) this.build();
+  }
+
+  show() {
+    this.build();
+    this.shown = true;
+    this.el.classList.add('on');
+  }
+
+  hide() {
+    this.shown = false;
+    this.highlight(null);
+    if (this.el) this.el.classList.remove('on');
+  }
+
+  // light up the cell a pin is about to drop into
+  highlight(cell) {
+    if (this._target && this._target.el) this._target.el.classList.remove('target');
+    this._target = cell || null;
+    if (cell && cell.el) cell.el.classList.add('target');
+  }
+}
+
 // convex hull (Andrew's monotone chain) of a set of points
 function convexHull(pts) {
   pts = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
@@ -97,6 +252,7 @@ export class PinManager {
     this.lastPlacedId = null;  // just-placed pin, excluded from paste-attach
     this._stickyCard = null;
     this._hoverCardEntry = null; // pin whose card is open from a plain hover
+    this.grid = new PinGrid(layer);   // where persistent pins snap
 
     document.addEventListener('pointerdown', e => {
       this.lastPlacedId = null; // any click means the user has moved on
@@ -312,6 +468,27 @@ export class PinManager {
     return clampAnchor((d.fx ?? 0.5) * window.innerWidth, (d.fy ?? 0.5) * window.innerHeight);
   }
 
+  // Which grid cells already have a persistent pin standing in them, so the
+  // next one snaps beside them rather than on top. Worked out from where the
+  // pins actually are (they store a fraction of the window, not a cell), which
+  // keeps them right even after the grid has been rebuilt at a new size.
+  takenCells(exceptId = null) {
+    this.grid.ensure();
+    const taken = new Set();
+    for (const e of this.pins.values()) {
+      if (!e.data.fixed || e.data.id === exceptId) continue;
+      const p = this.screenPos(e.data);
+      const c = this.grid.nearest(p.x, p.y);
+      if (c && Math.hypot(c.x - p.x, c.y - p.y) <= CELL / 2) taken.add(c.key);
+    }
+    return taken;
+  }
+
+  // the cell a persistent pin would land in from this screen point
+  snapCell(px, py, exceptId = null) {
+    return this.grid.nearest(px, py, this.takenCells(exceptId));
+  }
+
   syncPositions() {
     for (const e of this.pins.values()) {
       const p = this.screenPos(e.data);
@@ -370,12 +547,20 @@ export class PinManager {
           entry.el.classList.add('moving');  // lift it and pause the breathing
           this._hideMoveConfirm(entry);      // tuck any ✓/✗ away while dragging
           this._hideCard(entry, true);       // and drop the card so it's unobstructed
+          // a pin is over the grid now, so the grid shows itself
+          if (entry.data.fixed) this.grid.show();
         }
       }
       if (dragging && moved) {
         if (entry.data.fixed) {
-          Object.assign(entry.data,
-            fixedAnchor(sx + (e.clientX - downX), sy + (e.clientY - downY)));
+          // it doesn't follow the cursor freely — it steps from cell to cell,
+          // so a row of persistent pins lines up instead of scattering
+          const cell = this.snapCell(sx + (e.clientX - downX), sy + (e.clientY - downY),
+            entry.data.id);
+          this.grid.highlight(cell);
+          Object.assign(entry.data, cell
+            ? fixedAnchor(cell.x, cell.y)
+            : fixedAnchor(sx + (e.clientX - downX), sy + (e.clientY - downY)));
         } else {
           entry.data.x = sx + (e.clientX - downX) / this.view.scale;
           entry.data.y = sy + (e.clientY - downY) / this.view.scale;
@@ -387,6 +572,7 @@ export class PinManager {
       if (!down) return;
       down = false;
       try { el.releasePointerCapture(e.pointerId); } catch {}
+      this.grid.hide();
       if (dragging && moved) {
         entry.el.classList.remove('moving');
         // a nudge during a pending move just re-pops its ✓/✗; the first drag

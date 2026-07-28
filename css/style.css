@@ -787,39 +787,61 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 /* the ghost takes the shape of the pin you're about to drop */
 .ghost-pin.ghost-fixed .pin-ico { border-radius: 9px; }
 
-/* ---------- pin kind chooser (up while you're placing one by hand) ---------- */
+/* "keep on screen" switch in the pin editor */
+.pin-keep {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel-2); cursor: pointer; user-select: none;
+  transition: border-color .14s, background .14s;
+}
+.pin-keep:hover { border-color: var(--border-strong); background: #181d27; }
+/* .on is set from JS rather than :has(:checked) — the selector did not
+   re-match when the box was ticked a second time, leaving the row looking off
+   while the switch said on */
+.pin-keep.on { border-color: var(--accent); background: var(--accent-soft); }
+.pk-shape {
+  width: 17px; height: 17px; flex: none; border-radius: 50%;
+  border: 2px solid var(--text-dim); background: rgba(0,0,0,.45);
+  transition: border-radius .18s cubic-bezier(.2,.85,.25,1), border-color .14s, box-shadow .14s;
+}
+/* the switch shows what it does: the marker squares off as you turn it on */
+.pin-keep.on .pk-shape {
+  border-radius: 5px; border-color: var(--rose);
+  box-shadow: 0 0 11px -2px var(--accent-glow);
+}
+.pk-txt { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pk-txt b { font-size: .87rem; font-weight: 600; color: var(--text); }
+.pk-txt i { font-style: normal; font-size: .75rem; color: var(--text-dim); }
 
-#pin-mode {
-  position: absolute; left: 50%; top: 58px; transform: translateX(-50%);
-  z-index: 26; display: flex; gap: 6px; padding: 6px;
-  max-width: 94vw;
-  background: rgba(12,14,19,.97); border: 1px solid var(--border-strong);
-  border-radius: 12px; box-shadow: var(--shadow);
-  animation: toast-in .28s cubic-bezier(.18,.9,.28,1.3);
+/* ---------- the edge grid persistent pins snap to ----------
+   Invisible until a pin is over it: bring one out to the rim, and the cells
+   it can drop into fade up under it. */
+
+#pin-grid {
+  position: absolute; inset: 0;
+  pointer-events: none; opacity: 0;
+  transition: opacity .16s ease;
 }
-.pm-opt {
-  display: flex; align-items: center; gap: 10px; text-align: left;
-  padding: 8px 12px; border-radius: 9px; cursor: pointer;
-  border: 1px solid transparent; background: transparent; color: var(--text-dim);
-  font: inherit;
-  transition: background .14s, border-color .14s, color .14s;
+#pin-grid.on { opacity: 1; }
+.pg-cell {
+  position: absolute;
+  border: 1px dashed rgba(224,195,126,.22);
+  border-radius: 7px;
+  background: rgba(224,195,126,.03);
+  transition: background .12s, border-color .12s, box-shadow .12s, transform .12s;
 }
-.pm-opt:hover { background: #171c26; color: var(--text); }
-.pm-opt.on { border-color: var(--accent); background: var(--accent-soft); color: #f1ebdd; }
-.pm-shape {
-  width: 16px; height: 16px; flex: none;
-  border: 2px solid currentColor; background: rgba(0,0,0,.45);
-  transition: box-shadow .14s;
+/* the one the pin would land in */
+.pg-cell.target {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent-glow) 78%, transparent);
+  background: rgba(224,195,126,.1);
+  box-shadow: inset 0 0 16px -6px var(--accent-glow), 0 0 14px -5px var(--accent-glow);
+  transform: scale(1.06);
 }
-.pm-shape.round { border-radius: 50%; }
-.pm-shape.square { border-radius: 4px; }
-.pm-opt.on .pm-shape { border-color: var(--rose); box-shadow: 0 0 11px -2px var(--accent-glow); }
-.pm-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.pm-txt b { font-size: .83rem; font-weight: 600; }
-.pm-txt i { font-style: normal; font-size: .72rem; color: var(--text-dim); }
 
 @media (prefers-reduced-motion: reduce) {
-  #pin-mode { animation: none !important; }
+  #pin-grid, .pg-cell { transition: none !important; }
+  .pg-cell.target { transform: none; }
 }
 
 /* ---------- vertical map-opacity slider (right) ---------- */

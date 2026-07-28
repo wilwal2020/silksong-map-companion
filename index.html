@@ -125,19 +125,6 @@
     </button>
   </div>
 
-  <!-- while you're dropping a pin by hand: does it belong to the map, or to
-       the screen? A persistent pin stays put however far you pan away. -->
-  <div id="pin-mode" class="hidden" role="radiogroup" aria-label="What kind of pin">
-    <button type="button" id="pm-map" class="pm-opt on" role="radio" aria-checked="true">
-      <span class="pm-shape round" aria-hidden="true"></span>
-      <span class="pm-txt"><b>On the map</b><i>Marks the spot — pans and zooms with it</i></span>
-    </button>
-    <button type="button" id="pm-fixed" class="pm-opt" role="radio" aria-checked="false">
-      <span class="pm-shape square" aria-hidden="true"></span>
-      <span class="pm-txt"><b>Persistent</b><i>Square, and stays on screen wherever you go</i></span>
-    </button>
-  </div>
-
   <!-- floating toolbar for aligning a screenshot: hovers above the placement
        and moves with it (Step 1 of hand-placing) -->
   <div id="place-tools" class="hidden" role="toolbar" aria-label="Position the screenshot"></div>
@@ -199,6 +186,16 @@
   <div id="pin-cats"></div>
   <input id="pin-note" type="text" maxlength="120" placeholder="Note — e.g. “locked gate, need a key?”">
   <p class="field-hint" id="pin-note-hint"></p>
+  <!-- a persistent pin belongs to the screen rather than to a spot on the map:
+       it snaps to the edge grid and stays there however far you pan -->
+  <label class="pin-keep" title="Keep this pin at the edge of the screen instead of on the map">
+    <span class="pk-shape" aria-hidden="true"></span>
+    <span class="pk-txt">
+      <b>Keep on screen</b>
+      <i>Snaps to the edge and stays there wherever you pan</i>
+    </span>
+    <input type="checkbox" id="pin-keep" class="cat-check">
+  </label>
   <div class="dlg-actions">
     <button id="btn-pin-save" class="btn primary">Save</button>
     <button id="btn-pin-cancel" class="btn">Cancel</button>
@@ -339,7 +336,8 @@
       <span class="help-eyebrow">Step 6</span>
       <h2>Place a pin by hand</h2>
       <p>Don't have a screenshot? Press <b>📍 Add pin</b> at the top, then click the spot on the map. Changed your mind? Right-click (or <span class="kbd">Esc</span>) to cancel.</p>
-      <p>A chooser appears while you're placing: leave it <b>On the map</b> for a normal pin, or switch to <b>Persistent</b> for a <b>square</b> pin that's nailed to your screen instead — it stays exactly where you put it however far you pan or zoom. Handy for a reminder you want in sight the whole time. Drag either kind the same way: click it once, then drag.</p>
+      <p>Carry the pin out to the <b>edge of the screen</b> instead and a grid of slots lights up along the rim. Drop it in one and it becomes a <b>persistent</b> pin: square, and nailed to your screen rather than to the map, so it stays in sight however far you pan or zoom. Good for a reminder you want in front of you the whole time. The slots keep clear of the buttons, so a pin never lands on one.</p>
+      <p>The pin's own menu has the same switch — <b>Keep on screen</b> — for changing your mind later, either way. Drag both kinds the same way: click once, then drag.</p>
     </section>
     <section class="help-slide">
       <span class="help-eyebrow tip">Tip</span>
