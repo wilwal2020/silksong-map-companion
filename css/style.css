@@ -146,6 +146,17 @@ html, body {
 .pin.moving { z-index: 12; cursor: grabbing; }
 .pin.moving .pin-ico { cursor: grabbing; }
 
+/* A PERSISTENT pin belongs to the screen, not to a spot on the map: it holds
+   its place through every pan and zoom. Square, so the two kinds are never
+   confused at a glance, and above the map pins, since it is the layer in
+   front. */
+.pin.fixed .pin-ico {
+  border-radius: 9px;
+  background: linear-gradient(160deg, #232a38, #0b0e15 76%);
+}
+.pin.fixed { z-index: 6; }
+.pin.fixed:hover { z-index: 7; }
+
 @media (prefers-reduced-motion: reduce) {
   /* no pulsing — hold a slightly enlarged "armed" state instead */
   .pin.selected:not(.moving) .pin-ico { animation: none; transform: scale(1.08); }
@@ -773,6 +784,43 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 .ghost-pin.ghost-hidden { opacity: 0; }
 .ghost-pin .pin-ico { animation: ghost-pulse 1.1s ease-in-out infinite; }
 @keyframes ghost-pulse { 50% { transform: scale(1.12); } }
+/* the ghost takes the shape of the pin you're about to drop */
+.ghost-pin.ghost-fixed .pin-ico { border-radius: 9px; }
+
+/* ---------- pin kind chooser (up while you're placing one by hand) ---------- */
+
+#pin-mode {
+  position: absolute; left: 50%; top: 58px; transform: translateX(-50%);
+  z-index: 26; display: flex; gap: 6px; padding: 6px;
+  max-width: 94vw;
+  background: rgba(12,14,19,.97); border: 1px solid var(--border-strong);
+  border-radius: 12px; box-shadow: var(--shadow);
+  animation: toast-in .28s cubic-bezier(.18,.9,.28,1.3);
+}
+.pm-opt {
+  display: flex; align-items: center; gap: 10px; text-align: left;
+  padding: 8px 12px; border-radius: 9px; cursor: pointer;
+  border: 1px solid transparent; background: transparent; color: var(--text-dim);
+  font: inherit;
+  transition: background .14s, border-color .14s, color .14s;
+}
+.pm-opt:hover { background: #171c26; color: var(--text); }
+.pm-opt.on { border-color: var(--accent); background: var(--accent-soft); color: #f1ebdd; }
+.pm-shape {
+  width: 16px; height: 16px; flex: none;
+  border: 2px solid currentColor; background: rgba(0,0,0,.45);
+  transition: box-shadow .14s;
+}
+.pm-shape.round { border-radius: 50%; }
+.pm-shape.square { border-radius: 4px; }
+.pm-opt.on .pm-shape { border-color: var(--rose); box-shadow: 0 0 11px -2px var(--accent-glow); }
+.pm-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pm-txt b { font-size: .83rem; font-weight: 600; }
+.pm-txt i { font-style: normal; font-size: .72rem; color: var(--text-dim); }
+
+@media (prefers-reduced-motion: reduce) {
+  #pin-mode { animation: none !important; }
+}
 
 /* ---------- vertical map-opacity slider (right) ---------- */
 

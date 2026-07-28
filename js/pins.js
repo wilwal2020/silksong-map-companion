@@ -33,6 +33,21 @@ export const SVG = {
   xmark: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
 };
 
+// Where a persistent pin may be anchored. It is kept as a FRACTION of the
+// window (so resizing keeps it in the same corner rather than pushing it off
+// the edge), but the anchor is clamped in pixels first: a pin dragged past an
+// edge — or under the toolbar — could never be reached again, since there is
+// no panning that would bring it back.
+const PIN_EDGE = 24;
+const clampAnchor = (px, py) => ({
+  x: Math.max(PIN_EDGE, Math.min(window.innerWidth - PIN_EDGE, px)),
+  y: Math.max(CARD_TOP, Math.min(window.innerHeight - PIN_EDGE, py)),
+});
+export function fixedAnchor(px, py) {
+  const p = clampAnchor(px, py);
+  return { fx: p.x / window.innerWidth, fy: p.y / window.innerHeight };
+}
+
 // convex hull (Andrew's monotone chain) of a set of points
 function convexHull(pts) {
   pts = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
@@ -220,7 +235,7 @@ export class PinManager {
   }
 
   _doneRing(entry) {
-    const p = this.view.mapToScreen(entry.data.x, entry.data.y);
+    const p = this.screenPos(entry.data);
     const ring = document.createElement('div');
     ring.className = 'done-burst';
     ring.style.left = p.x + 'px';
@@ -285,9 +300,21 @@ export class PinManager {
     }
   }
 
+  // Where a pin sits on screen. An ordinary pin is a point on the MAP, so it
+  // pans and zooms with it. A persistent pin is nailed to the SCREEN instead —
+  // held as a fraction of the window rather than a pixel offset, so resizing
+  // the window keeps it in the same corner rather than pushing it off the edge.
+  // Shrinking the window can carry an anchor under the toolbar or off an edge,
+  // so the clamp applies on the way out too — the fraction it was saved at is
+  // kept, ready for when there's room again.
+  screenPos(d) {
+    if (!d.fixed) return this.view.mapToScreen(d.x, d.y);
+    return clampAnchor((d.fx ?? 0.5) * window.innerWidth, (d.fy ?? 0.5) * window.innerHeight);
+  }
+
   syncPositions() {
     for (const e of this.pins.values()) {
-      const p = this.view.mapToScreen(e.data.x, e.data.y);
+      const p = this.screenPos(e.data);
       e.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
       if (e.card) this._positionCard(e);
       if (e.moveEl) this._positionMoveConfirm(e);
@@ -300,11 +327,14 @@ export class PinManager {
     entry.el.style.setProperty('--pc', cat.color || '#9e2b25');
     // no native title tooltip — the hover card carries the info
     entry.el.classList.toggle('done', !!entry.data.done);
+    // square, and above the map pins: a persistent pin belongs to the screen
+    entry.el.classList.toggle('fixed', !!entry.data.fixed);
   }
 
   _wire(entry) {
     const el = entry.el;
     let downX = 0, downY = 0, moved = false, down = false, dragging = false, sx = 0, sy = 0;
+    let origin = null;   // where the drag started, in the pin's own coordinates
 
     // First click on a pin selects it — it starts breathing to show it's now
     // movable. From then on (while selected, or while a move is pending its
@@ -316,7 +346,14 @@ export class PinManager {
       down = true; moved = false;
       downX = e.clientX; downY = e.clientY;
       dragging = entry.el.classList.contains('selected') || !!entry.pendingMove;
-      if (dragging) { sx = entry.data.x; sy = entry.data.y; }
+      if (dragging) {
+        // a persistent pin is dragged in screen pixels (it has no map spot to
+        // divide by the zoom), an ordinary one in map coordinates
+        const p = this.screenPos(entry.data);
+        sx = entry.data.fixed ? p.x : entry.data.x;
+        sy = entry.data.fixed ? p.y : entry.data.y;
+        origin = this._posOf(entry.data);
+      }
       try { el.setPointerCapture(e.pointerId); } catch {}
     });
     el.addEventListener('pointermove', e => {
@@ -336,8 +373,13 @@ export class PinManager {
         }
       }
       if (dragging && moved) {
-        entry.data.x = sx + (e.clientX - downX) / this.view.scale;
-        entry.data.y = sy + (e.clientY - downY) / this.view.scale;
+        if (entry.data.fixed) {
+          Object.assign(entry.data,
+            fixedAnchor(sx + (e.clientX - downX), sy + (e.clientY - downY)));
+        } else {
+          entry.data.x = sx + (e.clientX - downX) / this.view.scale;
+          entry.data.y = sy + (e.clientY - downY) / this.view.scale;
+        }
         this.syncPositions();
       }
     });
@@ -350,7 +392,7 @@ export class PinManager {
         // a nudge during a pending move just re-pops its ✓/✗; the first drag
         // off the armed pin opens the confirm, remembering where it started
         if (entry.pendingMove) this._showMoveConfirm(entry);
-        else this._beginMoveConfirm(entry, { x: sx, y: sy });
+        else this._beginMoveConfirm(entry, origin);
         return;
       }
       if (moved || this.suppressHover) return; // a stray drag on an un-armed pin
@@ -377,6 +419,18 @@ export class PinManager {
   }
 
   // ---- move confirmation (✓ keep / ✗ put back) ----------------------------
+
+  // a pin's position, in whichever pair of numbers that pin actually uses, so
+  // "put it back" and Ctrl+Z work the same for both kinds
+  _posOf(d) {
+    return d.fixed ? { fx: d.fx, fy: d.fy } : { x: d.x, y: d.y };
+  }
+
+  _restorePos(d, o) {
+    if (!o) return;
+    if ('fx' in o) { d.fx = o.fx; d.fy = o.fy; }
+    else { d.x = o.x; d.y = o.y; }
+  }
 
   _beginMoveConfirm(entry, origin) {
     entry.pendingMove = origin;
@@ -412,7 +466,7 @@ export class PinManager {
   _cancelMove(entry) {
     const o = entry.pendingMove;
     entry.pendingMove = null;
-    if (o) { entry.data.x = o.x; entry.data.y = o.y; }
+    this._restorePos(entry.data, o);
     if (entry.moveEl) { entry.moveEl.remove(); entry.moveEl = null; }
     this.syncPositions();
   }
@@ -432,7 +486,7 @@ export class PinManager {
     if (this._lastMove) {
       const e = this.pins.get(this._lastMove.id);
       if (e) {
-        e.data.x = this._lastMove.from.x; e.data.y = this._lastMove.from.y;
+        this._restorePos(e.data, this._lastMove.from);
         this.syncPositions();
         this.handlers.onChange(e.data);
       }
@@ -444,7 +498,7 @@ export class PinManager {
 
   _positionMoveConfirm(entry) {
     if (!entry.moveEl) return;
-    const p = this.view.mapToScreen(entry.data.x, entry.data.y);
+    const p = this.screenPos(entry.data);
     entry.moveEl.style.transform = `translate(${p.x}px, ${p.y}px)`;
   }
 
@@ -490,7 +544,7 @@ export class PinManager {
   }
 
   _positionCard(entry) {
-    const p = this.view.mapToScreen(entry.data.x, entry.data.y);
+    const p = this.screenPos(entry.data);
     const card = entry.card;
     if (!card) return;
     const margin = CARD_MARGIN;
