@@ -1032,25 +1032,36 @@ body.placing-paste #bg-tool { display: none; }
 #shot-slot { display: none; }
 body.custom-game #shot-slot {
   position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  /* it grows out of the edge it is anchored to, so the bottom stays put */
+  transform-origin: bottom center;
   z-index: 24;
-  display: flex; align-items: center; gap: 11px;
-  padding: 9px 14px 9px 11px; max-width: min(340px, 92vw);
+  display: flex; align-items: center; gap: 13px;
+  padding: 12px 18px 12px 15px; max-width: min(380px, 92vw);
   background: rgba(12,14,19,.92);
-  border: 1px dashed var(--border-strong); border-radius: 10px;
+  border: 1px dashed var(--border-strong); border-radius: 12px;
   color: var(--text-dim); cursor: copy;
-  transition: border-color .14s, background .14s, color .14s;
+  transition: border-color .14s, background .14s, color .14s, transform .16s cubic-bezier(.2,.85,.25,1);
 }
-/* hovering it IS the gesture — say so loudly enough to be trusted */
+/* Hovering it IS the gesture — say so loudly enough to be trusted, and let it
+   swell under the pointer so you can see you have hit it without looking away
+   from wherever you are about to paste from. */
 body.custom-game #shot-slot:hover,
 body.custom-game #shot-slot.over {
   border-color: var(--accent); border-style: solid;
   background: rgba(158,43,37,.14); color: var(--text);
+  transform: translateX(-50%) scale(1.07);
 }
-.ss-ico { font-size: 1.1rem; line-height: 1; filter: grayscale(.35); }
+.ss-ico { font-size: 1.3rem; line-height: 1; filter: grayscale(.35); transition: filter .14s; }
 #shot-slot:hover .ss-ico, #shot-slot.over .ss-ico { filter: none; }
 .ss-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.ss-text b { font-size: .84rem; font-weight: 600; color: var(--text); }
-.ss-text span { font-size: .74rem; color: var(--text-dim); }
+.ss-text b { font-size: .9rem; font-weight: 600; color: var(--text); }
+.ss-text span { font-size: .79rem; color: var(--text-dim); }
+/* the colour change alone carries the hover when motion isn't wanted */
+@media (prefers-reduced-motion: reduce) {
+  body.custom-game #shot-slot { transition: border-color .14s, background .14s, color .14s; }
+  body.custom-game #shot-slot:hover,
+  body.custom-game #shot-slot.over { transform: translateX(-50%); }
+}
 /* the pill it replaces, the waiting picture it turns into, and the step bar
    that owns the bottom of the screen while placing — one at a time */
 body.custom-game #paste-hint { display: none; }
