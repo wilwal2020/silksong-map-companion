@@ -348,6 +348,52 @@ export class PinManager {
     return pointInConvex({ x, y }, convexHull(corners));
   }
 
+  // The corridor you travel down to reach an open card: a triangle with its
+  // apex on the pin, widening out to take in the whole screenshot square at
+  // the far end.
+  //
+  // The safe zone above keeps the card ALIVE on that journey. This decides who
+  // owns the hover during it, which only became a problem once persistent pins
+  // existed: they stand shoulder to shoulder in the grid, so the way out to a
+  // card almost always crosses a neighbour, and the neighbour's pointerenter
+  // tore the card down and put up its own. A pin inside this triangle is being
+  // passed over, not aimed at.
+  _travelTriangle(entry) {
+    if (!entry || !entry.card) return null;
+    const shot = entry.card.querySelector('.pc-img');
+    if (!shot) return null;
+    const r = shot.getBoundingClientRect();
+    const p = this.screenPos(entry.data);
+    const pad = 10;
+    const corners = [
+      { x: r.left - pad, y: r.top - pad }, { x: r.right + pad, y: r.top - pad },
+      { x: r.right + pad, y: r.bottom + pad }, { x: r.left - pad, y: r.bottom + pad },
+    ];
+    // The two corners the square subtends from the pin — the ones with every
+    // other corner to one side of them. With the pin inside the square there
+    // are none (the corners wrap right around it), and there is no cone to
+    // draw: the caller falls back to the safe zone.
+    const edge = corners.filter(c => {
+      const vx = c.x - p.x, vy = c.y - p.y;
+      let pos = 0, neg = 0;
+      for (const o of corners) {
+        if (o === c) continue;
+        const cross = vx * (o.y - p.y) - vy * (o.x - p.x);
+        if (cross > 0) pos++; else if (cross < 0) neg++;
+      }
+      return !pos || !neg;
+    });
+    return edge.length >= 2 ? [p, edge[0], edge[1]] : null;
+  }
+
+  // is the pointer on its way to some OTHER pin's open card?
+  _inTravelCorridor(entry, x, y) {
+    const open = this._hoverCardEntry;
+    if (!open || open === entry || !open.card) return false;
+    const tri = this._travelTriangle(open);
+    return tri ? pointInConvex({ x, y }, tri) : this._inSafeZone(open, x, y);
+  }
+
   add(data, { select = false, pop = false } = {}) {
     const el = document.createElement('div');
     el.className = 'pin';
@@ -607,9 +653,13 @@ export class PinManager {
     el.addEventListener('pointermove', e => {
       if (!down) {
         // hover shows the preview card — but not for the armed pin: while it's
-        // selected it only breathes (with its ✕), no card in the way
+        // selected it only breathes (with its ✕), no card in the way, and not
+        // while this pin is merely in the way of the card already open
         if (!this.suppressHover && !entry.pendingMove && !entry.card
-            && this.selectedId !== entry.data.id) this._showCard(entry, false);
+            && this.selectedId !== entry.data.id
+            && !this._inTravelCorridor(entry, e.clientX, e.clientY)) {
+          this._showCard(entry, false);
+        }
         return;
       }
       if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) >= 5) {
@@ -670,8 +720,11 @@ export class PinManager {
       this.select(entry.data.id);
     });
 
-    el.addEventListener('pointerenter', () => {
+    el.addEventListener('pointerenter', e => {
       if (this.suppressHover) return;
+      // crossing this pin on the way out to another pin's card leaves that
+      // card — and the paste target — exactly where they were
+      if (this._inTravelCorridor(entry, e.clientX, e.clientY)) return;
       this.hoveredId = entry.data.id;
       if (entry.data.id !== this.lastPlacedId) this.lastPlacedId = null; // moved to another pin
       if (!entry.pendingMove && this.selectedId !== entry.data.id) this._showCard(entry, false);
