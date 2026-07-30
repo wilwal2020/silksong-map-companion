@@ -10,14 +10,14 @@ export { catById };
 // and a hair off every other edge.
 const CARD_TOP = 60, CARD_MARGIN = 12;
 
-// How tall the picture inside a card may be before the card would hang off the
-// bottom of the window. The deck and buttons below it don't scale with the
-// picture, so they come off the budget first. Both the zoom ceiling and the
+// How tall the picture inside a card may be before the card would outgrow the
+// band it is allowed to sit in. The deck and buttons below it don't scale with
+// the picture, so they come off the budget first. Both the zoom ceiling and the
 // card's own layout go through this, so a picture can never be the reason the
 // card doesn't fit — it gives up height instead.
-function imgRoom(card, img) {
+function imgRoom(card, img, band) {
   const chrome = Math.max(0, card.offsetHeight - img.offsetHeight);
-  return Math.max(120, window.innerHeight - CARD_TOP - CARD_MARGIN - chrome);
+  return Math.max(120, band.bottom - band.top - chrome);
 }
 
 // inline action-row icons (crisp at any size, currentColor-tinted)
@@ -138,7 +138,7 @@ export class PinGrid {
     this.cells = [];
     this.band = null;
     this._stale = false;
-    if (cols < 3 || rows < 3) { this.geomKey = null; this._render(); return; } // no room for a ring
+    if (cols < 3 || rows < 3) { this.geomKey = null; this.rimRows = null; this._render(); return; } // no room for a ring
     const xs = this._lines(f.left, f.right, cols), ys = this._lines(f.top, f.bottom, rows);
     const blockers = GRID_AVOID.map(s => document.querySelector(s))
       .filter(onScreen).map(el => el.getBoundingClientRect());
@@ -151,6 +151,8 @@ export class PinGrid {
         this.cells.push({ key: `${cx},${cy}`, x: x + CELL / 2, y: y + CELL / 2 });
       }
     }
+    // where the top and bottom rows of pins end, for cards to keep clear of
+    this.rimRows = { top: ys[0] + CELL, bottom: ys[rows - 1] };
     // over the grid = inside the free space but outside the hole in the middle
     this.band = {
       left: f.left, top: f.top, right: f.right, bottom: f.bottom,
@@ -212,6 +214,12 @@ export class PinGrid {
   // there are cells to snap to even when nothing has asked to see them
   ensure() {
     if (this._stale) this.build();
+  }
+
+  // the horizontal strips the rim rows of pins occupy, as a band between them
+  rim() {
+    this.ensure();
+    return this.rimRows;
   }
 
   // `ensure`, not `build`: showing the grid must not re-measure it. Raising it
@@ -634,7 +642,11 @@ export class PinManager {
       e.stopPropagation();
       down = true; moved = false;
       downX = e.clientX; downY = e.clientY;
-      dragging = entry.el.classList.contains('selected') || !!entry.pendingMove;
+      // A persistent pin is grabbed and moved straight away. Arming exists so a
+      // pin on the map is never nudged off the spot it marks by accident; a
+      // persistent one marks no spot, only ever lands in a slot, and is one
+      // Ctrl+Z from where it was — there is nothing to protect it from.
+      dragging = entry.data.fixed || entry.el.classList.contains('selected') || !!entry.pendingMove;
       if (dragging) {
         // a persistent pin is dragged in screen pixels (it has no map spot to
         // divide by the zoom), an ordinary one in map coordinates
@@ -709,6 +721,10 @@ export class PinManager {
         return;
       }
       if (moved || this.suppressHover) return; // a stray drag on an un-armed pin
+      // A persistent pin has nothing to arm, so a click on one means nothing —
+      // and must cost nothing: its card stays up rather than being torn down
+      // to make room for a move you can already make.
+      if (entry.data.fixed) return;
       // a plain click arms the pin for moving (it breathes, with a ✕ to exit)
       // and deliberately shows NO card, so the map stays clear while you move it
       this._hideCard(entry, true);
@@ -859,17 +875,44 @@ export class PinManager {
     entry.cardSide = null;   // the next opening picks its side afresh
   }
 
+  // The band of the window a card may occupy: clear of the toolbar at the top
+  // and a hair off the bottom — and, for a persistent pin, clear of the top and
+  // bottom rows of the grid as well.
+  //
+  // Without that a card was clamped against the window edge and so lay ACROSS a
+  // rim row, putting the screenshot square over the pins standing there. It is
+  // the rows that are kept clear, not just the card's own pin: a tall card on a
+  // pin halfway down the left rim reached the bottom row just the same.
+  //
+  // The left and right rims need nothing — a card is placed beside its pin, so
+  // it only ever grazes the column it came from.
+  _cardBand(entry) {
+    const full = { top: CARD_TOP, bottom: window.innerHeight - CARD_MARGIN };
+    if (!entry.data.fixed) return full;
+    const rim = this.grid.rim();
+    if (!rim) return full;
+    const gap = 6;
+    const band = {
+      top: Math.max(full.top, rim.top + gap),
+      bottom: Math.min(full.bottom, rim.bottom - gap),
+    };
+    // on a window too short for that to leave a card any room, a covered pin is
+    // the lesser problem
+    return band.bottom - band.top >= 240 ? band : full;
+  }
+
   _positionCard(entry) {
     const p = this.screenPos(entry.data);
     const card = entry.card;
     if (!card) return;
     const margin = CARD_MARGIN;
-    // Give the picture only the height that leaves the card on screen. Without
-    // this a tall portrait shot overflowed the bottom at the card's NORMAL
-    // width, before any zooming — there was no size it could be clamped to,
-    // because the overflow was the picture's own aspect.
+    const band = this._cardBand(entry);
+    // Give the picture only the height that leaves the card inside that band.
+    // Without this a tall portrait shot overflowed the bottom at the card's
+    // NORMAL width, before any zooming — there was no size it could be clamped
+    // to, because the overflow was the picture's own aspect.
     const env = card.querySelector('img.env');
-    if (env) env.style.maxHeight = imgRoom(card, env) + 'px';
+    if (env) env.style.maxHeight = imgRoom(card, env, band) + 'px';
     const w = card.offsetWidth || 320, h = card.offsetHeight;
     // Which side of the pin the card sits on is settled ONCE per opening.
     // Deciding it afresh on every zoom step made the card jump across the pin
@@ -884,7 +927,7 @@ export class PinManager {
     // Then keep it on screen regardless: once it is wider than the room beside
     // the pin, neither side fits and it has to overlap the pin instead.
     x = Math.max(margin, Math.min(x, window.innerWidth - w - margin));
-    y = Math.max(CARD_TOP, Math.min(y, window.innerHeight - h - margin));
+    y = Math.max(band.top, Math.min(y, band.bottom - h));
     // position via left/top so `transform` stays free for the entrance pop,
     // and grow the card from the side nearest the pin
     card.style.left = x + 'px';
@@ -932,7 +975,7 @@ export class PinManager {
           ? img.naturalWidth / img.naturalHeight : 16 / 9;
         return Math.max(BASE_W, Math.min(
           window.innerWidth - 2 * CARD_MARGIN,      // as wide as the window allows
-          imgRoom(card, img) * aspect));            // ...or as tall, whichever binds
+          imgRoom(card, img, this._cardBand(entry)) * aspect)); // ...or as tall, whichever binds
       };
       img.addEventListener('wheel', e => {
         e.preventDefault();
