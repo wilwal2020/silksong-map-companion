@@ -27,6 +27,11 @@ let lastUndo = null;      // { snap, pinId } — one level of paste undo
 let learnedScale = null;  // map-px per screenshot-px from past successes
 let scaleTrusted = false; // learnedScale was verified against reference content
 let scaleSamples = [];    // recent content-verified scales; learnedScale = median
+// Every size a placement has actually ended up at, and how often — [{ k, n }].
+// A game with more than one map view (a full map and a minimap, say) has more
+// than one right answer for the size, and each of them comes up again and
+// again. See scaleShortlist.
+let scaleHistory = [];
 
 // Placement is all-or-nothing: a paste is either confident enough to apply
 // on its own, or it fails outright — no "does this look right?" middle step
@@ -1660,6 +1665,63 @@ function scalesForDir(dir) {
   return dir < 0 ? ALIGN_SCALES_DOWN : dir > 0 ? ALIGN_SCALES_UP : ALIGN_SCALES;
 }
 
+// ---- sizes this game has used before ------------------------------------
+//
+// A game with two ways of looking at the map — the full map and a minimap,
+// say — has two right answers for the size, not one, and it alternates between
+// them. The ladder finds either eventually, but it pays the full search every
+// time it switches, when the answer is a size this game has already used a
+// dozen times.
+//
+// So every placement that gets committed is remembered, and sizes that have
+// come up MORE THAN ONCE are tried before the ladder. Once is a coincidence
+// (any one-off drag lands at some size); twice is a map mode.
+
+// how close two sizes must be to count as the same one. Loose enough to
+// absorb the fraction of a percent the fine climb leaves behind, tight enough
+// that two genuine map zooms never merge — they differ by tens of percent.
+const SCALE_SAME = 0.015;
+
+function rememberScale(k) {
+  if (!(k > 0) || !isFinite(k)) return;
+  const hit = scaleHistory.find(e => Math.abs(k / e.k - 1) < SCALE_SAME);
+  if (hit) {
+    // the running mean converges on the true size as the same mode recurs
+    hit.k = (hit.k * hit.n + k) / (hit.n + 1);
+    hit.n++;
+  } else {
+    scaleHistory.push({ k, n: 1 });
+  }
+  // keep the well-used ones; a long tail of one-offs is noise
+  scaleHistory.sort((a, b) => b.n - a.n);
+  if (scaleHistory.length > 8) scaleHistory.length = 8;
+  store.putMeta('scaleHistory', scaleHistory);
+}
+
+// The sizes worth trying before the ladder, as multiples of the size set now,
+// most-used first. Capped at two: each one costs a search of its own, so the
+// bet has to stay small enough that being wrong is cheap.
+function scaleShortlist(rect, img, dir) {
+  const now = rect.w / (img.width || 1);
+  if (!(now > 0)) return [];
+  const out = [];
+  for (const e of scaleHistory.filter(s => s.n >= 2).sort((a, b) => b.n - a.n)) {
+    const m = e.k / now;
+    // Deliberately NOT held to the ladder's half-to-double reach. These are
+    // absolute sizes this game is known to use, and the ones the ladder cannot
+    // reach are precisely the ones worth trying — a minimap is easily three
+    // times the zoom of the full map. Only nonsense is filtered out.
+    if (!(m > 0.05) || m > 20) continue;
+    if (Math.abs(m - 1) < 0.02) continue;           // that IS the size set now, already tried
+    if (dir < 0 && m > 1) continue;
+    if (dir > 0 && m < 1) continue;
+    if (out.some(o => Math.abs(o / m - 1) < 0.05)) continue;
+    out.push(m);
+    if (out.length === 2) break;
+  }
+  return out;
+}
+
 function setAlignCanScale(on) {
   alignCanScale = !!on;
   store.putMeta('alignScale', alignCanScale);
@@ -1694,11 +1756,27 @@ function runAutoAlign(dir = 0) {
       //
       // Not when a direction was asked for, though: pressing "smaller" says
       // the size IS wrong, and taking a same-size answer would ignore you.
+      // Then the sizes this game has settled at before, one at a time and
+      // most-used first. Each is a single-size search — no ladder, no probe
+      // stage — so a game that alternates between two map views answers in two
+      // cheap searches instead of an eleven-rung one, every time it switches.
+      // Being wrong costs two more searches before the ladder runs anyway.
+      const known = scales ? scaleShortlist(rect, p.img, dir) : [];
       if (scales && dir === 0) {
         r = explored.autoAlign(p.img, rect);
+        for (const k of known) {
+          if (alignAccepted(r)) break;
+          r = explored.autoAlign(p.img, rect, { scales: [k] });
+        }
+        if (!alignAccepted(r)) r = explored.autoAlign(p.img, rect, { scales });
+      } else if (scales) {
+        for (const k of known) {
+          if (alignAccepted(r)) break;
+          r = explored.autoAlign(p.img, rect, { scales: [k] });
+        }
         if (!alignAccepted(r)) r = explored.autoAlign(p.img, rect, { scales });
       } else {
-        r = explored.autoAlign(p.img, rect, scales ? { scales } : {});
+        r = explored.autoAlign(p.img, rect, {});
       }
     } catch (e) {
       console.error(e);
@@ -1809,6 +1887,9 @@ async function commitPaste(bitmap, rect, baseWidth) {
   bitmap.close?.();
   learnedScale = rect.w / (baseWidth || 1);
   store.putMeta('scale', learnedScale);
+  // a size that got committed is a size this game really uses — the next
+  // auto-align tries it before working through the ladder
+  rememberScale(learnedScale);
 
   // step 2 — where are you?
   const spot = await askPlayerLocation();
@@ -1884,11 +1965,16 @@ async function handleManualPlace(blob) {
     await new Promise(r => setTimeout(r, 30)); // let the spinner paint first
     try {
       // the size it starts at is the size the last paste ended up, so it is
-      // usually still right — try it alone before searching sizes (see the
-      // same reasoning in runAutoAlign)
+      // usually still right — try it alone, then the other sizes this game
+      // keeps coming back to, and only then search properly (see the same
+      // reasoning, at more length, in runAutoAlign)
       let r = explored.autoAlign(bitmap, start);
-      if (pasteScales && !alignAccepted(r)) {
-        r = explored.autoAlign(bitmap, start, { scales: pasteScales });
+      if (pasteScales) {
+        for (const k of scaleShortlist(start, bitmap, 0)) {
+          if (alignAccepted(r)) break;
+          r = explored.autoAlign(bitmap, start, { scales: [k] });
+        }
+        if (!alignAccepted(r)) r = explored.autoAlign(bitmap, start, { scales: pasteScales });
       }
       console.log('[map] auto-align on paste:', r);
       // when it may resize, the size it found is part of the answer
@@ -3020,10 +3106,12 @@ function buildToolbar() {
     learnedScale = null;
     scaleTrusted = false;
     scaleSamples = [];
+    scaleHistory = [];
     store.putMeta('fog', null);
     store.putMeta('scale', null);
     store.putMeta('scaleTrusted', false);
     store.putMeta('scaleSamples', []);
+    store.putMeta('scaleHistory', []);
     toast('Map cleared — pins kept. Paste screenshots to rebuild it.', 'ok', { label: 'Undo', fn: undoLast });
   });
 
@@ -3115,6 +3203,7 @@ async function init() {
   learnedScale = (await store.getMeta('scale')) || null;
   scaleTrusted = !!(await store.getMeta('scaleTrusted'));
   scaleSamples = (await store.getMeta('scaleSamples')) || [];
+  scaleHistory = (await store.getMeta('scaleHistory')) || [];
   // `alignSizeMode` was a short-lived four-way picker; anything but its
   // "keep" meant resizing was allowed
   const savedMode = await store.getMeta('alignSizeMode');
@@ -3178,6 +3267,12 @@ async function init() {
     routePaste,
     undoLast,
     dropPoint,
+    // the learned sizes, and the two functions that keep them — the shortlist
+    // decides how much work every auto-align does, so it wants to be checkable
+    get scaleHistory() { return scaleHistory; },
+    set scaleHistory(v) { scaleHistory = v; },
+    rememberScale,
+    scaleShortlist,
   };
 }
 

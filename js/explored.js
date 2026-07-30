@@ -780,6 +780,12 @@ export class Explored {
     // With no ladder this is exactly the old translation-only search: one
     // size, the one the user set.
     const ladder = scales && scales.length ? scales : [1];
+    // Whether the size may move at all — which is not the same as having more
+    // than one rung. A ladder of exactly one rung is a caller saying "try this
+    // size, and only this one": it still has to be SEARCHED at that size and
+    // then settled finely, where before both were keyed off `ladder.length > 1`
+    // and a single rung quietly fell through to searching the size you set.
+    const canResize = !!(scales && scales.length);
     const judged = [];
     let best = null;
     if (ladder.length > 1) {
@@ -812,7 +818,7 @@ export class Explored {
       }
       best = pickSize(winners);
     } else {
-      judged.push(...atSize(sizeAt(1)));
+      judged.push(...atSize(sizeAt(ladder[0])));
       best = pickPos(judged.filter(c => c && c.fit !== undefined));
     }
     const usable = judged.filter(c => c && c.fit !== undefined);
@@ -824,7 +830,7 @@ export class Explored {
     // ones it kept — starting narrow would strand the search next to the
     // answer. Later rounds close in on the last couple of percent, which is
     // the difference between a seam and a blur.
-    if (ladder.length > 1) {
+    if (canResize) {
       const rounds = [
         { ks: [0.8, 0.89, 1.13, 1.25], win: 0.12 },
         { ks: [0.93, 0.965, 1.036, 1.075], win: 0.07 },
