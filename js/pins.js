@@ -350,7 +350,7 @@ export class PinManager {
 
   // The corridor you travel down to reach an open card: a triangle with its
   // apex on the pin, widening out to take in the whole screenshot square at
-  // the far end.
+  // the far end, square included.
   //
   // The safe zone above keeps the card ALIVE on that journey. This decides who
   // owns the hover during it, which only became a problem once persistent pins
@@ -365,25 +365,20 @@ export class PinManager {
     const r = shot.getBoundingClientRect();
     const p = this.screenPos(entry.data);
     const pad = 10;
-    const corners = [
+    // Hull of the pin and the whole square, which is the cone between them
+    // CAPPED BY THE SQUARE ITSELF.
+    //
+    // Closing the cone with a straight chord across the two corners it touches
+    // is the obvious thing and it is wrong: a rectangle bulges out past that
+    // chord, so the last stretch of the journey — arriving at a corner of the
+    // square — fell outside, which is exactly where a pin sitting beside the
+    // card's edge stands. Three of the fifty-five real crossings on a full rim
+    // of pins got through that gap.
+    return convexHull([
+      p,
       { x: r.left - pad, y: r.top - pad }, { x: r.right + pad, y: r.top - pad },
       { x: r.right + pad, y: r.bottom + pad }, { x: r.left - pad, y: r.bottom + pad },
-    ];
-    // The two corners the square subtends from the pin — the ones with every
-    // other corner to one side of them. With the pin inside the square there
-    // are none (the corners wrap right around it), and there is no cone to
-    // draw: the caller falls back to the safe zone.
-    const edge = corners.filter(c => {
-      const vx = c.x - p.x, vy = c.y - p.y;
-      let pos = 0, neg = 0;
-      for (const o of corners) {
-        if (o === c) continue;
-        const cross = vx * (o.y - p.y) - vy * (o.x - p.x);
-        if (cross > 0) pos++; else if (cross < 0) neg++;
-      }
-      return !pos || !neg;
-    });
-    return edge.length >= 2 ? [p, edge[0], edge[1]] : null;
+    ]);
   }
 
   // is the pointer on its way to some OTHER pin's open card?
@@ -391,7 +386,7 @@ export class PinManager {
     const open = this._hoverCardEntry;
     if (!open || open === entry || !open.card) return false;
     const tri = this._travelTriangle(open);
-    return tri ? pointInConvex({ x, y }, tri) : this._inSafeZone(open, x, y);
+    return tri ? pointInConvex({ x, y }, tri) : false;
   }
 
   add(data, { select = false, pop = false } = {}) {
