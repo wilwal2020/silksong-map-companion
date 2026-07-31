@@ -492,7 +492,13 @@ export class Explored {
   // reads as "it failed, but it works once I drag it closer". Widening it is
   // affordable because each pass is sized by its TEMPLATE (see `tw`), not by
   // the window, so a bigger search area no longer means a blurrier match.
-  autoAlign(bitmap, rect, { pad = 1.6, scales = null } = {}) {
+  // `bound` — { lo, hi } as multiples of the size you set — is a hard limit on
+  // the size that may come back, for when the CALLER has been told which way
+  // the size is wrong. The ladder alone cannot enforce it: its rungs are
+  // one-sided, but the fine climb that follows reaches ±25% in either
+  // direction, so pressing "smaller" on a screenshot that was actually too
+  // small used to hand back a BIGGER one.
+  autoAlign(bitmap, rect, { pad = 1.6, scales = null, bound = null } = {}) {
     const s = this.scale;
     const bmp = canvasOf(bitmap.width, bitmap.height);
     bmp.getContext('2d').drawImage(bitmap, 0, 0);
@@ -754,6 +760,11 @@ export class Explored {
     // would win every time just by swallowing more ground. The preference
     // for the size you set is deliberately gentle: it breaks a genuine tie
     // and nothing more, or the ladder would be for show.
+    // Every size decision, kept for the log. Which gate rejected the size that
+    // should have won is the one thing you need to know when this comes out
+    // wrong, and `cands` below cannot tell you: it carries the numbers a pass
+    // computed at its own resolution, not the ones that actually choose.
+    const sizeLog = [];
     const pickSize = pool => {
       if (!pool.length) return null;
       const rated = pool.map(c => ({ c, m: measure(c) }));
@@ -771,10 +782,22 @@ export class Explored {
       const bestJac = Math.max(...rated.map(r => r.m.jac));
       const use = rated.filter(r => r.m.jac >= bestJac * 0.85);
       const top = Math.max(...use.map(r => r.m.mass));
-      if (top <= 0) return use[0].c;
       const dev = r => Math.abs(Math.log(r.c.w / rect.w)) * 0.25
         + dist(r.c) / Math.max(1, rect.w);
-      return use.filter(r => r.m.mass >= top * 0.9).sort((a, b) => dev(a) - dev(b))[0].c;
+      const won = top <= 0 ? use[0]
+        : use.filter(r => r.m.mass >= top * 0.9).sort((a, b) => dev(a) - dev(b))[0];
+      sizeLog.push(rated
+        .sort((a, b) => a.c.w - b.c.w)
+        .map(r => ({
+          k: +(r.c.w / rect.w).toFixed(3),
+          jac: +r.m.jac.toFixed(3), mass: r.m.mass, cover: +r.m.cover.toFixed(3),
+          dev: +dev(r).toFixed(3),
+          // where it dropped out, if it did
+          out: r.m.jac < bestJac * 0.85 ? 'jac'
+            : (top > 0 && r.m.mass < top * 0.9) ? 'mass' : null,
+          won: r === won,
+        })));
+      return won.c;
     };
 
     // With no ladder this is exactly the old translation-only search: one
@@ -801,11 +824,25 @@ export class Explored {
       for (const k of ladder) {
         const z = sizeAt(k);
         const c = pickPos(pass(z, 120, originAt(z), padPx, 300, 3));
-        // ranked the same way sizes are ranked later — by how much map they
-        // explain at a fixed resolution, never by the pass's own numbers
-        if (c) probes.push({ k, mass: measure(c).mass });
+        // measured at a fixed resolution, never by the pass's own numbers
+        if (c) probes.push({ k, ...measure(c) });
       }
-      probes.sort((a, b) => b.mass - a.mass);
+      // Shortlisted on AGREEMENT, not on how much map they cover.
+      //
+      // This used to rank on `mass`, and mass climbs with the footprint's area
+      // — so on a map with plenty already on it the four largest rungs took
+      // every place on the shortlist and the correct smaller size never got a
+      // proper look. It was not a near miss: with the true size at 0.6 the
+      // sizes that reached stage 2 were 1, 1.32, 1.52, 1.74 and 2.
+      //
+      // `jac` is the measure that survives being compared across sizes, which
+      // is exactly what this stage does — too big leaves the screenshot
+      // unexplained, too small leaves the map out, and both cost. It is also
+      // the gate `pickSize` applies later, so the two stages now agree about
+      // what makes a size worth considering. Mass still decides between the
+      // survivors down there, where they are all plausible and the question is
+      // which explains the most.
+      probes.sort((a, b) => b.jac - a.jac);
       const keep = new Set(probes.slice(0, 4).map(p => p.k));
       keep.add(1);              // the size you set always gets a proper run
       // Stage 2: the real search, at the few sizes that look promising.
@@ -830,7 +867,15 @@ export class Explored {
     // ones it kept — starting narrow would strand the search next to the
     // answer. Later rounds close in on the last couple of percent, which is
     // the difference between a seam and a blur.
+    // The size the caller will accept, in composite px — a half-pixel of slack,
+    // so a size sitting exactly on the limit survives. Everything downstream of
+    // the ladder has to honour it, including the sub-pixel polish: it reaches
+    // only 0.4%, but 0.4% the wrong way still turns "make it smaller" into a
+    // bigger number on screen.
+    const loW = bound ? rect.w * bound.lo - 0.5 : -Infinity;
+    const hiW = bound ? rect.w * bound.hi + 0.5 : Infinity;
     if (canResize) {
+      const inBound = c => c && c.fit !== undefined && c.w >= loW && c.w <= hiW;
       const rounds = [
         { ks: [0.8, 0.89, 1.13, 1.25], win: 0.12 },
         { ks: [0.93, 0.965, 1.036, 1.075], win: 0.07 },
@@ -840,11 +885,12 @@ export class Explored {
         const around = [best];
         for (const k of ks) {
           const z = { w: best.w * k, h: best.h * k };
+          if (z.w < loW || z.w > hiW) continue;
           const wm = Math.max(30, Math.max(z.w, z.h) * win);
           const org = { x: best.x + (best.w - z.w) / 2, y: best.y + (best.h - z.h) / 2 };
           around.push(...pass(z, 240, org, wm, 600, 1));
         }
-        const b2 = pickSize(around.filter(c => c && c.fit !== undefined));
+        const b2 = pickSize(around.filter(inBound));
         if (b2) best = b2;
       }
     }
@@ -859,7 +905,10 @@ export class Explored {
     // what is already here or improve on it.
     let tuned = null;
     try {
-      tuned = this.polish(bmp, { x: best.x, y: best.y, w: best.w, h: best.h });
+      const pk = [1, 0.996, 0.998, 1.002, 1.004]
+        .filter(k => best.w * k >= loW && best.w * k <= hiW);
+      tuned = this.polish(bmp, { x: best.x, y: best.y, w: best.w, h: best.h },
+        pk.length ? { scales: pk } : { scales: [1] });
     } catch { tuned = null; }
     const out = tuned || best;
 
@@ -878,6 +927,10 @@ export class Explored {
       polish: tuned
         ? { dx: tuned.dx, dy: tuned.dy, k: tuned.k, diff: +tuned.diff.toFixed(2) }
         : null,
+      // how each size was judged, round by round, and which gate threw out the
+      // ones that lost — this is what to read when it settles on a size that
+      // is plainly not the one that fits
+      sizes: sizeLog,
       // what else was in the running — this call is hard to reason about
       // from the outside, and the choice between candidates is where it goes
       // wrong when it goes wrong

@@ -1762,6 +1762,10 @@ function runAutoAlign(dir = 0) {
       // cheap searches instead of an eleven-rung one, every time it switches.
       // Being wrong costs two more searches before the ladder runs anyway.
       const known = scales ? scaleShortlist(rect, p.img, dir) : [];
+      // Pressing a side says which way the size is wrong, and that has to hold
+      // all the way to the answer — the one-sided ladder only covers the rungs,
+      // and the fine climb after it reaches ±25% either way on its own.
+      const bound = dir < 0 ? { lo: 0, hi: 1 } : dir > 0 ? { lo: 1, hi: Infinity } : null;
       if (scales && dir === 0) {
         r = explored.autoAlign(p.img, rect);
         for (const k of known) {
@@ -1772,9 +1776,9 @@ function runAutoAlign(dir = 0) {
       } else if (scales) {
         for (const k of known) {
           if (alignAccepted(r)) break;
-          r = explored.autoAlign(p.img, rect, { scales: [k] });
+          r = explored.autoAlign(p.img, rect, { scales: [k], bound });
         }
-        if (!alignAccepted(r)) r = explored.autoAlign(p.img, rect, { scales });
+        if (!alignAccepted(r)) r = explored.autoAlign(p.img, rect, { scales, bound });
       } else {
         r = explored.autoAlign(p.img, rect, {});
       }
