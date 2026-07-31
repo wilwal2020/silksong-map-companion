@@ -298,6 +298,17 @@ function satSum(sat, W, H, x, y, w, h) {
   return sat[y1 * S + x1] - sat[y0 * S + x1] - sat[y1 * S + x0] + sat[y0 * S + x0];
 }
 
+// The alignment scan splits a screenshot into TILES x TILES patches and tests
+// each patch's points only where the map actually has something under them.
+// A screenshot taken at the frontier is mostly ground the map hasn't got yet,
+// and those patches can only ever score zero, so skipping them is free
+// accuracy-wise and most of the scan's work.
+//
+// 2 costs four extra table lookups per scored position to skip up to three
+// quarters of the points. Finer grids skip more but pay more lookups on every
+// position, and the lookups are not free at three million of them.
+const TILES = 2;
+
 // How far a growing world may go. Not a design limit so much as a memory one:
 // the composite is a real canvas, and every map pixel is four bytes of it.
 const MAX_WORLD_SIDE = 12000;
@@ -550,14 +561,37 @@ export class Explored {
       nx.drawImage(bmp, 0, 0, pw, ph);
       const N = contrastMask(nc);
       if (N.n < 40) return [];
-      // sample the shot's content points — a few hundred is plenty and keeps
-      // the inner loop cheap
+      // Sample the shot's content points — a few hundred is plenty and keeps
+      // the inner loop cheap.
+      //
+      // They are gathered TILE BY TILE rather than in raster order, so the
+      // points belonging to each patch of the screenshot sit together in one
+      // run. That is what lets the scan below skip a patch outright: a patch
+      // lying on ground the map hasn't got yet can only ever contribute zero,
+      // and most of a screenshot at the frontier of the map is exactly that.
       const stride = Math.max(1, Math.ceil(N.n / wantPts));
-      const px = [], py = [];
+      const bucket = Array.from({ length: TILES * TILES }, () => []);
       let seen = 0;
       for (let p = 0; p < N.m.length; p++) {
         if (!N.m[p] || (seen++ % stride)) continue;
-        px.push(p % pw); py.push((p / pw) | 0);
+        const X = p % pw, Y = (p / pw) | 0;
+        const tx = Math.min(TILES - 1, (X * TILES / pw) | 0);
+        const ty = Math.min(TILES - 1, (Y * TILES / ph) | 0);
+        bucket[ty * TILES + tx].push(X, Y);
+      }
+      // flattened points, plus where each tile's run starts and ends, and the
+      // tile's own rectangle inside the footprint
+      const px = [], py = [];
+      const tFrom = [], tTo = [], tX = [], tY = [], tW = [], tH = [];
+      for (let t = 0; t < TILES * TILES; t++) {
+        tFrom[t] = px.length;
+        const b = bucket[t];
+        for (let j = 0; j < b.length; j += 2) { px.push(b[j]); py.push(b[j + 1]); }
+        tTo[t] = px.length;
+        const tx = t % TILES, ty = (t / TILES) | 0;
+        const x0 = Math.round(tx * pw / TILES), x1 = Math.round((tx + 1) * pw / TILES);
+        const y0 = Math.round(ty * ph / TILES), y1 = Math.round((ty + 1) * ph / TILES);
+        tX[t] = x0; tY[t] = y0; tW[t] = x1 - x0; tH[t] = y1 - y0;
       }
       if (!px.length) return [];
       const back = N.n / px.length;             // sampled hits -> full count
@@ -603,10 +637,19 @@ export class Explored {
         // search is here to find.
         if (ecnt <= topJ * N.n * 0.25) return;
         let inter = 0;
-        for (let i = 0; i < px.length; i++) {
-          const X = px[i] + ox, Y = py[i] + oy;
-          if (X < 0 || X >= rw || Y < 0 || Y >= rh) continue;
-          if (E.m[Y * rw + X]) inter++;
+        for (let t = 0; t < TILES * TILES; t++) {
+          const from = tFrom[t], to = tTo[t];
+          if (from === to) continue;
+          // Four table lookups decide whether this patch of the screenshot has
+          // ANY map under it here. None means every point in it would score
+          // zero, so the run is skipped whole. This is exact, not an
+          // approximation — it drops only tests whose answer is already known.
+          if (!satSum(sat, rw, rh, ox + tX[t], oy + tY[t], tW[t], tH[t])) continue;
+          for (let i = from; i < to; i++) {
+            const X = px[i] + ox, Y = py[i] + oy;
+            if (X < 0 || X >= rw || Y < 0 || Y >= rh) continue;
+            if (E.m[Y * rw + X]) inter++;
+          }
         }
         if (!inter) return;
         const est = inter * back;
