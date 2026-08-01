@@ -1729,6 +1729,38 @@ function setAlignCanScale(on) {
   if (rebuildPlaceTools) rebuildPlaceTools();
 }
 
+// Run the alignment again from its own answer, until the answer stops moving.
+//
+// This is a local search: it answers better the closer it starts, which is why
+// pressing the button a second time used to improve on the first. Measured on
+// a screenshot dropped off in both size and position, one press left the size
+// 1.6% out and the position ~2px off, and the next press came back exact —
+// then nothing changed however many more times it ran. That second press is
+// not the user's job.
+//
+// Later rounds never re-run the wide ladder. By then the size is settled to
+// within a few percent, which autoAlign's own climb covers, at a fraction of
+// what a ladder costs. Nor do they widen what was allowed: a press with the
+// size locked stays locked, and a direction keeps its bound.
+function alignSettled(img, first, { scales, bound }) {
+  let out = first;
+  if (!alignAccepted(out)) return out;    // nothing worth refining
+  const near = { scales: scales ? [1] : null, bound };
+  let cur = { x: out.x, y: out.y, w: out.w, h: out.h };
+  for (let i = 0; i < 3; i++) {
+    const r = explored.autoAlign(img, cur, near);
+    // a round that comes back refused says the previous answer was the good
+    // one — keep it rather than trading down
+    if (!r || !alignAccepted(r)) break;
+    const moved = Math.hypot(r.x - cur.x, r.y - cur.y);
+    const resized = Math.abs(r.w / cur.w - 1);
+    out = r;
+    cur = { x: r.x, y: r.y, w: r.w, h: r.h };
+    if (moved < 0.75 && resized < 0.002) break;   // settled
+  }
+  return out;
+}
+
 // Image-only alignment against what's already pasted — no reference map, so
 // it works for any game. What it may do to the size is whatever the Size
 // picker says; on 'keep' it only MOVES the placement, taking the size you set
@@ -1782,6 +1814,7 @@ function runAutoAlign(dir = 0) {
       } else {
         r = explored.autoAlign(p.img, rect, {});
       }
+      r = alignSettled(p.img, r, { scales, bound });
     } catch (e) {
       console.error(e);
     }

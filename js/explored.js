@@ -825,7 +825,14 @@ export class Explored {
       const bestJac = Math.max(...rated.map(r => r.m.jac));
       const use = rated.filter(r => r.m.jac >= bestJac * 0.85);
       const top = Math.max(...use.map(r => r.m.mass));
-      const dev = r => Math.abs(Math.log(r.c.w / rect.w)) * 0.25
+      // Ties are settled by staying near the size and spot you set — EXCEPT on
+      // the size, once a direction has been pressed. Pressing a side is you
+      // saying the current size is wrong, so still leaning towards it is
+      // ignoring you, and it shows: press "bigger" on a screenshot that needs
+      // to double and the lean brings back one that is bigger but still too
+      // small, so you have to press again. Position is untouched — nothing was
+      // said about that.
+      const dev = r => (bound ? 0 : Math.abs(Math.log(r.c.w / rect.w)) * 0.25)
         + dist(r.c) / Math.max(1, rect.w);
       const won = top <= 0 ? use[0]
         : use.filter(r => r.m.mass >= top * 0.9).sort((a, b) => dev(a) - dev(b))[0];
