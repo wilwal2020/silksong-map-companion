@@ -954,12 +954,27 @@ export class Explored {
     // and keeps whichever nudge comes out darkest where they overlap. The
     // do-nothing candidate is in its search, so it can only ever agree with
     // what is already here or improve on it.
+    // Run until it has nothing left to change, rather than once.
+    //
+    // One call reaches 0.4% of size and two pixels of travel, and the mask
+    // climb above it steps 1.5% at a time — so a size a single wheel notch out
+    // (1%) fell between the two and survived both. Everything after the first
+    // round is nearly free, because a round that finds nothing to do stops the
+    // loop, and that is the usual case.
     let tuned = null;
     try {
-      const pk = [1, 0.996, 0.998, 1.002, 1.004]
-        .filter(k => best.w * k >= loW && best.w * k <= hiW);
-      tuned = this.polish(bmp, { x: best.x, y: best.y, w: best.w, h: best.h },
-        pk.length ? { scales: pk } : { scales: [1] });
+      let cur = { x: best.x, y: best.y, w: best.w, h: best.h };
+      for (let i = 0; i < 4; i++) {
+        const pk = [1, 0.996, 0.998, 1.002, 1.004]
+          .filter(k => cur.w * k >= loW && cur.w * k <= hiW);
+        const t = this.polish(bmp, cur, pk.length ? { scales: pk } : { scales: [1] });
+        if (!t) break;
+        tuned = t;
+        const settled = Math.abs(t.x - cur.x) < 0.02 && Math.abs(t.y - cur.y) < 0.02
+          && Math.abs(t.w / cur.w - 1) < 1e-4;
+        cur = { x: t.x, y: t.y, w: t.w, h: t.h };
+        if (settled) break;
+      }
     } catch { tuned = null; }
     const out = tuned || best;
 
