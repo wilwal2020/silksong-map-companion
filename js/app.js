@@ -1742,13 +1742,21 @@ function setAlignCanScale(on) {
 // within a few percent, which autoAlign's own climb covers, at a fraction of
 // what a ladder costs. Nor do they widen what was allowed: a press with the
 // size locked stays locked, and a direction keeps its bound.
-function alignSettled(img, first, { scales, bound }) {
+function alignSettled(img, rect, first, { scales, bound }) {
   let out = first;
   if (!alignAccepted(out)) return out;    // nothing worth refining
-  const near = { scales: scales ? [1] : null, bound };
   let cur = { x: out.x, y: out.y, w: out.w, h: out.h };
   for (let i = 0; i < 3; i++) {
-    const r = explored.autoAlign(img, cur, near);
+    // The direction you pressed is a limit on the size relative to the size YOU
+    // SET — not relative to whatever the last round came back with. Re-applying
+    // it against the previous answer is what made the button oscillate: press
+    // smaller, overshoot to 80%, and every round after that was capped at 80%
+    // and could not climb back, so it took a press of the other side to
+    // recover, which overshot the other way. Measured against the original, a
+    // round that overshot is free to come back towards it — and still cannot
+    // cross it, which is all the press actually asked for.
+    const b = bound && { lo: bound.lo * rect.w / cur.w, hi: bound.hi * rect.w / cur.w };
+    const r = explored.autoAlign(img, cur, { scales: scales ? [1] : null, bound: b });
     // a round that comes back refused says the previous answer was the good
     // one — keep it rather than trading down
     if (!r || !alignAccepted(r)) break;
@@ -1814,7 +1822,7 @@ function runAutoAlign(dir = 0) {
       } else {
         r = explored.autoAlign(p.img, rect, {});
       }
-      r = alignSettled(p.img, r, { scales, bound });
+      r = alignSettled(p.img, rect, r, { scales, bound });
     } catch (e) {
       console.error(e);
     }
