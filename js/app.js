@@ -2719,9 +2719,20 @@ function onPlacingMove(e) {
   ghostPin.style.transform = `translate(${p.x}px, ${p.y}px)`;
 }
 
+// where the pointer went down, so a pan can be told from a click
+let placeDownAt = null;
+function onPlacingDown(e) { placeDownAt = { x: e.clientX, y: e.clientY }; }
+
 function onPlacingClick(e) {
   // clicks on chrome (toolbar, sidebar, dialogs, sliders) don't place a pin
   if (e.target.closest('#toolbar, #cat-bar, #map-opacity, #place-bar, #bg-tool, dialog, .toast')) return;
+  // Dragging the map while holding a pin is panning to see where the pin
+  // should go — and the click that ends the drag must not drop it wherever
+  // you happened to let go. A threshold rather than any movement at all,
+  // because a plain click still wobbles a pixel or two.
+  const moved = placeDownAt && Math.hypot(e.clientX - placeDownAt.x, e.clientY - placeDownAt.y) > 5;
+  placeDownAt = null;
+  if (moved) return;
   e.preventDefault();
   e.stopPropagation();
   const m = view.screenToMap(e.clientX, e.clientY);
@@ -2758,7 +2769,9 @@ function startPlacing(onPlace = null, { toast: withToast = true, onCancel = null
   // only a plain new pin can go to the rim — the "click your player" step is
   // always a spot on the map
   if (!onPlace) pins.grid.build();
+  placeDownAt = null;
   document.addEventListener('pointermove', onPlacingMove);
+  document.addEventListener('pointerdown', onPlacingDown, true);
   // capture so the map's own handlers don't also react to the placing click
   document.addEventListener('click', onPlacingClick, true);
   document.addEventListener('contextmenu', onPlacingContext, true);
@@ -2782,7 +2795,9 @@ function stopPlacing() {
   placeClickCb = null;
   placeCancelCb = null;
   pins.suppressHover = false;
+  placeDownAt = null;
   document.removeEventListener('pointermove', onPlacingMove);
+  document.removeEventListener('pointerdown', onPlacingDown, true);
   document.removeEventListener('click', onPlacingClick, true);
   document.removeEventListener('contextmenu', onPlacingContext, true);
   if (ghostPin) { ghostPin.remove(); ghostPin = null; }

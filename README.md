@@ -68,7 +68,8 @@ yourself:
    the screenshot has been — each drag, nudge, resize or auto-align is one
    step, and it undoes the *screenshot's* moves, never the previous paste.
 3. Press **Place it**, then click **your player's spot** on the map to drop a
-   pin there — or **Skip**.
+   pin there — or **Skip**. Dragging the map to look around first is free: only
+   a click drops the pin, a pan never does.
 
 Once there's something on the map to line up against, alignment is handled for
 you where it can be:
