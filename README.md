@@ -71,6 +71,9 @@ yourself:
    pin there — or **Skip**. Dragging the map to look around first is free: only
    a click drops the pin, a pan never does.
 
+   For a screenshot that's only more map — no player in it, nothing to mark —
+   press **No pin** instead of **Place it**. Same button, minus the step.
+
 Once there's something on the map to line up against, alignment is handled for
 you where it can be:
 

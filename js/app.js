@@ -1198,6 +1198,7 @@ function updatePlaceSize(rect) {
 function positionPaste(bitmap, rect, {
   undoBase = null, mask = null, onMove = null, okLabel = 'Place it',
   resizable = true, aids = !explored.isBlank(), deletable = false, deleteLabel = 'Delete',
+  noPin = false,
 } = {}) {
   return new Promise(resolve => {
     placeBaseWidth = bitmap.width;
@@ -1240,6 +1241,9 @@ function positionPaste(bitmap, rect, {
       view.setPlacement(null);
       hidePlaceTools();
       if (ok === 'delete') { resolve('delete'); return; }
+      // placed, but the "where are you?" step is not wanted — the flag rides
+      // on the rect, which is what the caller already carries around
+      if (ok === 'nopin') { if (r) r.noPin = true; resolve(r); return; }
       resolve(ok ? r : null);
     };
 
@@ -1323,6 +1327,14 @@ function positionPaste(bitmap, rect, {
       const confirm = [
         { id: 'pt-place', icon: TOOL_SVG.check, label: okLabel, primary: true, fn: () => finish(true) },
       ];
+      // The same button minus the pin, for a screenshot that is only more map:
+      // no player in it, nothing to mark. Otherwise every such paste ends in
+      // skipping a step you were never going to use.
+      if (noPin) confirm.push({
+        id: 'pt-place-nopin', icon: TOOL_SVG.check, label: 'No pin', primary: true,
+        title: 'Place it and stop there — no pin, no “click your player” step',
+        fn: () => finish('nopin'),
+      });
       if (deletable) confirm.push({ icon: TOOL_SVG.trash, label: deleteLabel, danger: true,
         title: `${deleteLabel} (Del)`, fn: () => finish('delete') });
       confirm.push({ icon: TOOL_SVG.x, danger: true, title: 'Cancel (Esc)', fn: () => finish(false) });
@@ -1936,6 +1948,12 @@ async function commitPaste(bitmap, rect, baseWidth) {
   // auto-align tries it before working through the ladder
   rememberScale(learnedScale);
 
+  // "No pin": the screenshot was the whole point, so it ends here
+  if (rect.noPin) {
+    toast('Screenshot added.', 'ok', { label: 'Undo', fn: undoLast });
+    return;
+  }
+
   // step 2 — where are you?
   const spot = await askPlayerLocation();
   if (!spot) {
@@ -2039,7 +2057,7 @@ async function handleManualPlace(blob) {
 // are not the same claim.
 async function placeAndCommit(bitmap, start, { snapped = false, dropped = null } = {}) {
   const rect = await positionPaste(bitmap, start,
-    { snapped, undoBase: snapped ? dropped : null });
+    { snapped, undoBase: snapped ? dropped : null, noPin: true });
   if (!rect) {
     bitmap.close?.();
     updateEmptyHint();
