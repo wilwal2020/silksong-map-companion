@@ -554,17 +554,18 @@ export class MapView {
     // relation to each other: the dim one is what you line the bright one up
     // against, and what tells you the stairs you just pasted come out where
     // they should.
+    const vis = this._visibleMapRect();
     if (this.layers && this.layers.length > 1) {
       ctx.globalAlpha = LAYER_DIM;
       for (const l of this.layers) {
         // `_blank` is cached, never measured here — a layer with nothing on it
         // still costs a full-canvas composite to draw
         if (l.explored === this.explored || l.explored._blank) continue;
-        ctx.drawImage(l.explored.canvas, 0, 0, this.map.width, this.map.height);
+        this._drawComposite(ctx, l.explored, vis);
       }
       ctx.globalAlpha = 1;
     }
-    ctx.drawImage(this.explored.canvas, 0, 0, this.map.width, this.map.height);
+    this._drawComposite(ctx, this.explored, vis);
 
     // "Reveal map": the full world map laid straight over the top, opaque.
     // Both maps live on the same canvas, so they share one opacity and
@@ -573,8 +574,13 @@ export class MapView {
     // attempt to detect explored-vs-unexplored automatically (alpha masks,
     // pixel differencing, dilated ink masks) broke on real screenshots, which
     // match the reference in neither colour nor alignment.
-    if (this.debugReveal && this.reference) {
-      ctx.drawImage(this.reference, 0, 0, this.map.width, this.map.height);
+    if (this.debugReveal && this.reference && vis) {
+      // the source rect is in the reference's own pixels, which are the world's
+      const kx = this.reference.width / this.map.width;
+      const ky = this.reference.height / this.map.height;
+      ctx.drawImage(this.reference,
+        vis.x * kx, vis.y * ky, vis.w * kx, vis.h * ky,
+        vis.x, vis.y, vis.w, vis.h);
     }
 
     // subtle bounds so you can tell where the world map area is
@@ -623,6 +629,59 @@ export class MapView {
     if (this.lasso) this._drawLasso(ctx);
 
     if (this.ghost) this._drawGhost(ctx);
+  }
+
+  // The part of the world currently on screen, in map coordinates, clamped to
+  // the world and rounded outward to whole map pixels. Everything drawn from a
+  // composite is cut to this: at a zoomed-in view that is a few percent of the
+  // map, and painting the other 97% was the bulk of what a pan used to cost.
+  //
+  // Whole pixels matter beyond tidiness. A source rectangle that starts on a
+  // different fraction of a pixel each frame is resampled with a different
+  // phase each frame, and the map crawls and shimmers as you drag it.
+  _visibleMapRect() {
+    const a = this.screenToMap(0, 0);
+    const b = this.screenToMap(this.canvas.clientWidth, this.canvas.clientHeight);
+    const x0 = Math.max(0, Math.floor(a.x) - 1);
+    const y0 = Math.max(0, Math.floor(a.y) - 1);
+    const x1 = Math.min(this.map.width, Math.ceil(b.x) + 1);
+    const y1 = Math.min(this.map.height, Math.ceil(b.y) + 1);
+    if (x1 <= x0 || y1 <= y0) return null;    // the map is entirely off screen
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  // One composite, drawn from a copy sized to what this view needs (see
+  // Explored.mipFor) and cut to what is actually on screen.
+  //
+  // The source rectangle is snapped to whole pixels OF THAT COPY and the
+  // destination derived back from it, rather than the other way around: on a
+  // half-size copy a whole map pixel is half a pixel, and half-pixel source
+  // offsets are exactly the shimmer the snapping is there to avoid.
+  //
+  // `low` smoothing is not the quality compromise it reads as, and measuring is
+  // the only way anyone would believe it. Canvas `high` runs a cubic resample on
+  // the CPU whenever the shrink is mild — shrinking a composite by 1.7x cost
+  // 6.8ms a frame against 0.05ms for the same draw at `low`, and a whole map
+  // still had to go through it three times over for three layers. Meanwhile the
+  // shrink from a mip level is always between 1x and 2x by construction, which
+  // is precisely the range where bilinear is right and anything cleverer has
+  // nothing left to do. The quality lives in how the levels were BUILT (halved,
+  // at `high`, each from the one above it), which is where a GPU puts it too.
+  _drawComposite(ctx, ex, vis) {
+    if (!vis) return;
+    const s = ex.scale;
+    const m = ex.mipFor(s / this.scale);
+    const k = s * m.fx, ky = s * m.fy;        // copy pixels per map pixel
+    const sx = Math.floor(vis.x * k), sy = Math.floor(vis.y * ky);
+    const sw = Math.ceil((vis.x + vis.w) * k) - sx;
+    const sh = Math.ceil((vis.y + vis.h) * ky) - sy;
+    if (sw <= 0 || sh <= 0) return;
+    const was = ctx.imageSmoothingQuality;
+    ctx.imageSmoothingQuality = 'low';
+    // a source rect reaching past the copy's edge is clipped in step with the
+    // destination, so this stays aligned at the map borders
+    ctx.drawImage(m.canvas, sx, sy, sw, sh, sx / k, sy / ky, sw / k, sh / ky);
+    ctx.imageSmoothingQuality = was;
   }
 
   _resize() {

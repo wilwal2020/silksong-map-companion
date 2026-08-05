@@ -314,6 +314,21 @@ const TILES = 2;
 const MAX_WORLD_SIDE = 12000;
 const MAX_WORLD_PIXELS = 48e6;   // ~190 MB at one canvas pixel per map pixel
 
+// How far down the chain of halved copies a composite will go, and how big it
+// has to be before keeping one is worth the memory.
+//
+// Drawing a whole 8000x5000 composite into a 1280-wide viewport means the
+// browser resampling forty million pixels to paint under a million, on every
+// frame of every pan. A chain of halved copies — the same trick a texture
+// mipmap plays — lets the renderer pick one that is already about the size it
+// needs, so a zoomed-out pan reads a few hundred thousand pixels instead.
+//
+// Four levels reach 1/16 scale, past which even a huge map is smaller than a
+// viewport. They cost a third of the base canvas all told, and are built one
+// level at a time, only when a view actually asks for one.
+const MAX_MIP = 4;
+const MIP_MIN_SIDE = 1200;
+
 // Side of the centred patch the sub-pixel stage judges on. Which fraction of a
 // pixel fits best is a local question — a patch this size answers it as well as
 // the whole footprint would, for a fraction of the redrawing.
@@ -341,6 +356,53 @@ export class Explored {
     // the canvas changed. The renderer uses it to skip a layer with nothing on
     // it, which must never cost a readback per frame.
     this._blank = null;
+    // Halved copies of the composite for drawing zoomed-out views from, built
+    // on demand. Index 1 is half size, 2 a quarter, and so on; index 0 would be
+    // the composite itself. `_mipValid` is how many levels currently hold THIS
+    // map — a change invalidates them, but the canvases are kept and redrawn
+    // into rather than thrown away, because allocating them is the expensive
+    // part (measured at over half a second for three big layers) and their
+    // sizes only ever change when the world grows.
+    this._mips = [];
+    this._mipValid = 0;
+  }
+
+  // The copy to draw from when `ratio` composite pixels have to fit into each
+  // screen pixel. Returns the chosen canvas and how its coordinates relate to
+  // the composite's — as a MEASURED ratio, not 1/2^k, because a level's size is
+  // rounded and half of an odd number is not exact.
+  //
+  // The level is the largest halving that still has at least one pixel per
+  // screen pixel, so nothing visible is lost: at ratio 5 that is a quarter-size
+  // copy, which still holds 1.25 pixels for every one painted.
+  mipFor(ratio) {
+    const base = this.canvas;
+    if (!(ratio > 1) || Math.min(base.width, base.height) < MIP_MIN_SIDE) {
+      return { canvas: base, fx: 1, fy: 1 };
+    }
+    const k = Math.min(MAX_MIP, Math.floor(Math.log2(ratio)));
+    if (k < 1) return { canvas: base, fx: 1, fy: 1 };
+    // build up to the level wanted, each halved from the one above it — halving
+    // repeatedly is both cheap and what keeps the small copies clean, since
+    // every source pixel still reaches the result
+    for (let i = 1; i <= k; i++) {
+      if (i <= this._mipValid) continue;
+      const src = i === 1 ? base : this._mips[i - 1];
+      const w = Math.max(1, Math.round(base.width / (1 << i)));
+      const h = Math.max(1, Math.round(base.height / (1 << i)));
+      let c = this._mips[i];
+      if (!c || c.width !== w || c.height !== h) { c = canvasOf(w, h); this._mips[i] = c; }
+      const x = c.getContext('2d');
+      // replace rather than paint over: this canvas is being reused, and what
+      // it held before is a map that has since been erased or undone
+      x.globalCompositeOperation = 'copy';
+      x.imageSmoothingEnabled = true;
+      x.imageSmoothingQuality = 'high';
+      x.drawImage(src, 0, 0, w, h);
+      this._mipValid = i;
+    }
+    const c = this._mips[k];
+    return { canvas: c, fx: c.width / base.width, fy: c.height / base.height };
   }
 
   // Make room for `rect`, with `pad` of clear ground around it, growing the
@@ -387,6 +449,7 @@ export class Explored {
     this.mapW = newW;
     this.mapH = newH;
     this._refKeep = null;      // the reference mask was cut to the old size
+    this._mips = [];           // and so were the halved copies
     this._changed();
     return { dx: Math.round(dx), dy: Math.round(dy), grew: true, capped };
   }
@@ -1383,7 +1446,11 @@ export class Explored {
     return this._blank;
   }
 
-  _changed() { this._blank = null; if (this.onChange) this.onChange(); }
+  _changed() {
+    this._blank = null;
+    this._mipValid = 0;   // the small copies are of a map that no longer exists
+    if (this.onChange) this.onChange();
+  }
 
   async toBlob() {
     return new Promise(res => this.canvas.toBlob(res, 'image/png'));
