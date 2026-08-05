@@ -291,6 +291,7 @@ export class PinManager {
     this.awaitingId = null;    // pin waiting for its area screenshot
     this.hoveredId = null;     // pin currently under the pointer (paste target)
     this.suppressHover = false; // don't open cards (e.g. while placing a pin)
+    this.currentLayer = null;  // which map layer is open (null = layers unused)
     this.lastPlacedId = null;  // just-placed pin, excluded from paste-attach
     this._stickyCard = null;
     this._hoverCardEntry = null; // pin whose card is open from a plain hover
@@ -539,6 +540,14 @@ export class PinManager {
       e.el.style.display = visible ? '' : 'none';
       if (e.moveEl) e.moveEl.style.display = visible ? '' : 'none';
       if (!visible && e.card) this._hideCard(e, true);
+      // A pin belonging to a map layer you're not on is dimmed along with the
+      // layer it stands on, and sits behind the pins that are — but it is not
+      // hidden, and hovering brings it back: knowing what's on the floor below
+      // you is most of the point of having floors. A persistent pin is nailed
+      // to the screen rather than to the map, so it belongs to no layer.
+      e.el.classList.toggle('off-layer',
+        !!this.currentLayer && !e.data.fixed
+        && (e.data.layer || 'base') !== this.currentLayer);
     }
   }
 

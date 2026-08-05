@@ -1,6 +1,6 @@
-import { Explored } from './explored.js';
 import { MapView, DEFAULT_BG } from './mapview.js';
 import { store, setStoreGame } from './store.js';
+import { LayerStack, BASE_LAYER_ID, MAX_LAYERS, fogKey, pinLayer } from './layers.js';
 import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT, refinePlacement } from './match.js';
 import { ocrLocate, loadLabels } from './ocr.js';
 import { PinManager, SVG, fixedAnchor } from './pins.js';
@@ -16,6 +16,8 @@ import {
 const $ = s => document.querySelector(s);
 
 let view, explored, pins;
+let layers = null;        // the stack of map layers; `explored` is the open one
+let booted = false;       // init has finished — see the layers' onChange
 let mapImage = null;      // reference world map — only games that ship one
 let world = null;         // { width, height } of this game's map space
 let game = BUILTIN_GAME;  // which game is open
@@ -193,16 +195,20 @@ function showAwaitDialog(title, sub, skipLabel) {
 // `snap` lets a caller hand in a snapshot it already took (the lasso cuts the
 // composite before you decide where the piece goes, so its "before" is older
 // than the moment the move is applied).
-function snapshotForUndo(pinId = null, snap = null) {
+function snapshotForUndo(pinId = null, snap = null, layerId = null) {
+  const layer = layerId || workLayerId();
   lastUndo = {
-    snap: snap || explored.snapshot(), pinId, pinMoves: null,
+    snap: snap || layers.exploredOf(layer).snapshot(), pinId, pinMoves: null,
+    // which map layer this was, so undoing after switching layers still puts
+    // the pixels back where they came from
+    layer,
     scaleState: { learnedScale, scaleTrusted, scaleSamples: [...scaleSamples] },
   };
 }
 
 function undoLast() {
   if (!lastUndo) { toast('Nothing to undo.'); return; }
-  explored.restore(lastUndo.snap);
+  layers.exploredOf(lastUndo.layer).restore(lastUndo.snap);
   if (lastUndo.scaleState) {
     ({ learnedScale, scaleTrusted } = lastUndo.scaleState);
     scaleSamples = [...lastUndo.scaleState.scaleSamples];
@@ -240,7 +246,12 @@ function undoLast() {
 
 function debounce(fn, ms) {
   let t;
-  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+  const run = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+  // a debounced write to something that is about to stop existing (a deleted
+  // layer's map) has to be droppable, or it lands after the delete and puts it
+  // straight back
+  run.cancel = () => clearTimeout(t);
+  return run;
 }
 
 function blobToDataURL(blob) {
@@ -281,9 +292,26 @@ function showLightbox(url) {
 
 // ------------------------------------------------------------- persistence
 
-const saveFog = debounce(async () => {
-  store.putMeta('fog', await explored.toBlob());
-}, 1500);
+// One debounced writer per layer — they change independently, and a single
+// shared one would drop whichever layer wasn't the last to be touched.
+const fogSavers = new Map();
+// stop a layer's pending write and forget it — for a layer being deleted, or
+// one about to be replaced wholesale by an import or a reset
+function dropFogSaver(id) {
+  fogSavers.get(id)?.cancel();
+  fogSavers.delete(id);
+}
+function dropAllFogSavers() {
+  for (const id of [...fogSavers.keys()]) dropFogSaver(id);
+}
+function saveFogOf(layer) {
+  let fn = fogSavers.get(layer.id);
+  if (!fn) {
+    fn = debounce(async () => store.putMeta(fogKey(layer.id), await layer.explored.toBlob()), 1500);
+    fogSavers.set(layer.id, fn);
+  }
+  fn();
+}
 
 const saveView = debounce(() => {
   store.putMeta('view', { scale: view.scale, ox: view.ox, oy: view.oy });
@@ -402,7 +430,7 @@ async function switchGame(id) {
 // write the debounced state out now (a reload is coming)
 async function flushSaves() {
   try {
-    await store.putMeta('fog', await explored.toBlob());
+    for (const l of layers.list) await store.putMeta(fogKey(l.id), await l.explored.toBlob());
     await store.putMeta('view', { scale: view.scale, ox: view.ox, oy: view.oy });
   } catch (e) {
     console.warn('[map] could not flush state:', e.message);
@@ -448,6 +476,144 @@ async function deleteGame(g) {
   await removeGame(g.id);
   if (wasCurrent) { await setCurrentGameId(BUILTIN_GAME.id); location.reload(); return; }
   toast(`“${g.name}” deleted.`, 'ok');
+}
+
+// ------------------------------------------------------------- map layers
+
+// The layer an operation in flight belongs to.
+//
+// A screenshot lands on the layer you were on when you PASTED it, not on
+// whichever one you happen to be looking at when you press Place. Those are
+// usually the same layer — but the useful thing about a stack of maps is being
+// able to bring the one underneath forward while you drag the new screenshot
+// over it, and having that quietly retarget the paste would make the feature
+// unusable. So the target is fixed at the start of the flow and the layer bar
+// only changes what you can see.
+let workLayer = null;
+const workLayerId = () => workLayer || layers.currentId;
+const work = () => layers.exploredOf(workLayerId());
+function beginWork() { workLayer = layers.currentId; return workLayer; }
+function endWork() { workLayer = null; }
+
+// keep the layer panel clear of the pin sidebar, which can be dragged wider
+function syncCatBarVar() {
+  document.documentElement.style.setProperty('--cat-w', $('#cat-bar').offsetWidth + 'px');
+}
+
+// everything that has to follow the open layer: what's drawn on top, which
+// composite the app works on, and which pins are dimmed
+function applyCurrentLayer() {
+  explored = layers.explored;
+  view.explored = explored;
+  view.layers = layers.list;
+  view.currentLayerId = layers.currentId;
+  pins.currentLayer = layers.count > 1 ? layers.currentId : null;
+  pins.applyFilter();
+  view.requestRender();
+  updateEmptyHint();
+  renderLayerBar();
+  // a screenshot in hand names the layer it will land on — which just changed
+  // meaning, if you switched to look at a different one
+  rebuildPlaceTools?.();
+}
+
+function selectLayer(id) {
+  if (id === layers.currentId || !layers.select(id)) return;
+  applyCurrentLayer();
+}
+
+function renderLayerBar() {
+  const bar = $('#layer-bar');
+  const list = $('#layer-list');
+  const many = layers.count > 1;
+  bar.classList.toggle('solo', !many);
+  list.innerHTML = '';
+  if (many) {
+    layers.list.forEach((l, i) => {
+      const row = document.createElement('div');
+      row.className = 'lb-row' + (l.id === layers.currentId ? ' on' : '');
+      row.title = `Bring “${l.name}” to the front — the other layers dim behind it`;
+      const num = document.createElement('span');
+      num.className = 'lb-num';
+      num.textContent = String(i + 1);
+      const name = document.createElement('span');
+      name.className = 'lb-name';
+      name.textContent = l.name;
+      const tools = document.createElement('span');
+      tools.className = 'lb-tools';
+      const edit = document.createElement('button');
+      edit.className = 'lb-tool';
+      edit.textContent = '✎';
+      edit.title = 'Rename this layer';
+      edit.addEventListener('click', e => { e.stopPropagation(); openLayerDialog(l); });
+      tools.appendChild(edit);
+      // the base layer is the map every save has always been — there is no
+      // version of this app without it, so it can't be removed
+      if (l.id !== BASE_LAYER_ID) {
+        const del = document.createElement('button');
+        del.className = 'lb-tool del';
+        del.textContent = '🗑';
+        del.title = 'Delete this layer';
+        del.addEventListener('click', e => { e.stopPropagation(); deleteLayer(l); });
+        tools.appendChild(del);
+      }
+      row.append(num, name, tools);
+      row.addEventListener('click', () => selectLayer(l.id));
+      list.appendChild(row);
+    });
+  }
+  const add = $('#btn-add-layer');
+  $('.lb-add-txt').textContent = many ? 'Add layer' : 'Add map layer';
+  add.disabled = layers.count >= MAX_LAYERS;
+  if (add.disabled) add.title = `${MAX_LAYERS} layers is as many as one game gets.`;
+}
+
+async function addLayer() {
+  if (layers.count >= MAX_LAYERS) {
+    toast(`${MAX_LAYERS} layers is as many as one game gets.`);
+    return;
+  }
+  const l = await layers.add();
+  layers.select(l.id);
+  applyCurrentLayer();
+  toast(`“${l.name}” added — paste onto it, and the layers below it dim behind.`, 'ok');
+}
+
+let layerEditing = null;
+
+function openLayerDialog(l) {
+  layerEditing = l;
+  $('#layer-name').value = l.name;
+  $('#dlg-layer').showModal();
+  $('#layer-name').select();
+}
+
+async function saveLayerDialog() {
+  const name = $('#layer-name').value.trim();
+  if (!name || !layerEditing) { $('#layer-name').focus(); return; }
+  await layers.rename(layerEditing.id, name);
+  layerEditing = null;
+  closeDialog('#dlg-layer');
+  renderLayerBar();
+}
+
+// A layer takes its map AND its pins with it — the pins were placed on that
+// floor and mean nothing on another one, so silently moving them down to the
+// base layer would be worse than saying what happens.
+async function deleteLayer(l) {
+  const mine = [...pins.pins.values()].filter(e => pinLayer(e.data) === l.id);
+  const what = mine.length
+    ? `Everything pasted onto “${l.name}”, and the ${mine.length} pin${mine.length > 1 ? 's' : ''} on it, `
+    : `Everything pasted onto “${l.name}” `;
+  if (!await confirmDialog(`${what}is erased. This cannot be undone.`,
+    { title: 'Delete this layer?', okLabel: 'Delete layer' })) return;
+  for (const e of mine) { pins.remove(e.data.id); store.deletePin(e.data.id); }
+  dropFogSaver(l.id);
+  // an undo pointing at a layer that no longer exists has nothing to restore
+  if (lastUndo && lastUndo.layer === l.id) lastUndo = null;
+  await layers.remove(l.id);
+  applyCurrentLayer();
+  toast(`“${l.name}” deleted.`, 'ok');
 }
 
 // ------------------------------------------------------------- pin editing
@@ -627,7 +793,10 @@ function applyPinEdit(data, edit) {
 // anything else touched the composite meanwhile (another paste, an undo, a
 // clear), lastUndo has changed and the correction is dropped. Takes over
 // ownership of `bitmap` and closes it when done.
-async function finalizeAlignment(bitmap, rect, mode, pinId) {
+// `ex` is the layer's composite the paste landed on — captured by the caller,
+// because this runs on in the background and the user is free to switch layers
+// while the pin editor is open.
+async function finalizeAlignment(bitmap, rect, mode, pinId, ex) {
   const undoRef = lastUndo;
   try {
     const r = await refinePlacement(bitmap, mapImage, rect, mode);
@@ -639,8 +808,8 @@ async function finalizeAlignment(bitmap, rect, mode, pinId) {
     const worthIt = r.startPx - r.dPx > 0.02
       && (r.moved > 0.6 || Math.abs(r.dScale) > 0.0015);
     if (!worthIt) return;
-    explored.restore(undoRef.snap);
-    explored.paste(bitmap, r.x, r.y, r.w, r.h);
+    ex.restore(undoRef.snap);
+    ex.paste(bitmap, r.x, r.y, r.w, r.h);
     const entry = pinId && pins.pins.get(pinId);
     if (entry) {
       const s = r.w / rect.w;
@@ -661,6 +830,10 @@ async function finalizeAlignment(bitmap, rect, mode, pinId) {
 }
 
 async function applyMapPlacement(bitmap, rect, marker) {
+  // the layer this paste belongs to, held for the rest of the flow — the pin
+  // editor is about to open and the user may well switch layers behind it
+  const layerId = workLayerId();
+  const explored = layers.exploredOf(layerId);
   if (rect.via === 'ocr' || rect.via === 'label') {
     // OCR/label placements align to the reference map itself — trust them,
     // pin them to the one global scale, then allow only a few-pixel nudge
@@ -691,7 +864,7 @@ async function applyMapPlacement(bitmap, rect, marker) {
   view.setGhostFromScreenRect(held);
   await view.flyGhostTo(rect);
 
-  snapshotForUndo();
+  snapshotForUndo(null, null, layerId);
   explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
   view.settleGhost();   // flash over the composite, then clears itself
 
@@ -699,6 +872,7 @@ async function applyMapPlacement(bitmap, rect, marker) {
     id: crypto.randomUUID(),
     x: rect.x + (marker ? marker.fx : 0.5) * rect.w,
     y: rect.y + (marker ? marker.fy : 0.5) * rect.h,
+    layer: layerId,             // it stands on the map that just landed
     cat: 'other', note: '', done: false,
     // a picture pasted before this pin existed comes along automatically
     img: takeHeldShot(),
@@ -713,7 +887,7 @@ async function applyMapPlacement(bitmap, rect, marker) {
   // sub-pixel polish runs in the background while the pin editor is open;
   // it re-composites (and nudges the pin) if it beats this placement, and
   // closes the bitmap when done
-  finalizeAlignment(bitmap, rect, 'map', data.id);
+  finalizeAlignment(bitmap, rect, 'map', data.id, explored);
 
   // straight to the editor — its picture slot takes the paste, so there's no
   // separate "add a picture" step
@@ -1008,14 +1182,17 @@ async function handleFullMap(blob) {
     return;
   }
 
+  // the layer it lands on, held past the awaits below
+  const targetLayer = workLayerId();
+  const target = layers.exploredOf(targetLayer);
   if (rect.via === 'ocr' || rect.via === 'label') {
     // reference-aligned — trust it, pin to the global scale, then a tiny
     // stitch nudge onto what's already pasted
     adoptScale(rect, bitmap);
     rect = forceGlobalScale(rect, bitmap);
-    rect = explored.refineAlignment(bitmap, rect, { maxShift: 8 });
+    rect = target.refineAlignment(bitmap, rect, { maxShift: 8 });
   } else {
-    rect = explored.refineAlignment(bitmap, rect);
+    rect = target.refineAlignment(bitmap, rect);
   }
   // frame the update by how much it actually covers — a partial map zooms to
   // its region, a whole-world screenshot zooms right out
@@ -1023,10 +1200,10 @@ async function handleFullMap(blob) {
   view.centerOn(rect.x + rect.w / 2, rect.y + rect.h / 2, fitRectScale(rect));
   view.setGhostFromScreenRect(held);
   await view.flyGhostTo(rect);
-  snapshotForUndo();
-  explored.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
+  snapshotForUndo(null, null, targetLayer);
+  target.paste(bitmap, rect.x, rect.y, rect.w, rect.h);
   view.settleGhost();
-  finalizeAlignment(bitmap, rect, 'full', null); // background; closes the bitmap
+  finalizeAlignment(bitmap, rect, 'full', null, target); // background; closes the bitmap
   toast('Map updated with everything you have explored.', 'ok', { label: 'Undo', fn: undoLast });
 }
 
@@ -1062,6 +1239,15 @@ function showPlaceTools(groups) {
       if (a.size) {
         const s = document.createElement('span');
         s.className = 'pt-size'; s.id = 'place-size';
+        g.appendChild(s);
+        continue;
+      }
+      // a plain read-out, not a control (which layer this is landing on)
+      if (a.note) {
+        const s = document.createElement('span');
+        s.className = 'pt-note' + (a.warn ? ' warn' : '');
+        if (a.title) s.title = a.title;
+        s.innerHTML = a.note;
         g.appendChild(s);
         continue;
       }
@@ -1197,7 +1383,7 @@ function updatePlaceSize(rect) {
 // pins along with it).
 function positionPaste(bitmap, rect, {
   undoBase = null, mask = null, onMove = null, okLabel = 'Place it',
-  resizable = true, aids = !explored.isBlank(), deletable = false, deleteLabel = 'Delete',
+  resizable = true, aids = !work().isBlank(), deletable = false, deleteLabel = 'Delete',
   noPin = false,
 } = {}) {
   return new Promise(resolve => {
@@ -1272,6 +1458,20 @@ function positionPaste(bitmap, rect, {
     // two direction buttons only exist while resizing is allowed.
     const buildGroups = () => {
       const groups = [];
+      // Which layer this is going onto. It was fixed when the paste started, so
+      // say so — and say it loudly once you've brought a different one to the
+      // front, which is the one moment you could reasonably expect otherwise.
+      if (layers.count > 1) {
+        const dest = layers.find(workLayerId());
+        const elsewhere = workLayerId() !== layers.currentId;
+        groups.push([{
+          note: `Onto <b>${escapeHtml(dest ? dest.name : 'this layer')}</b>`,
+          warn: elsewhere,
+          title: elsewhere
+            ? `This lands on “${dest.name}” — the layer you pasted it on. Switching layers only changes what you can see.`
+            : 'The layer this lands on',
+        }]);
+      }
       // Resizing is done by dragging the screenshot's corners; this is just
       // the live percentage so you can see how big it's getting.
       if (resizable) groups.push([{ size: true }]);
@@ -1371,6 +1571,9 @@ async function startRegionMove() {
 
   const btn = $('#btn-region');
   btn.classList.add('active');
+  // the piece comes out of the layer you're on and goes back into it, however
+  // the layer bar is used while it's in the air
+  beginWork();
   try {
     pins.suppressHover = true;
     document.body.classList.add('lasso-mode');
@@ -1382,23 +1585,28 @@ async function startRegionMove() {
     hidePlaceBar();
     if (!pts) return;
 
-    // pins standing inside the loop always come along — but a persistent pin
-    // isn't standing on the map at all, so the lasso never picks one up
+    // Pins standing inside the loop always come along — but a persistent pin
+    // isn't standing on the map at all, so the lasso never picks one up, and
+    // neither are the pins belonging to another layer: the loop is drawn on
+    // one map and moves that map, not the floor showing faintly through it.
+    const here = work();
     const riding = [...pins.pins.values()]
-      .filter(e => !e.data.fixed && pointInPolygon(e.data.x, e.data.y, pts));
+      .filter(e => !e.data.fixed && pinLayer(e.data) === workLayerId()
+        && pointInPolygon(e.data.x, e.data.y, pts));
 
     // cut whatever map content is inside out of the composite; coverage tells
     // us whether there was any (a loop around only pins leaves it near zero)
-    const before = explored.snapshot();
-    const lift = explored.liftRegion(pts);
+    const before = here.snapshot();
+    const lift = here.liftRegion(pts);
     if (lift.coverage > 0.002) {
       await moveOrDeleteRegion(before, lift, riding);
     } else {
-      explored.restore(before); // the empty cut leaves nothing behind
+      here.restore(before); // the empty cut leaves nothing behind
       if (!riding.length) { toast('Nothing inside that loop — draw around some map or a few pins.'); return; }
       await moveOrDeletePins(before, riding);
     }
   } finally {
+    endWork();
     btn.classList.remove('active');
     pins.suppressHover = false;
     document.body.classList.remove('lasso-mode');
@@ -1443,7 +1651,7 @@ async function moveOrDeleteRegion(before, lift, riding) {
       'ok', { label: 'Undo', fn: undoLast });
     return;
   }
-  if (!res) { explored.restore(before); carryPins(rect0); toast('Left where it was.'); return; }
+  if (!res) { work().restore(before); carryPins(rect0); toast('Left where it was.'); return; }
   // whole pixels, so the piece goes back down exactly as it was lifted
   const at = { ...res, x: Math.round(res.x), y: Math.round(res.y) };
   // it can be dropped past any edge, so make room — and bring everything this
@@ -1454,9 +1662,9 @@ async function moveOrDeleteRegion(before, lift, riding) {
     at.x += shift.dx; at.y += shift.dy;
     rect0.x += shift.dx; rect0.y += shift.dy;
     for (const h of home) { h.x += shift.dx; h.y += shift.dy; }
-    before = explored.shiftSnapshot(before, shift.dx, shift.dy);
+    before = work().shiftSnapshot(before, shift.dx, shift.dy);
   }
-  explored.stamp(lift.canvas, at.x, at.y, at.w, at.h);
+  work().stamp(lift.canvas, at.x, at.y, at.w, at.h);
   carryPins(at);
   for (const e of riding) persistPin(e.data);
   finishRegionUndo(before, { pinMoves: home });
@@ -1768,7 +1976,7 @@ function alignSettled(img, rect, first, { scales, bound }) {
     // round that overshot is free to come back towards it — and still cannot
     // cross it, which is all the press actually asked for.
     const b = bound && { lo: bound.lo * rect.w / cur.w, hi: bound.hi * rect.w / cur.w };
-    const r = explored.autoAlign(img, cur, { scales: scales ? [1] : null, bound: b });
+    const r = work().autoAlign(img, cur, { scales: scales ? [1] : null, bound: b });
     // a round that comes back refused says the previous answer was the good
     // one — keep it rather than trading down
     if (!r || !alignAccepted(r)) break;
@@ -1818,21 +2026,24 @@ function runAutoAlign(dir = 0) {
       // all the way to the answer — the one-sided ladder only covers the rungs,
       // and the fine climb after it reaches ±25% either way on its own.
       const bound = dir < 0 ? { lo: 0, hi: 1 } : dir > 0 ? { lo: 1, hi: Infinity } : null;
+      // against the layer the screenshot is going ONTO, which is not
+      // necessarily the one on top right now
+      const onto = work();
       if (scales && dir === 0) {
-        r = explored.autoAlign(p.img, rect);
+        r = onto.autoAlign(p.img, rect);
         for (const k of known) {
           if (alignAccepted(r)) break;
-          r = explored.autoAlign(p.img, rect, { scales: [k] });
+          r = onto.autoAlign(p.img, rect, { scales: [k] });
         }
-        if (!alignAccepted(r)) r = explored.autoAlign(p.img, rect, { scales });
+        if (!alignAccepted(r)) r = onto.autoAlign(p.img, rect, { scales });
       } else if (scales) {
         for (const k of known) {
           if (alignAccepted(r)) break;
-          r = explored.autoAlign(p.img, rect, { scales: [k], bound });
+          r = onto.autoAlign(p.img, rect, { scales: [k], bound });
         }
-        if (!alignAccepted(r)) r = explored.autoAlign(p.img, rect, { scales, bound });
+        if (!alignAccepted(r)) r = onto.autoAlign(p.img, rect, { scales, bound });
       } else {
-        r = explored.autoAlign(p.img, rect, {});
+        r = onto.autoAlign(p.img, rect, {});
       }
       r = alignSettled(p.img, rect, r, { scales, bound });
     } catch (e) {
@@ -1879,7 +2090,8 @@ function runAutoAlign(dir = 0) {
 // whatever it was about to put down.
 async function ensureRoom(rect, pad = 400) {
   if (game.builtin) return { dx: 0, dy: 0 };
-  const shift = explored.grow(rect, pad);
+  // every layer at once — they share one coordinate space
+  const shift = layers.grow(rect, pad);
   if (shift.capped) {
     toast('This map has grown as far as it can — that is as far out as it goes.', 'error');
   }
@@ -1897,7 +2109,7 @@ async function ensureRoom(rect, pad = 400) {
     view.ox -= shift.dx * view.scale;
     view.oy -= shift.dy * view.scale;
   }
-  world = { width: explored.mapW, height: explored.mapH };
+  world = { width: layers.explored.mapW, height: layers.explored.mapH };
   view.setWorld(world.width, world.height);
   await updateGame(game.id, { w: world.width, h: world.height });
   game = gameById(game.id);
@@ -1937,7 +2149,7 @@ async function commitPaste(bitmap, rect, baseWidth) {
   // the last thing the alignment did. That one is kept.
   const px = rect.exact ? rect.x : Math.round(rect.x);
   const py = rect.exact ? rect.y : Math.round(rect.y);
-  explored.paste(bitmap, px, py, rect.w, rect.h);
+  work().paste(bitmap, px, py, rect.w, rect.h);
   // flash over what just landed, then clear itself. A no-op when the paste was
   // placed by hand — there is no ghost floating in that case.
   view.settleGhost();
@@ -1977,6 +2189,15 @@ async function commitPaste(bitmap, rect, baseWidth) {
 // every photo of a room wait through a size ladder to be told "no" is a poor
 // trade. That case still gets the full search from inside the place flow.
 async function tryPlaceOnPaste(blob) {
+  beginWork();
+  try {
+    return await placeOnPaste(blob);
+  } finally {
+    endWork();
+  }
+}
+
+async function placeOnPaste(blob) {
   const bitmap = await createImageBitmap(blob);
   const start = startRectFor(bitmap);
   // float it over the map while we look, the same as a screenshot being
@@ -1987,7 +2208,7 @@ async function tryPlaceOnPaste(blob) {
   await new Promise(r => setTimeout(r, 30));   // let the spinner paint
   let r = null;
   try {
-    r = explored.autoAlign(bitmap, start);
+    r = work().autoAlign(bitmap, start);
   } catch (e) {
     console.warn('[map] paste pre-align failed:', e.message);
   }
@@ -2012,6 +2233,15 @@ async function tryPlaceOnPaste(blob) {
 }
 
 async function handleManualPlace(blob) {
+  beginWork();
+  try {
+    return await manualPlace(blob);
+  } finally {
+    endWork();
+  }
+}
+
+async function manualPlace(blob) {
   const bitmap = await createImageBitmap(blob);
   $('#empty-hint').classList.add('hidden');
   let start = startRectFor(bitmap);
@@ -2022,7 +2252,7 @@ async function handleManualPlace(blob) {
   // for, so weak evidence should leave the paste where it dropped.
   let snapped = false;
   const dropped = { ...start };   // where it landed before we moved it for them
-  if (!explored.isBlank()) {
+  if (!work().isBlank()) {
     const pasteScales = scalesForDir(0);   // no direction to go on yet
     spinner(true, pasteScales ? 'Lining it up and sizing it…' : 'Lining it up with your map…');
     await new Promise(r => setTimeout(r, 30)); // let the spinner paint first
@@ -2031,13 +2261,14 @@ async function handleManualPlace(blob) {
       // usually still right — try it alone, then the other sizes this game
       // keeps coming back to, and only then search properly (see the same
       // reasoning, at more length, in runAutoAlign)
-      let r = explored.autoAlign(bitmap, start);
+      const onto = work();
+      let r = onto.autoAlign(bitmap, start);
       if (pasteScales) {
         for (const k of scaleShortlist(start, bitmap, 0)) {
           if (alignAccepted(r)) break;
-          r = explored.autoAlign(bitmap, start, { scales: [k] });
+          r = onto.autoAlign(bitmap, start, { scales: [k] });
         }
-        if (!alignAccepted(r)) r = explored.autoAlign(bitmap, start, { scales: pasteScales });
+        if (!alignAccepted(r)) r = onto.autoAlign(bitmap, start, { scales: pasteScales });
       }
       console.log('[map] auto-align on paste:', r);
       // when it may resize, the size it found is part of the answer
@@ -2278,7 +2509,15 @@ async function exportAll() {
     // which game this backup came from, so importing it somewhere else can
     // say so (pin coordinates only mean anything within the same world size)
     game: { id: game.id, name: game.name, icon: game.icon, w: world.width, h: world.height },
-    fog: await blobToDataURL(await explored.toBlob()),
+    // The base layer stays under the plain `fog` key an older build reads, and
+    // every layer (that one included) is listed in full — so a backup of a
+    // stacked map restores as the stack it was, and one restored by a build
+    // without layers still gets its base map rather than nothing.
+    fog: await blobToDataURL(await layers.exploredOf(BASE_LAYER_ID).toBlob()),
+    layers: await Promise.all(layers.list.map(async l => ({
+      id: l.id, name: l.name, fog: await blobToDataURL(await l.explored.toBlob()),
+    }))),
+    currentLayer: layers.currentId,
     bgColor,
     customCats: customCategories(),
     catOrder: currentOrder(),
@@ -2325,12 +2564,33 @@ async function importAll(file) {
 
   await store.clearPins();
   pins.removeAll();
-  explored.clear();
   lastUndo = null; // the old undo snapshot no longer matches anything
+  // back to one empty layer, then rebuild whatever stack the backup held
+  dropAllFogSavers();
+  for (const l of layers.list.slice(1)) await store.putMeta(fogKey(l.id), null);
+  await layers.reset();
   // a backup carries the size its world had grown to; grow to meet it, or the
   // map it saved would be cropped to whatever this one happens to be
   if (from && from.w && from.h) await ensureRoom({ x: 0, y: 0, w: from.w, h: from.h }, 0);
-  if (data.fog) await explored.loadFromBlob(await dataURLToBlob(data.fog));
+  // A backup made before layers existed has just the one composite, and it is
+  // the base layer — the same reading store.js gives an old save.
+  const saved = Array.isArray(data.layers) && data.layers.length
+    ? data.layers
+    : (data.fog ? [{ id: BASE_LAYER_ID, name: 'Layer 1', fog: data.fog }] : []);
+  // The backup's own layer ids are what its pins were saved against, so they
+  // are restored as they were — except for the first layer, which is this
+  // map's base layer whatever that backup happened to call it.
+  const asLayer = new Map();
+  for (const [i, def] of saved.entries()) {
+    const want = i === 0 ? BASE_LAYER_ID : def.id;
+    const l = layers.find(want) || await layers.add(def.name, want);
+    if (!l) break;                       // more layers than one map may have
+    asLayer.set(def.id || BASE_LAYER_ID, l.id);
+    if (def.name) await layers.rename(l.id, def.name);
+    if (def.fog) await l.explored.loadFromBlob(await dataURLToBlob(def.fog));
+  }
+  layers.select(asLayer.get(data.currentLayer) || BASE_LAYER_ID);
+  applyCurrentLayer();
 
   // the backdrop was part of how that map looked — an older backup has none,
   // and then whatever is set here is left alone
@@ -2344,6 +2604,8 @@ async function importAll(file) {
 
   for (const p of data.pins || []) {
     const pin = { ...p, img: p.img ? await dataURLToBlob(p.img) : null };
+    // a pin whose layer didn't come back with the backup falls to the base one
+    pin.layer = asLayer.get(pinLayer(pin)) || BASE_LAYER_ID;
     await store.putPin(pin);
     pins.add(pin);
   }
@@ -2840,6 +3102,9 @@ async function createManualPin(x, y, cell = null) {
   const data = {
     id: crypto.randomUUID(),
     ...(cell ? { fixed: true, ...fixedAnchor(cell.x, cell.y) } : { x, y }),
+    // the map layer it stands on (a persistent pin belongs to the screen, so
+    // it carries the field harmlessly and is never dimmed by it)
+    layer: workLayerId(),
     cat: 'other', note: '', done: false, img: held,
     created: Date.now(),
   };
@@ -2873,6 +3138,7 @@ function wireSidebarResize() {
     const onMove = ev => {
       const w = Math.max(176, Math.min(560, startW + (ev.clientX - startX)));
       bar.style.width = w + 'px';
+      syncCatBarVar();   // the layer panel sits just outside this edge
     };
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);
@@ -2886,7 +3152,7 @@ function wireSidebarResize() {
 
 // show the big "paste your first map" prompt only while nothing's revealed yet
 function updateEmptyHint() {
-  $('#empty-hint').classList.toggle('hidden', !explored.isBlank());
+  $('#empty-hint').classList.toggle('hidden', !layers.isBlank());
   positionEmptyHint();
 }
 
@@ -3138,6 +3404,12 @@ function buildToolbar() {
 
   $('#btn-region').addEventListener('click', startRegionMove);
 
+  $('#btn-add-layer').addEventListener('click', addLayer);
+  $('#btn-layer-save').addEventListener('click', saveLayerDialog);
+  $('#btn-layer-cancel').addEventListener('click', () => { layerEditing = null; closeDialog('#dlg-layer'); });
+  $('#dlg-layer').addEventListener('cancel', e => { e.preventDefault(); layerEditing = null; closeDialog('#dlg-layer'); });
+  $('#layer-name').addEventListener('keydown', e => { if (e.key === 'Enter') saveLayerDialog(); });
+
   $('#btn-reveal').addEventListener('click', e => {
     view.debugReveal = !view.debugReveal;
     e.currentTarget.classList.toggle('active', view.debugReveal);
@@ -3177,15 +3449,21 @@ function buildToolbar() {
   // calibration is cleared too: a bad calibration may be exactly why the
   // map needs redoing, and the first fresh paste re-measures it anyway.
   $('#btn-clear-map').addEventListener('click', async () => {
-    if (!await confirmDialog('All pins (with their pictures and notes) are kept.',
-      { title: 'Erase the revealed map?', okLabel: 'Clear map' })) return;
+    // one layer at a time: the layers are separate maps, and wiping the ones
+    // you aren't even looking at is not what this button has ever meant
+    const many = layers.count > 1;
+    if (!await confirmDialog(
+      (many ? `Only “${layers.current.name}” is erased — the other layers are untouched. ` : '')
+        + 'All pins (with their pictures and notes) are kept.',
+      { title: many ? `Erase “${layers.current.name}”?` : 'Erase the revealed map?',
+        okLabel: many ? 'Clear this layer' : 'Clear map' })) return;
     snapshotForUndo();
     explored.clear();
+    store.putMeta(fogKey(layers.currentId), null);
     learnedScale = null;
     scaleTrusted = false;
     scaleSamples = [];
     scaleHistory = [];
-    store.putMeta('fog', null);
     store.putMeta('scale', null);
     store.putMeta('scaleTrusted', false);
     store.putMeta('scaleSamples', []);
@@ -3200,7 +3478,9 @@ function buildToolbar() {
     await store.clearMeta();
     clearHeldShot({ persist: false }); // its key went with clearMeta
     pins.removeAll();
-    explored.clear();
+    dropAllFogSavers();
+    await layers.reset();               // back to one empty base layer
+    applyCurrentLayer();
     lastUndo = null;
     setCustomCategories([]);
     setOrder([]);
@@ -3229,12 +3509,26 @@ async function init() {
     // fallback its canvas comes out 0×0 and nothing renders at all
     world = { width: game.w || START_SIZE.w, height: game.h || START_SIZE.h };
   }
-  explored = new Explored(world.width, world.height);
-  // the background fade only knows what Silksong's map looks like — a game
-  // added by hand keeps its screenshots exactly as they were taken
-  explored.fadeBackground = !!game.builtin;
-  if (mapImage) explored.setReference(mapImage); // guides the bg fade (never shown)
+  // The map is a stack of layers (usually one). Everything a layer needs to
+  // look and behave like this game's map is applied here, so a layer added
+  // later gets exactly what the ones loaded at startup got.
+  layers = new LayerStack((ex, layer) => {
+    // the background fade only knows what Silksong's map looks like — a game
+    // added by hand keeps its screenshots exactly as they were taken
+    ex.fadeBackground = !!game.builtin;
+    if (mapImage) ex.setReference(mapImage); // guides the bg fade (never shown)
+    // loading a layer's blob counts as a change; there is nothing to redraw or
+    // save until the app is actually up
+    ex.onChange = () => {
+      if (!booted) return;
+      view.requestRender(); saveFogOf(layer); updateEmptyHint();
+    };
+  });
+  await layers.load(world);
+  explored = layers.explored;
   view = new MapView($('#map-canvas'), world, explored, mapImage);
+  view.layers = layers.list;
+  view.currentLayerId = layers.currentId;
   // a world with no chosen size has no far side to be held against — panning
   // is limited only by keeping some of the map on screen (see _clampView)
   view.growable = !game.builtin;
@@ -3274,7 +3568,7 @@ async function init() {
     },
   });
 
-  explored.onChange = () => { view.requestRender(); saveFog(); updateEmptyHint(); };
+  pins.currentLayer = layers.count > 1 ? layers.currentId : null;
   view.onViewChanged = () => { pins.syncPositions(); positionEmptyHint(); positionPlaceTools(); saveView(); };
 
   // restore saved state
@@ -3288,8 +3582,6 @@ async function init() {
   alignCanScale = savedMode ? savedMode !== 'keep' : !!(await store.getMeta('alignScale'));
   const savedBar = await store.getMeta('alignMinCover');
   if (typeof savedBar === 'number') alignMinCover = savedBar;
-  const savedFog = await store.getMeta('fog');
-  if (savedFog) await explored.loadFromBlob(savedFog);
   const savedHeld = await store.getMeta('heldShot');
   if (savedHeld) setHeldShot(savedHeld, { persist: false });
   const savedView = await store.getMeta('view');
@@ -3318,25 +3610,31 @@ async function init() {
   // restore sidebar width + map opacity
   const savedW = await store.getMeta('catBarWidth');
   if (savedW) $('#cat-bar').style.width = savedW + 'px';
+  syncCatBarVar();
   const savedOpacity = await store.getMeta('mapOpacity');
   if (savedOpacity != null) { $('#opacity-range').value = savedOpacity; applyMapOpacity(savedOpacity); }
 
+  booted = true;
   buildToolbar();
   applyGameChrome();
+  renderLayerBar();
   // the backdrop this game was left on (the swatches are built by now)
   setBgColor((await store.getMeta('bgColor')) || DEFAULT_BG, { persist: false });
   if (game.builtin) loadLabels(); // warm the area-name table for OCR matching
   updateEmptyHint();
 
-  if (!savedFog && !(await store.getMeta('helped'))) {
+  if (layers.isBlank() && !(await store.getMeta('helped'))) {
     openHelp();
     store.putMeta('helped', true);
   }
 
   // debug / testing hooks
   window.__ssmc = {
-    view, explored, get pins() { return pins; }, mapImage, world,
+    view, get explored() { return explored; }, get pins() { return pins; },
+    mapImage, world,
     get game() { return game; },
+    get layers() { return layers; },
+    selectLayer, addLayer,
     handleImageBlob: (blob, type) =>
       type === 'map' ? handleMapScreenshot(blob)
       : type === 'env' ? handleEnvScreenshot(blob)

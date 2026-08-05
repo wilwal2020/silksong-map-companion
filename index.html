@@ -56,6 +56,19 @@
   <div id="cat-bar-resize" title="Drag to resize"></div>
 </aside>
 
+<!-- map layers: the stack of overlapping maps this game draws. Sits just
+     outside the pin sidebar, and stays put while a screenshot is being placed
+     so you can switch what you're lining it up against. -->
+<div id="layer-bar" class="solo">
+  <div class="lb-head">
+    <span class="lb-title">Map layers</span>
+  </div>
+  <div id="layer-list"></div>
+  <button id="btn-add-layer" class="lb-add" title="Add another map layer — for a game that draws an upper floor, an interior or a second world over the same ground">
+    <span class="lb-add-ico">＋</span><span class="lb-add-txt">Add map layer</span>
+  </button>
+</div>
+
 <div id="map-opacity" title="Map opacity (pins stay fully visible)">
   <span class="op-ico">👁</span>
   <input id="opacity-range" type="range" min="15" max="100" value="100">
@@ -230,6 +243,21 @@
   </div>
 </dialog>
 
+<!-- rename a map layer -->
+<dialog id="dlg-layer">
+  <h2>Rename this layer</h2>
+  <div class="cattype-grid">
+    <label class="cattype-field grow">
+      <span>Name</span>
+      <input id="layer-name" type="text" maxlength="28" placeholder="e.g. Upper floor" autocomplete="off">
+    </label>
+  </div>
+  <div class="dlg-actions">
+    <button id="btn-layer-save" class="btn primary">Save</button>
+    <button id="btn-layer-cancel" class="btn">Cancel</button>
+  </div>
+</dialog>
+
 <!-- create / edit a game -->
 <dialog id="dlg-game">
   <h2 id="game-dlg-title">New game</h2>
@@ -349,6 +377,17 @@
         <li><span class="n">3</span><span>Either way, <b>🗑 Delete</b> in the toolbar removes what you lassoed instead.</span></li>
       </ol>
       <p>Everything is one <span class="kbd">Ctrl+Z</span> / <b>Undo</b> away.</p>
+    </section>
+    <section class="help-slide">
+      <span class="help-eyebrow tip">Tip</span>
+      <h2>Map layers</h2>
+      <p>Some games draw more than one map over the same ground — an upper and a lower floor, an interior, a mirrored world. Press <b>＋ Add map layer</b> at the top left and you get a second map to paste onto.</p>
+      <ol class="help-list">
+        <li><span class="n">1</span><span>Click a layer to <b>open</b> it: it comes to the front at full strength and the others dim behind it, so you can still see what you're lining up against.</span></li>
+        <li><span class="n">2</span><span>A screenshot lands on <b>the layer you were on when you pasted it</b> — switch layers while you're dragging it and you only change what you can see, never where it goes.</span></li>
+        <li><span class="n">3</span><span><b>Pins belong to layers too.</b> The ones on other layers are dimmed with their map; hover one to read it anyway.</span></li>
+      </ol>
+      <p>Every layer shares the same coordinates, so a spot on one is the same spot on all of them.</p>
     </section>
   </div>
   <div class="help-nav">

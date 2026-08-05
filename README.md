@@ -110,6 +110,37 @@ guessing wrong on a game it has never seen would wreck the screenshot. Your
 screenshots composite exactly as you took them (only the snip's edge is
 feathered), and **Clean map** isn't offered.
 
+## Map layers
+
+Plenty of games draw more than one map over the same ground — an upper and a
+lower floor, an interior, a mirrored world. One composite can't hold that: each
+new paste would simply paint over the last. So the map is a **stack of layers**.
+
+**＋ Add map layer**, at the top left just outside the pin sidebar, gives you
+another map to paste onto. With more than one, the button becomes a small panel
+listing them:
+
+- Click a layer to **open** it. It comes to the front at full strength and the
+  others stay drawn behind it, dimmed — which is the point: the dim one is what
+  you line the bright one up against.
+- Every layer shares **one coordinate space**, so a spot on one is the same spot
+  on all of them. Growing the world grows all of them together.
+- A screenshot lands on **the layer you were on when you pasted it**, never on
+  whichever one you switch to while dragging it into place. The floating toolbar
+  says which (`Onto Upper floor`) and highlights it once the two differ. That's
+  what makes "bring the floor below forward so I can see what I'm aligning to"
+  a safe thing to do mid-placement.
+- **Auto-align** and **Difference** work against the destination layer, not the
+  one on top.
+- **Pins belong to layers too.** A pin on a layer you're not on is dimmed with
+  its map and sits behind the others; hover it and it comes back fully.
+- **Clear map** erases only the layer you're looking at (and says so). **Export**
+  carries the whole stack, and an import restores it.
+- Layer one is the **base layer** and can't be removed — it's the map every save
+  has always been, stored under the same key, so a map made before layers
+  existed simply opens as its base layer. Deleting any other layer takes its map
+  and its pins with it.
+
 ## The toolbar
 
 - **📍 Add pin** — drop a pin by hand: click, then click the spot on the map
@@ -123,6 +154,8 @@ feathered), and **Clean map** isn't offered.
 - **Reveal map** — overlay the reference map to check your alignment (a testing
   aid; it's never part of your saved map). Silksong only — games you add have no
   reference map.
+- **＋ Add map layer** (top left, beside the pin sidebar) — see **Map layers**
+  above.
 - **Lasso** (next to **Add pin**) — draw a loop around anything on the map:
   - Around **part of the map**: the pasted screenshots inside the loop *and* the
     pins standing on them lift off together and drop where you drag them — for
@@ -210,6 +243,7 @@ interior; it never adds anything you haven't pasted.
 - `js/match.js`, `js/matchworker.js`, `js/ocr.js` — screenshot location
   (labels, player marker, room-shape matching) and the worker it runs in.
 - `js/explored.js` — the revealed-map canvas, compositing, and background fade.
+- `js/layers.js` — the stack of map layers (one composite each, one world).
 - `js/mapview.js`, `js/fog.js` — pan/zoom rendering and the fog overlay.
 - `js/pins.js`, `js/categories.js` — pins and pin types.
 - `js/games.js` — the game list (built-in Silksong + your own) and world sizes.

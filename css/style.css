@@ -123,6 +123,13 @@ html, body {
 }
 .pin:hover .pin-ico { transform: scale(1.18); }
 .pin.done .pin-ico { border-color: #4a5560; opacity: .5; filter: saturate(.4); }
+/* a pin standing on a map layer you're not on: dimmed with its layer and kept
+   behind the pins that are on yours, but never hidden — hovering brings it
+   fully back, because what's on the floor below is worth being able to read */
+.pin.off-layer { z-index: 1; }
+.pin.off-layer .pin-ico { opacity: .32; filter: saturate(.3); transition: opacity .14s, filter .14s, transform .08s; }
+.pin.off-layer:hover { z-index: 5; }
+.pin.off-layer:hover .pin-ico { opacity: .92; filter: none; }
 /* a freshly placed pin springs in */
 .pin-ico.pin-pop { animation: pin-pop .52s cubic-bezier(.18,.9,.28,1.35); }
 @keyframes pin-pop {
@@ -844,6 +851,92 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
   .pg-cell.target { transform: none; }
 }
 
+/* ---------- map layers (left, just outside the pin sidebar) ---------- */
+
+/* Follows the sidebar's inner edge — it's resizable, so the app keeps --cat-w
+   in step with it. Sits BELOW the centred Add-pin row rather than beside it:
+   the panel grows a row per layer and a wide sidebar would otherwise push it
+   straight under those buttons. Also clears the floating align toolbar, which
+   is clamped to y 54.
+   Deliberately NOT hidden by body.moving: switching what you can see while you
+   drag a screenshot into place is the point of having layers. */
+#layer-bar {
+  position: fixed; left: calc(var(--cat-w, 348px) + 12px); top: 110px; z-index: 24;
+  width: 214px; display: flex; flex-direction: column; gap: 6px;
+  padding: 8px; border-radius: 12px;
+  background: linear-gradient(180deg, rgba(15,18,25,.95), rgba(10,12,17,.92));
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 26px rgba(0,0,0,.55);
+}
+/* one layer is just "a map" — nothing to switch between, so the panel folds
+   away to the single button that starts a second one */
+#layer-bar.solo {
+  width: auto; padding: 0; gap: 0;
+  background: none; border: 0; box-shadow: none;
+}
+#layer-bar.solo .lb-head, #layer-bar.solo #layer-list { display: none; }
+
+.lb-head { display: flex; align-items: center; padding: 2px 4px 0; }
+.lb-title {
+  font-family: Cinzel, serif; font-size: .72rem; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+
+#layer-list { display: flex; flex-direction: column; gap: 4px; }
+
+.lb-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 8px 8px 7px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; background: var(--panel);
+  font-size: .88rem; color: var(--text-dim); user-select: none;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.lb-row:hover { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+.lb-row.on {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--text);
+  box-shadow: 0 0 15px -7px var(--accent-glow);
+}
+/* the layer's place in the stack — the number you think of it by */
+.lb-num {
+  flex: none; width: 21px; height: 21px; border-radius: 6px;
+  display: grid; place-items: center;
+  font-size: .72rem; font-variant-numeric: tabular-nums;
+  background: #10141b; border: 1px solid var(--border); color: var(--text-dim);
+}
+.lb-row.on .lb-num { background: var(--accent); border-color: var(--accent); color: #f6efe2; }
+.lb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-tools { display: flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+.lb-row:hover .lb-tools, .lb-row.on .lb-tools { opacity: 1; }
+.lb-tool {
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text-dim); font: inherit; font-size: .82rem; line-height: 1;
+  padding: 3px 4px; cursor: pointer; transition: color .12s, border-color .12s;
+}
+.lb-tool:hover { color: var(--text); border-color: var(--border-strong); }
+.lb-tool.del:hover { color: var(--rose); border-color: #43272a; }
+
+/* shaped like a row but set apart with a dashed crimson outline, the same way
+   "New type" is in the sidebar — this is the add affordance of this panel */
+.lb-add {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px 8px 8px; border-radius: 999px;
+  background: rgba(158,43,37,.09); border: 1px dashed #6a3a3b; color: var(--rose);
+  font: inherit; font-size: .82rem; cursor: pointer; white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0,0,0,.45);
+  transition: background .14s, border-color .14s, color .14s, box-shadow .14s;
+}
+#layer-bar:not(.solo) .lb-add { border-radius: 8px; box-shadow: none; }
+.lb-add:hover {
+  background: rgba(158,43,37,.18); border-color: var(--accent); color: #f0c4be;
+  box-shadow: 0 0 16px -6px var(--accent-glow);
+}
+.lb-add:disabled { opacity: .45; cursor: default; box-shadow: none; }
+.lb-add:disabled:hover { background: rgba(158,43,37,.09); border-color: #6a3a3b; color: var(--rose); }
+.lb-add-ico {
+  flex: none; width: 21px; height: 21px; border-radius: 7px;
+  display: grid; place-items: center; border: 1px dashed currentColor; font-size: .8rem;
+}
+
 /* ---------- vertical map-opacity slider (right) ---------- */
 
 #map-opacity {
@@ -1199,6 +1292,18 @@ body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !importa
   min-width: 46px; padding: 0 4px; text-align: center;
   font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; user-select: none;
 }
+
+/* which map layer the screenshot in hand is going onto. Only shown when there
+   is more than one, and it lights up the moment you're looking at a different
+   one — that is exactly when the destination stops being obvious. */
+.pt-note {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 8px; height: 26px; border-radius: 7px;
+  font-size: .76rem; color: var(--text-dim); white-space: nowrap; user-select: none;
+}
+.pt-note b { font-weight: 600; color: var(--text); }
+.pt-note.warn { background: var(--accent-soft); color: var(--rose); }
+.pt-note.warn b { color: #f0c4be; }
 
 /* Auto-align, with a side to each hand: shrink left, grow right. Drawn as one
    joined control because it is one function — the sides only say which way to

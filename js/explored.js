@@ -337,6 +337,10 @@ export class Explored {
     // nothing about, guessing which pixels are "background" would be
     // vandalism, so those composite exactly as screenshotted.
     this.fadeBackground = true;
+    // What isBlank() last answered, or null when it hasn't been asked since
+    // the canvas changed. The renderer uses it to skip a layer with nothing on
+    // it, which must never cost a readback per frame.
+    this._blank = null;
   }
 
   // Make room for `rect`, with `pad` of clear ground around it, growing the
@@ -1367,17 +1371,19 @@ export class Explored {
   // has anything been pasted? cheap: downscale the composite and look for any
   // opaque pixel. Called on change (paste/clear/undo/load), never per-frame.
   isBlank() {
+    if (this._blank !== null) return this._blank;
     const s = 64;
     const c = document.createElement('canvas');
     c.width = s; c.height = s;
     const x = c.getContext('2d', { willReadFrequently: true });
     x.drawImage(this.canvas, 0, 0, s, s);
     const d = x.getImageData(0, 0, s, s).data;
-    for (let i = 3; i < d.length; i += 4) if (d[i] !== 0) return false;
-    return true;
+    this._blank = true;
+    for (let i = 3; i < d.length; i += 4) if (d[i] !== 0) { this._blank = false; break; }
+    return this._blank;
   }
 
-  _changed() { if (this.onChange) this.onChange(); }
+  _changed() { this._blank = null; if (this.onChange) this.onChange(); }
 
   async toBlob() {
     return new Promise(res => this.canvas.toBlob(res, 'image/png'));

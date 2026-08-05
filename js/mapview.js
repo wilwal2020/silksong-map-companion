@@ -13,6 +13,11 @@ const KEEP_VISIBLE = 150;
 // the backdrop behind everything, and what "reset" goes back to
 export const DEFAULT_BG = '#05060a';
 
+// How much is left of a layer you are not on. Enough to line the layer you ARE
+// on up against it — which is the whole reason the others stay drawn at all —
+// without any doubt about which map you are looking at.
+const LAYER_DIM = 0.3;
+
 export class MapView {
   constructor(canvas, world, explored, reference = null) {
     this.canvas = canvas;
@@ -20,6 +25,11 @@ export class MapView {
     this.map = world;
     this.reference = reference;
     this.explored = explored;
+    // Every map layer, in order — the app keeps this in step with the layer
+    // bar, and `explored` above is always whichever of them is open. Left null
+    // (or holding a single layer) this draws exactly what it always drew.
+    this.layers = null;
+    this.currentLayerId = null;
 
     this.scale = 0.2;
     this.ox = 0;
@@ -537,6 +547,23 @@ export class MapView {
 
     // the explored map: your pasted screenshots composited at their matched
     // positions, over the black fog.
+    //
+    // With more than one layer, the ones you are NOT on go down first and
+    // dimmed, in stack order, and the open layer lands on top at full strength.
+    // Drawn rather than hidden because two floors of a map only make sense in
+    // relation to each other: the dim one is what you line the bright one up
+    // against, and what tells you the stairs you just pasted come out where
+    // they should.
+    if (this.layers && this.layers.length > 1) {
+      ctx.globalAlpha = LAYER_DIM;
+      for (const l of this.layers) {
+        // `_blank` is cached, never measured here — a layer with nothing on it
+        // still costs a full-canvas composite to draw
+        if (l.explored === this.explored || l.explored._blank) continue;
+        ctx.drawImage(l.explored.canvas, 0, 0, this.map.width, this.map.height);
+      }
+      ctx.globalAlpha = 1;
+    }
     ctx.drawImage(this.explored.canvas, 0, 0, this.map.width, this.map.height);
 
     // "Reveal map": the full world map laid straight over the top, opaque.
