@@ -74,6 +74,11 @@ html, body {
 .btn.danger:hover { color: #ecaaa3; border-color: var(--accent); background: rgba(158,43,37,.14); box-shadow: 0 0 15px -6px var(--accent); }
 .btn.subtle { background: transparent; border-color: transparent; color: var(--text-dim); }
 .btn.subtle:hover { box-shadow: none; }
+/* a button whose job is done (the map is already as coarse as it goes) — still
+   there, so its tooltip can say why, but plainly not pressable */
+.btn:disabled { opacity: .38; cursor: default; }
+.btn:disabled:hover { background: #141821; border-color: #2b3240; color: var(--text); box-shadow: none; }
+.btn:disabled:active { transform: none; }
 
 .toggle { display: flex; gap: 6px; align-items: center; font-size: .82rem; color: var(--text-dim); cursor: pointer; user-select: none; }
 .toggle input { accent-color: var(--accent); }

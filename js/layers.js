@@ -17,13 +17,15 @@
 // them. That's the same trick store.js plays for Silksong's own keys.
 
 import { store } from './store.js';
-import { Explored } from './explored.js';
+import { Explored, MIN_DETAIL } from './explored.js';
+
+export { MIN_DETAIL };
 
 export const BASE_LAYER_ID = 'base';
 
 // Not a hard rule so much as an honest one: every layer is a full-size canvas
-// held in memory (see MAX_WORLD_PIXELS in explored.js), and they are all drawn
-// on every frame.
+// held in memory (see MAX_CANVAS_PIXELS in explored.js), and they are all drawn
+// on every frame. Halving the detail is what buys room back — see setDetail.
 export const MAX_LAYERS = 8;
 
 export const fogKey = id => (id === BASE_LAYER_ID ? 'fog' : `fog:${id}`);
@@ -52,8 +54,13 @@ export class LayerStack {
   exploredOf(id) { const l = this.find(id); return l ? l.explored : this.explored; }
   indexOf(id) { return this.list.findIndex(l => l.id === id); }
 
-  _spawn(def, w, h) {
-    const layer = { id: def.id, name: def.name, explored: new Explored(w, h) };
+  // How finely every layer is stored: canvas pixels per map pixel. One layer
+  // cannot differ from another — they are drawn into the same coordinate space
+  // and a paste has to land the same way on whichever one is open.
+  get detail() { return this.list.length ? this.list[0].explored.scale : 1; }
+
+  _spawn(def, w, h, detail) {
+    const layer = { id: def.id, name: def.name, explored: new Explored(w, h, detail) };
     this.onCreate?.(layer.explored, layer);
     return layer;
   }
@@ -61,14 +68,14 @@ export class LayerStack {
   // Read the saved definitions and each layer's composite. `world` is only the
   // starting size — a growable world's real size comes from the blobs, exactly
   // as it did when there was one composite.
-  async load(world) {
+  async load(world, detail = 1) {
     const saved = await store.getMeta('layers');
     const defs = (Array.isArray(saved) ? saved : []).filter(d => d && d.id);
     // the base layer always exists, and always comes first
     if (!defs.some(d => d.id === BASE_LAYER_ID)) {
       defs.unshift({ id: BASE_LAYER_ID, name: 'Layer 1' });
     }
-    this.list = defs.map(d => this._spawn(d, world.width, world.height));
+    this.list = defs.map(d => this._spawn(d, world.width, world.height, detail));
     for (const l of this.list) {
       const blob = await store.getMeta(fogKey(l.id));
       if (blob) await l.explored.loadFromBlob(blob);
@@ -97,7 +104,7 @@ export class LayerStack {
     const base = this.list[0].explored;
     const layer = this._spawn(
       { id: id || 'l_' + crypto.randomUUID().slice(0, 8), name: name || `Layer ${this.list.length + 1}` },
-      base.mapW, base.mapH);
+      base.mapW, base.mapH, base.scale);
     this.list = [...this.list, layer];
     await this.persist();
     return layer;
@@ -130,6 +137,19 @@ export class LayerStack {
     let out = { dx: 0, dy: 0, grew: false };
     for (const l of this.list) out = l.explored.grow(rect, pad);
     return out;
+  }
+
+  // Redraw every layer at a coarser detail. All of them together, always: they
+  // share one coordinate space, and a paste landing on a finer layer than the
+  // one beside it would line up against neither.
+  //
+  // Returns false when there is nothing to do, so the caller can say so rather
+  // than claim it shrank something it didn't.
+  setDetail(next) {
+    if (!(next > 0) || next > 1 || next < MIN_DETAIL || next === this.detail) return false;
+    let did = false;
+    for (const l of this.list) did = l.explored.resample(next) || did;
+    return did;
   }
 
   // Has anything at all been pasted, on any layer? Every layer is asked, not

@@ -1,6 +1,6 @@
 import { MapView, DEFAULT_BG } from './mapview.js';
 import { store, setStoreGame } from './store.js';
-import { LayerStack, BASE_LAYER_ID, MAX_LAYERS, fogKey, pinLayer } from './layers.js';
+import { LayerStack, BASE_LAYER_ID, MAX_LAYERS, MIN_DETAIL, fogKey, pinLayer } from './layers.js';
 import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT, refinePlacement } from './match.js';
 import { ocrLocate, loadLabels } from './ocr.js';
 import { PinManager, SVG, fixedAnchor } from './pins.js';
@@ -614,6 +614,71 @@ async function deleteLayer(l) {
   await layers.remove(l.id);
   applyCurrentLayer();
   toast(`“${l.name}” deleted.`, 'ok');
+}
+
+// --------------------------------------------------------- detail (halving)
+
+// How finely the map is kept: canvas pixels per map pixel. A map remembered at
+// half detail takes a QUARTER of the memory, which is the whole point — the
+// composite is a real canvas and there is a ceiling on how big one may get, so
+// a map that has run out of room to grow gets four times the ground back for
+// one press, and every frame has four times less to push around.
+//
+// The map coordinates never move, so this changes nothing else: pins stay
+// where they are, sizes still mean what they meant, and a screenshot pasted
+// afterwards is composited at the same reduced detail — which is what keeps
+// auto-align working exactly as before, since it lines the new shot up against
+// the map in map units either way.
+function detailLabel(d) {
+  if (d >= 1) return 'full detail';
+  const n = Math.round(1 / d);
+  return n === 2 ? 'half detail' : `1/${n} detail`;
+}
+
+function syncDetailButton() {
+  const btn = $('#btn-halve');
+  if (!btn) return;
+  const d = layers.detail;
+  const spent = d <= MIN_DETAIL;
+  btn.disabled = spent;
+  btn.title = spent
+    ? `The map is already at ${detailLabel(d)}, which is as coarse as it goes.`
+    : `Redraw the whole map at half its current detail (now ${detailLabel(d)}). `
+      + 'Frees room for it to grow and makes it quicker to draw. Cannot be undone.';
+}
+
+async function halveDetail() {
+  const now = layers.detail;
+  const next = now / 2;
+  if (next < MIN_DETAIL) {
+    toast(`The map is already at ${detailLabel(now)} — that is as coarse as it goes.`);
+    return;
+  }
+  const many = layers.count > 1;
+  if (!await confirmDialog(
+    `Every screenshot on ${many ? 'all ' + layers.count + ' layers' : 'the map'} is redrawn at half its size, `
+      + `leaving the map at ${detailLabel(next)}. It keeps its shape and everything stays where it is — `
+      + 'pins included — and screenshots you paste afterwards are stored the same way, so lining them up '
+      + 'works exactly as it does now. The detail thrown away cannot be got back.',
+    { title: 'Halve the map’s detail?', okLabel: 'Halve it', danger: false })) return;
+
+  spinner(true, 'Redrawing the map at half detail…');
+  // let the spinner paint before the synchronous canvas work blocks the thread
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    if (!layers.setDetail(next)) { toast('Nothing to change.'); return; }
+    // an undo snapshot is of a canvas that is no longer this size
+    lastUndo = null;
+    await store.putMeta('detail', next);
+    view.requestRender();
+    syncDetailButton();
+    toast(`Map redrawn at ${detailLabel(next)} — room to grow, and quicker to draw.`, 'ok');
+  } catch (e) {
+    console.error(e);
+    toast('Could not halve the detail: ' + e.message, 'error');
+  } finally {
+    spinner(false);
+  }
 }
 
 // ------------------------------------------------------------- pin editing
@@ -2093,7 +2158,10 @@ async function ensureRoom(rect, pad = 400) {
   // every layer at once — they share one coordinate space
   const shift = layers.grow(rect, pad);
   if (shift.capped) {
-    toast('This map has grown as far as it can — that is as far out as it goes.', 'error');
+    // the one moment this is the obvious thing to do, so offer it here rather
+    // than leave it to be found in the toolbar
+    toast('This map has grown as far as it can.', 'error',
+      layers.detail > MIN_DETAIL ? { label: 'Halve its detail', fn: halveDetail } : null);
   }
   if (!shift.grew) return { dx: 0, dy: 0 };
   if (shift.dx || shift.dy) {
@@ -2518,6 +2586,9 @@ async function exportAll() {
       id: l.id, name: l.name, fog: await blobToDataURL(await l.explored.toBlob()),
     }))),
     currentLayer: layers.currentId,
+    // how finely the layer blobs above were drawn — without it they would be
+    // restored at natural size into a canvas of a different one
+    detail: layers.detail,
     bgColor,
     customCats: customCategories(),
     catOrder: currentOrder(),
@@ -2565,6 +2636,11 @@ async function importAll(file) {
   await store.clearPins();
   pins.removeAll();
   lastUndo = null; // the old undo snapshot no longer matches anything
+  // the backup's blobs are at ITS detail, so match that before any of them are
+  // read back (an older backup has none, and was full detail)
+  const wantDetail = Math.min(1, Math.max(MIN_DETAIL,
+    typeof data.detail === 'number' ? data.detail : 1));
+  if (layers.setDetail(wantDetail)) await store.putMeta('detail', layers.detail);
   // back to one empty layer, then rebuild whatever stack the backup held
   dropAllFogSavers();
   for (const l of layers.list.slice(1)) await store.putMeta(fogKey(l.id), null);
@@ -2611,6 +2687,7 @@ async function importAll(file) {
   }
   renderCatList();
   pins.applyFilter();
+  syncDetailButton();
   toast(`Imported ${data.pins?.length ?? 0} pins.`, 'ok');
 }
 
@@ -3404,6 +3481,7 @@ function buildToolbar() {
 
   $('#btn-region').addEventListener('click', startRegionMove);
 
+  $('#btn-halve').addEventListener('click', halveDetail);
   $('#btn-add-layer').addEventListener('click', addLayer);
   $('#btn-layer-save').addEventListener('click', saveLayerDialog);
   $('#btn-layer-cancel').addEventListener('click', () => { layerEditing = null; closeDialog('#dlg-layer'); });
@@ -3524,7 +3602,10 @@ async function init() {
       view.requestRender(); saveFogOf(layer); updateEmptyHint();
     };
   });
-  await layers.load(world);
+  // how finely this map is kept (see halveDetail) — needed BEFORE the layers
+  // exist, since it decides how big each one's canvas is
+  const savedDetail = await store.getMeta('detail');
+  await layers.load(world, typeof savedDetail === 'number' ? savedDetail : 1);
   explored = layers.explored;
   view = new MapView($('#map-canvas'), world, explored, mapImage);
   view.layers = layers.list;
@@ -3618,6 +3699,7 @@ async function init() {
   buildToolbar();
   applyGameChrome();
   renderLayerBar();
+  syncDetailButton();
   // the backdrop this game was left on (the swatches are built by now)
   setBgColor((await store.getMeta('bgColor')) || DEFAULT_BG, { persist: false });
   if (game.builtin) loadLabels(); // warm the area-name table for OCR matching
@@ -3634,7 +3716,7 @@ async function init() {
     mapImage, world,
     get game() { return game; },
     get layers() { return layers; },
-    selectLayer, addLayer,
+    selectLayer, addLayer, halveDetail,
     handleImageBlob: (blob, type) =>
       type === 'map' ? handleMapScreenshot(blob)
       : type === 'env' ? handleEnvScreenshot(blob)

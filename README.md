@@ -136,6 +136,9 @@ listing them:
   its map and sits behind the others; hover it and it comes back fully.
 - **Clear map** erases only the layer you're looking at (and says so). **Export**
   carries the whole stack, and an import restores it.
+- Layers cost memory and drawing time — each is a full-size canvas, redrawn
+  every frame. **Halve detail** (below) is the release valve if a stacked map
+  starts to feel heavy.
 - Layer one is the **base layer** and can't be removed — it's the map every save
   has always been, stored under the same key, so a map made before layers
   existed simply opens as its base layer. Deleting any other layer takes its map
@@ -151,6 +154,21 @@ listing them:
   the buttons, and two pins never share one. The pin's own menu has the same
   switch (**Keep on screen**) for changing your mind either way; moving a
   persistent pin needs no ✓/✗ confirmation, since it can only land in a slot.
+- **Halve detail** — redraw the whole map (every layer) at half the size it is
+  stored at. Nothing moves: map coordinates are untouched, so pins stay where
+  they are and screenshots pasted afterwards are composited at the same reduced
+  detail, which means auto-align keeps working exactly as it did.
+
+  Worth doing for two reasons. A composite is a real canvas with a ceiling on
+  how big it may get, so a map that has run out of room to grow gets **four
+  times the ground back** for one press. And every frame has four times less to
+  push around — on a large map with a few layers that is the difference between
+  a pan that glides and one that doesn't. Undo, too, since the snapshot taken
+  before each paste shrinks with it.
+
+  It cannot be undone — the detail thrown away is gone — so it asks first. Two
+  halvings (down to a quarter) is as far as it goes; past that a screenshot
+  starts losing the outlines that make it a map.
 - **Reveal map** — overlay the reference map to check your alignment (a testing
   aid; it's never part of your saved map). Silksong only — games you add have no
   reference map.

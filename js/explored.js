@@ -309,10 +309,19 @@ function satSum(sat, W, H, x, y, w, h) {
 // position, and the lookups are not free at three million of them.
 const TILES = 2;
 
-// How far a growing world may go. Not a design limit so much as a memory one:
-// the composite is a real canvas, and every map pixel is four bytes of it.
-const MAX_WORLD_SIDE = 12000;
-const MAX_WORLD_PIXELS = 48e6;   // ~190 MB at one canvas pixel per map pixel
+// How big the composite CANVAS may get. Not a design limit so much as a memory
+// one: it is a real canvas, and every pixel of it is four bytes.
+//
+// Measured in canvas pixels rather than map ones, which is what makes `detail`
+// (below) worth having: at half detail the same canvas covers twice the world
+// in each direction, so a map that has run out of room gets four times the
+// ground back for one press.
+const MAX_CANVAS_SIDE = 12000;
+const MAX_CANVAS_PIXELS = 48e6;   // ~190 MB
+
+// How coarsely a composite may be kept. A quarter is two halvings — past that
+// a screenshot is losing the outlines that make it a map at all.
+export const MIN_DETAIL = 0.25;
 
 // How far down the chain of halved copies a composite will go, and how big it
 // has to be before keeping one is worth the memory.
@@ -426,11 +435,22 @@ export class Explored {
     };
     if (!want.l && !want.t && !want.r && !want.b) return { dx: 0, dy: 0, grew: false };
 
-    // spend whatever headroom is left, nearest side first
-    const roomW = Math.max(0, Math.min(MAX_WORLD_SIDE, MAX_WORLD_PIXELS / this.mapH) - this.mapW);
-    const roomH = Math.max(0, Math.min(MAX_WORLD_SIDE, MAX_WORLD_PIXELS / this.mapW) - this.mapH);
+    // Spend whatever headroom is left, nearest side first.
+    //
+    // The caps are on the canvas, so in map units they open up as detail drops.
+    // Width is settled first and height is then measured against the width the
+    // canvas will ACTUALLY have — not the one it has now. Measuring both against
+    // the current dimensions lets a map that grows in both directions at once
+    // spend the same headroom twice: each side saw a cap of 12000 while the
+    // other was still small, and a world allowed 48 million pixels came out at
+    // 12000x12000, which is 144 million, or 576MB of canvas per layer.
+    const maxSide = MAX_CANVAS_SIDE / s;
+    const maxArea = MAX_CANVAS_PIXELS / (s * s);
+    const roomW = Math.max(0, Math.min(maxSide, maxArea / this.mapH) - this.mapW);
     const dx = Math.min(want.l, roomW);
     const addR = Math.min(want.r, roomW - dx);
+    const roomH = Math.max(0,
+      Math.min(maxSide, maxArea / (this.mapW + dx + addR)) - this.mapH);
     const dy = Math.min(want.t, roomH);
     const addB = Math.min(want.b, roomH - dy);
     const capped = (dx < want.l) || (addR < want.r) || (dy < want.t) || (addB < want.b);
@@ -452,6 +472,32 @@ export class Explored {
     this._mips = [];           // and so were the halved copies
     this._changed();
     return { dx: Math.round(dx), dy: Math.round(dy), grew: true, capped };
+  }
+
+  // Redraw the composite at a different DETAIL — canvas pixels per map pixel.
+  //
+  // Map coordinates do not move, so nothing else in the app has to know: pins
+  // stay where they are, a rect still means the same patch of ground, and every
+  // method here already works in map units and multiplies by `scale` on the way
+  // to the canvas. What changes is only how finely the ground is remembered.
+  //
+  // It cannot be undone — the detail thrown away is gone — which is the caller's
+  // to warn about, not this method's.
+  resample(next) {
+    if (!(next > 0) || next === this.scale) return false;
+    const c = canvasOf(Math.max(1, Math.round(this.mapW * next)),
+      Math.max(1, Math.round(this.mapH * next)));
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.imageSmoothingEnabled = true;
+    x.imageSmoothingQuality = 'high';
+    x.drawImage(this.canvas, 0, 0, c.width, c.height);
+    this.canvas = c;
+    this.ctx = x;
+    this.scale = next;
+    this._refKeep = null;   // the reference mask was cut to the old size
+    this._mips = [];        // and so were the halved copies
+    this._changed();
+    return true;
   }
 
   // The reference map is NEVER displayed — the background fade only uses it
