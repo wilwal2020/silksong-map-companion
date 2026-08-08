@@ -279,8 +279,11 @@ function pointInConvex(p, poly) {
 }
 
 export class PinManager {
-  constructor(layer, view, handlers) {
+  constructor(layer, topLayer, view, handlers) {
     this.layer = layer;
+    // Where the persistent pins go: a layer that sits in front of the whole
+    // app rather than inside the map. See _home.
+    this.topLayer = topLayer || layer;
     this.view = view;
     // { onChange, onEdit, onDelete, onRequestAttach, onLightbox, onPinsChanged }
     this.handlers = handlers;
@@ -398,6 +401,15 @@ export class PinManager {
     return tri ? pointInConvex({ x, y }, tri) : false;
   }
 
+  // Which layer a pin and everything belonging to it lives in. A pin on the
+  // MAP is part of the map: it slides under the sidebar and the toolbar as you
+  // pan, the same as the ground it stands on. A PERSISTENT pin is part of the
+  // screen, and the screen is the top of the pile — nothing the app puts up may
+  // cover one, not the picture slot, not a panel, not a floating control.
+  _home(entry) {
+    return entry.data.fixed ? this.topLayer : this.layer;
+  }
+
   add(data, { select = false, pop = false } = {}) {
     const el = document.createElement('div');
     el.className = 'pin';
@@ -406,7 +418,6 @@ export class PinManager {
     el.appendChild(ico);
     const entry = { data, el, ico, card: null, imgUrl: null, moveEl: null, pendingMove: null };
     this.pins.set(data.id, entry);
-    this.layer.appendChild(el);
     this._decorate(entry);
     this._wire(entry);
     if (select) this.select(data.id);
@@ -483,7 +494,7 @@ export class PinManager {
     ring.className = 'done-burst';
     ring.style.left = p.x + 'px';
     ring.style.top = p.y + 'px';
-    this.layer.appendChild(ring);
+    this._home(entry).appendChild(ring);
     ring.addEventListener('animationend', () => ring.remove(), { once: true });
   }
 
@@ -635,6 +646,12 @@ export class PinManager {
     entry.el.classList.toggle('done', !!entry.data.done);
     // square, and above the map pins: a persistent pin belongs to the screen
     entry.el.classList.toggle('fixed', !!entry.data.fixed);
+    // ...which is also a different layer, so a pin switched between the two
+    // kinds moves house here rather than only changing shape
+    const home = this._home(entry);
+    for (const el of [entry.el, entry.moveEl, entry.card]) {
+      if (el && el.parentNode !== home) home.appendChild(el);
+    }
   }
 
   _wire(entry) {
@@ -789,7 +806,7 @@ export class PinManager {
       // ✗ puts the pin back AND exits the click/armed state (stops breathing)
       no.addEventListener('click', e => { e.stopPropagation(); this._cancelMove(entry); this.deselect(); });
       wrap.append(ok, no);
-      this.layer.appendChild(wrap);
+      this._home(entry).appendChild(wrap);
       entry.moveEl = wrap;
     }
     this._positionMoveConfirm(entry);
@@ -1104,7 +1121,7 @@ export class PinManager {
     // hide is driven by the safe-zone tracker (_trackHover), not a plain
     // pointerleave, so a diagonal move to a button doesn't drop the card
 
-    this.layer.appendChild(card);
+    this._home(entry).appendChild(card);
     return card;
   }
 

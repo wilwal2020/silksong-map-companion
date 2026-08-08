@@ -104,6 +104,11 @@ html, body {
 #map-canvas.placing { cursor: move; }
 
 #pin-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+/* The persistent pins' own layer (see index.html). Above every panel and every
+   floating control, so nothing on screen can hide a pin — the ghost you are
+   currently placing (45) and the toasts and the lightbox above it are the only
+   things that still come out in front, and all three are passing through. */
+#pin-top { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 44; }
 
 /* ---------- pins ---------- */
 
@@ -1253,7 +1258,8 @@ body.placing-paste #held-shot { display: none; }
 
 /* drawing the loop: crosshair, and pins mustn't grab the drag */
 #map-canvas.lassoing { cursor: crosshair; }
-body.lasso-mode .pin, body.lasso-mode #pin-layer { pointer-events: none !important; }
+body.lasso-mode .pin,
+body.lasso-mode #pin-layer, body.lasso-mode #pin-top { pointer-events: none !important; }
 
 #map-canvas.placing { cursor: grab; }
 #map-canvas.placing.over-placement { cursor: move; }

@@ -3623,7 +3623,7 @@ async function init() {
   setCustomCategories((await store.getMeta('customCats')) || []);
   setOrder((await store.getMeta('catOrder')) || []);
 
-  pins = new PinManager($('#pin-layer'), view, {
+  pins = new PinManager($('#pin-layer'), $('#pin-top'), view, {
     onChange: persistPin,
     onLightbox: showLightbox,
     onPinsChanged: () => updateCatCounts(),

@@ -153,6 +153,12 @@
   </div>
 </main>
 
+<!-- Persistent pins live out here, not in #stage: a pin nailed to the screen
+     belongs in front of everything on it, and #stage is a stacking context of
+     its own that nothing inside can climb out of. Map pins stay in #pin-layer,
+     where they slide under the panels as the map pans. -->
+<div id="pin-top"></div>
+
 <!-- paste type chooser -->
 <dialog id="dlg-paste">
   <div class="paste-hero">
