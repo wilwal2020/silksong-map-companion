@@ -13,6 +13,11 @@ const KEEP_VISIBLE = 150;
 // the backdrop behind everything, and what "reset" goes back to
 export const DEFAULT_BG = '#05060a';
 
+// How long a map has to have gone undrawn before the next frame is assumed to
+// be paying for an upload again (see MapView._warm). Comfortably under the few
+// seconds a browser gives an unused texture, so the warm frame lands first.
+const WARM_AFTER_MS = 1200;
+
 // How much is left of a layer you are not on. Enough to line the layer you ARE
 // on up against it — which is the whole reason the others stay drawn at all —
 // without any doubt about which map you are looking at.
@@ -56,6 +61,7 @@ export class MapView {
 
     this.onViewChanged = null;
     this._raf = 0;
+    this._lastRender = -Infinity;   // when the last frame went out (see _warm)
 
     this._resize = this._resize.bind(this);
     window.addEventListener('resize', this._resize);
@@ -536,7 +542,31 @@ export class MapView {
     });
   }
 
+  // Draw one frame purely to keep the map ready to be drawn.
+  //
+  // The composite is read from constantly — the aligner works in pixels — so
+  // its canvas is a software one, and every frame that paints from it has to
+  // hand the whole thing to the GPU. That upload is cached, but only for as
+  // long as something keeps using it: a few seconds after the last frame the
+  // browser lets it go, and the next frame pays for it again. That is the
+  // stutter on the first drag after a pause, and the reason every drag after
+  // it is instant, and the reason the pause brings it back.
+  //
+  // So a frame is drawn on the way in to the gesture instead of during it.
+  // Nothing has moved, so nothing is told about it — onViewChanged would push
+  // the pins around and re-arm the save for a view that is exactly where it
+  // was.
+  _warm() {
+    if (this._raf || document.hidden) return;
+    if (performance.now() - this._lastRender < WARM_AFTER_MS) return;
+    this._raf = requestAnimationFrame(() => {
+      this._raf = 0;
+      this.render();
+    });
+  }
+
   render() {
+    this._lastRender = performance.now();
     const ctx = this.ctx, dpr = window.devicePixelRatio || 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = this.bgColor || DEFAULT_BG;
@@ -700,6 +730,15 @@ export class MapView {
     const c = this.canvas;
     let dragging = false, movingPlacement = false, resizingCorner = null, lastX = 0, lastY = 0;
 
+    // See _warm. Any pointer activity over the map is notice that a pan may be
+    // about to start, and the first frame after a pause is the expensive one —
+    // so it is spent here, before the gesture, rather than inside it. Moving
+    // towards the map warms it; pressing on it warms it in the worst case,
+    // where a hitch between the press and the first movement has no motion to
+    // stutter. Both are free once warm: _warm returns at a clock comparison.
+    c.addEventListener('pointerenter', () => this._warm());
+    c.addEventListener('pointerdown', () => this._warm());
+
     c.addEventListener('pointerdown', e => {
       // drawing a lasso takes over the drag entirely — no panning, no moving
       if (this.lasso) {
@@ -739,6 +778,7 @@ export class MapView {
         return;
       }
       if (!dragging) {
+        this._warm();   // hovering the map is the cue to get it back on the GPU
         // cursor tells you which drag you'd get: a corner resize, or a move
         if (this.placement) {
           const corner = this._placementCornerAt(e.clientX, e.clientY);
