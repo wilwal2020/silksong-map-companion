@@ -410,6 +410,18 @@ export class PinManager {
     return entry.data.fixed ? this.topLayer : this.layer;
   }
 
+  // A hover card, though, belongs to the screen whichever kind of pin opened
+  // it. A map pin slides under the panels as you pan and that is right; the
+  // card you opened ON one is not part of the map at all — it is the thing you
+  // asked to read, and it came up because the pointer is on it right now. So it
+  // goes in the top layer, in front of the picture slot, the layer panel and
+  // every other floating control. (It still keeps off the toolbar, which
+  // _cardBand does by never letting it above CARD_TOP.) It is positioned in
+  // screen coordinates either way, so nothing about where it lands changes.
+  _cardHome() {
+    return this.topLayer;
+  }
+
   add(data, { select = false, pop = false } = {}) {
     const el = document.createElement('div');
     el.className = 'pin';
@@ -649,9 +661,11 @@ export class PinManager {
     // ...which is also a different layer, so a pin switched between the two
     // kinds moves house here rather than only changing shape
     const home = this._home(entry);
-    for (const el of [entry.el, entry.moveEl, entry.card]) {
+    for (const el of [entry.el, entry.moveEl]) {
       if (el && el.parentNode !== home) home.appendChild(el);
     }
+    // the card never moves house — it lives in the top layer either way
+    if (entry.card && entry.card.parentNode !== this._cardHome()) this._cardHome().appendChild(entry.card);
   }
 
   _wire(entry) {
@@ -1121,7 +1135,7 @@ export class PinManager {
     // hide is driven by the safe-zone tracker (_trackHover), not a plain
     // pointerleave, so a diagonal move to a button doesn't drop the card
 
-    this._home(entry).appendChild(card);
+    this._cardHome().appendChild(card);
     return card;
   }
 
