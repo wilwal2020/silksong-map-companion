@@ -495,9 +495,16 @@ const work = () => layers.exploredOf(workLayerId());
 function beginWork() { workLayer = layers.currentId; return workLayer; }
 function endWork() { workLayer = null; }
 
-// keep the layer panel clear of the pin sidebar, which can be dragged wider
+// keep the layer panel clear of the pin sidebar. Dragging it wider already
+// re-read it, but the sidebar also narrows by itself on a small window, and
+// that width was measured only once at boot — so on any window that had been
+// resized since, the layer panel sat ON the sidebar instead of just outside it.
 function syncCatBarVar() {
   document.documentElement.style.setProperty('--cat-w', $('#cat-bar').offsetWidth + 'px');
+}
+function watchCatBarWidth() {
+  syncCatBarVar();
+  window.addEventListener('resize', syncCatBarVar);
 }
 
 // everything that has to follow the open layer: what's drawn on top, which
@@ -3691,7 +3698,7 @@ async function init() {
   // restore sidebar width + map opacity
   const savedW = await store.getMeta('catBarWidth');
   if (savedW) $('#cat-bar').style.width = savedW + 'px';
-  syncCatBarVar();
+  watchCatBarWidth();
   const savedOpacity = await store.getMeta('mapOpacity');
   if (savedOpacity != null) { $('#opacity-range').value = savedOpacity; applyMapOpacity(savedOpacity); }
 
