@@ -864,14 +864,15 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
 /* ---------- map layers (left, just outside the pin sidebar) ---------- */
 
 /* Follows the sidebar's inner edge — it's resizable, so the app keeps --cat-w
-   in step with it. Sits BELOW the centred Add-pin row rather than beside it:
-   the panel grows a row per layer and a wide sidebar would otherwise push it
-   straight under those buttons. Also clears the floating align toolbar, which
-   is clamped to y 54.
+   in step with it. Tucked into the top corner of the map, right under the
+   toolbar: it's a thing you reach for, not a thing to hunt for halfway down
+   the screen. It shares that band with the centred Add-pin row and, while a
+   screenshot is being placed, with the floating align toolbar (clamped to
+   y 54) — both of which draw above it if a wide sidebar pushes them together.
    Deliberately NOT hidden by body.moving: switching what you can see while you
    drag a screenshot into place is the point of having layers. */
 #layer-bar {
-  position: fixed; left: calc(var(--cat-w, 348px) + 12px); top: 110px; z-index: 24;
+  position: fixed; left: calc(var(--cat-w, 348px) + 12px); top: 55px; z-index: 24;
   width: 214px; display: flex; flex-direction: column; gap: 6px;
   padding: 8px; border-radius: 12px;
   background: linear-gradient(180deg, rgba(15,18,25,.95), rgba(10,12,17,.92));
@@ -1432,4 +1433,7 @@ body.placing-paste #paste-hint, body.placing-paste #empty-hint { display: none; 
 
 @media (max-width: 720px) {
   #cat-bar { width: 240px; }
+  /* no room left in the top corner once the centred Add-pin row reaches it —
+     on a window this narrow the layer panel drops back below that row */
+  #layer-bar { top: 110px; }
 }
