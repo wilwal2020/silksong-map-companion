@@ -948,6 +948,57 @@ body.placing-mode, body.placing-mode #map-canvas { cursor: crosshair !important;
   display: grid; place-items: center; border: 1px dashed currentColor; font-size: .8rem;
 }
 
+/* ---------- storage safety note (top right, under the toolbar) ---------- */
+
+/* Only ever on screen when the map is actually at risk, so it is allowed to be
+   loud: amber rule, its own card, and the one action worth taking spelled out
+   across the bottom. Sits under Export/Import, which is where it sends you —
+   and inboard of the opacity slider, which is 34px of right edge that grows
+   taller the taller the window is, so there is no height at which the two
+   could have shared that corner. */
+#storage-note {
+  position: fixed; right: 66px; top: 58px; z-index: 28; width: 316px;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 13px 13px; border-radius: 12px;
+  background: linear-gradient(180deg, rgba(24,20,14,.97), rgba(12,11,9,.95));
+  border: 1px solid #6a5324; box-shadow: 0 14px 34px rgba(0,0,0,.6);
+  animation: sn-in .22s cubic-bezier(.2,.9,.3,1.2);
+}
+@keyframes sn-in { from { opacity: 0; transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) { #storage-note { animation: none; } }
+
+.sn-head { display: flex; align-items: center; gap: 8px; }
+.sn-ico { font-size: 1rem; line-height: 1; color: #e0c37e; }
+#sn-title { font-size: .92rem; color: #f1e7cf; letter-spacing: .01em; }
+.sn-x {
+  margin-left: auto; flex: none; padding: 3px; line-height: 0;
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text-dim); cursor: pointer; transition: color .12s, border-color .12s;
+}
+.sn-x svg { width: 13px; height: 13px; display: block; }
+.sn-x:hover { color: var(--text); border-color: var(--border-strong); }
+
+#sn-text { margin: 0; font-size: .84rem; line-height: 1.45; color: var(--text-dim); }
+
+/* the numbers, set apart from the prose so they can be read at a glance */
+.sn-stats { display: flex; flex-direction: column; gap: 3px; }
+.sn-stat {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: .78rem; color: var(--text-dim);
+}
+.sn-stat b { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text); font-weight: 500; }
+.sn-stat.warn b { color: #e0c37e; }
+
+.sn-go { justify-content: center; width: 100%; margin-top: 2px; }
+
+/* Export wears the same warning when a backup is overdue, so the state is
+   still readable once the note above has been dismissed */
+#btn-export.at-risk { border-color: #6a5324; color: #f1e7cf; }
+#btn-export.at-risk::after {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: #e0c37e; box-shadow: 0 0 7px 1px rgba(224,195,126,.7);
+}
+
 /* ---------- vertical map-opacity slider (right) ---------- */
 
 #map-opacity {

@@ -190,12 +190,30 @@ listing them:
   names and markers are kept; only the background void fades. Undoable.
   Silksong only — see *Other games*.
 - **Export / Import** — download or restore a full JSON backup (revealed map +
-  all pins with their pictures, notes and custom types). Clearing site data
-  erases everything, so export now and then.
+  all pins with their pictures, notes and custom types). One file per game, so
+  back up each one you care about. Import replaces the game you currently have
+  open, so switch to (or create) the right one first.
 - **Clear map** — erase the revealed map but keep every pin. Use it after a run
   of misaligned pastes; the scale calibration resets too and the next paste
   re-measures it.
 - **Reset** — erase everything (map and pins). Export a backup first.
+
+### Where your maps live, and how they get lost
+
+Everything is held in your browser's IndexedDB for this site — nothing is
+uploaded. That storage is *evictable* by default: when the disk fills up, the
+browser reclaims space by deleting an entire site's data at once, without
+warning, and this app is usually the largest thing it can find (a full-size map
+composite per layer, plus a screenshot per pin).
+
+So on startup the app calls `navigator.storage.persist()` to ask the browser to
+keep the data. Browsers grant that at their own discretion — bookmarking or
+installing the site makes a yes more likely. If the answer is no, a note appears
+in the top right saying so, with how much is stored and when you last backed up.
+That note is the only warning you will get; **an exported backup is the only
+thing that survives eviction**, so take one when it asks.
+
+The state of all this is on the **Export** button's tooltip at any time.
 
 On the left, the **Pin types** panel filters which pins show (with **All** /
 **Hide all** and a **Show done pins** toggle), and lets you create your own

@@ -24,6 +24,39 @@ const gameOfKey = k => {
 };
 const gameOfPin = p => p.game || BUILTIN_GAME_ID;
 
+// Ask the browser to keep this origin's data for good.
+//
+// Without this, everything below is "best-effort" storage: the browser is free
+// to throw the WHOLE origin away to reclaim disk, without asking and without a
+// trace, and it takes the biggest offender first — which is exactly what a map
+// built out of full-size composites and a screenshot per pin is. That is not a
+// theoretical risk; it is how a year of maps went missing.
+//
+// Granting is at the browser's discretion (it weighs how often you visit,
+// whether the site is bookmarked or installed). Returns true if the data is
+// protected, false if the browser refused, null if it can't say — the caller
+// tells the user, because a refusal means backups are the only safety net.
+export async function requestPersistence() {
+  if (!navigator.storage?.persist) return null;
+  try {
+    return (await navigator.storage.persisted()) || (await navigator.storage.persist());
+  } catch {
+    return null;
+  }
+}
+
+// how much this origin is holding, and how much it is allowed — null when the
+// browser won't say
+export async function storageEstimate() {
+  if (!navigator.storage?.estimate) return null;
+  try {
+    const { usage, quota } = await navigator.storage.estimate();
+    return { usage: usage ?? 0, quota: quota ?? 0 };
+  } catch {
+    return null;
+  }
+}
+
 let dbPromise = null;
 
 function open() {

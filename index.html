@@ -70,6 +70,24 @@
   </button>
 </div>
 
+<!-- Storage safety. Silent while the browser has promised to keep this map and
+     the backup is recent — it only speaks when there is something to do. -->
+<div id="storage-note" class="hidden" role="status">
+  <div class="sn-head">
+    <span class="sn-ico" id="sn-ico">⚠</span>
+    <b id="sn-title"></b>
+    <button id="btn-sn-hide" class="sn-x" title="Hide until next time" aria-label="Hide until next time">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+    </button>
+  </div>
+  <p id="sn-text"></p>
+  <div class="sn-stats" id="sn-stats"></div>
+  <button id="btn-sn-export" class="btn primary sn-go">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M4 20h16"/></svg>
+    <span>Back up this game now</span>
+  </button>
+</div>
+
 <div id="map-opacity" title="Map opacity (pins stay fully visible)">
   <span class="op-ico">👁</span>
   <input id="opacity-range" type="range" min="15" max="100" value="100">

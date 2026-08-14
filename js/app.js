@@ -1,5 +1,5 @@
 import { MapView, DEFAULT_BG } from './mapview.js';
-import { store, setStoreGame } from './store.js';
+import { store, setStoreGame, requestPersistence, storageEstimate } from './store.js';
 import { LayerStack, BASE_LAYER_ID, MAX_LAYERS, MIN_DETAIL, fogKey, pinLayer } from './layers.js';
 import { locate, detectPlayerMarker, MARKER_MAP_HEIGHT, refinePlacement } from './match.js';
 import { ocrLocate, loadLabels } from './ocr.js';
@@ -2573,6 +2573,99 @@ window.addEventListener('drop', e => {
   routePaste(file);
 });
 
+// ---------------------------------------------------------- storage safety
+
+// A browser that hasn't promised to keep this data may delete all of it to
+// reclaim disk — silently, and the whole origin at once. So the app asks for
+// that promise, and when it doesn't get one it says so, because then an
+// exported backup is the only thing standing between you and starting over.
+
+const BACKUP_STALE_DAYS = 7;
+let dataProtected = null;    // what the browser answered — see requestPersistence
+let noteDismissed = false;   // "hide" — for this visit only, never remembered
+
+const fmtBytes = n => {
+  const mb = (n || 0) / 1048576;
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+  if (mb < 1) return 'under 1 MB';
+  return mb >= 10 ? Math.round(mb) + ' MB' : mb.toFixed(1) + ' MB';
+};
+
+const daysSince = t => (Date.now() - t) / 86400000;
+
+// "today" / "3 days ago" / a date once it's old enough that the count stops
+// meaning anything
+function whenWords(t) {
+  if (t == null) return 'never';
+  const d = Math.floor(daysSince(t));
+  if (d <= 0) return 'today';
+  if (d === 1) return 'yesterday';
+  if (d < 30) return `${d} days ago`;
+  return new Date(t).toLocaleDateString();
+}
+
+// is there anything here that losing would hurt?
+const worthKeeping = () => !layers.isBlank() || pins.pins.size > 0;
+
+// The first session is the one with the most to lose and the least to show for
+// it — a map that was blank at boot has nothing worth warning about, and by the
+// time it does, the check has already run. So the map and the pins ask again as
+// they fill, rarely enough that reading the browser's storage costs nothing.
+let lastSafetyCheck = 0;
+function scheduleStorageCheck() {
+  if (!booted || noteDismissed) return;
+  if (Date.now() - lastSafetyCheck < 20000) return;
+  refreshStorageSafety();
+}
+
+async function refreshStorageSafety() {
+  lastSafetyCheck = Date.now();
+  const last = await store.getMeta('lastBackup');
+  const overdue = last == null || daysSince(last) >= BACKUP_STALE_DAYS;
+  const est = await storageEstimate();
+
+  // Export carries the same facts quietly, whether or not the note is up
+  const btn = $('#btn-export');
+  btn.title = `Download a backup of “${game.name}” — last one ${whenWords(last)}`
+    + (est ? `. ${fmtBytes(est.usage)} saved in this browser.` : '.');
+  btn.classList.toggle('at-risk', overdue && worthKeeping());
+
+  const note = $('#storage-note');
+  const show = worthKeeping() && !noteDismissed && (dataProtected === false || overdue);
+  note.classList.toggle('hidden', !show);
+  if (!show) return;
+
+  // the browser refusing to keep the data is the graver of the two, so it
+  // leads whenever it applies
+  if (dataProtected === false) {
+    $('#sn-title').textContent = 'This map could be deleted';
+    $('#sn-text').textContent = 'Your browser hasn’t promised to keep it, so it may '
+      + 'clear the whole map to reclaim disk space — without warning. A backup is the only way back.';
+  } else {
+    $('#sn-title').textContent = 'Your backup is out of date';
+    $('#sn-text').textContent = `Everything you’ve done since ${whenWords(last)} exists `
+      + 'only in this browser.';
+  }
+
+  const stats = $('#sn-stats');
+  stats.textContent = '';
+  const stat = (label, value, warn) => {
+    const row = document.createElement('div');
+    row.className = 'sn-stat' + (warn ? ' warn' : '');
+    const l = document.createElement('span');
+    l.textContent = label;
+    const v = document.createElement('b');
+    v.textContent = value;
+    row.append(l, v);
+    stats.appendChild(row);
+  };
+  stat('Last backup', whenWords(last), overdue);
+  if (est) stat('Saved in this browser', fmtBytes(est.usage)
+    + (est.quota ? ` of ${fmtBytes(est.quota)}` : ''));
+  stat('Kept safe from clearing', dataProtected === true ? 'Yes'
+    : dataProtected === false ? 'No' : 'Unknown', dataProtected !== true);
+}
+
 // ---------------------------------------------------------- export / import
 
 async function exportAll() {
@@ -2611,7 +2704,11 @@ async function exportAll() {
   a.download = `${slug}-map-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
+  // Dated here rather than on the download finishing, which the page is never
+  // told about — cancel the save and this will claim a backup you don't have.
+  await store.putMeta('lastBackup', Date.now());
   toast('Backup downloaded.', 'ok');
+  refreshStorageSafety();
 }
 
 async function importAll(file) {
@@ -2695,6 +2792,12 @@ async function importAll(file) {
   renderCatList();
   pins.applyFilter();
   syncDetailButton();
+  // What just landed is exactly what that file holds, so the file IS this
+  // game's backup — dated when it was written, not now, so restoring something
+  // months old still reads as months old.
+  const madeAt = Date.parse(data.exported || '');
+  await store.putMeta('lastBackup', Number.isNaN(madeAt) ? null : madeAt);
+  refreshStorageSafety();
   toast(`Imported ${data.pins?.length ?? 0} pins.`, 'ok');
 }
 
@@ -3238,6 +3341,7 @@ function wireSidebarResize() {
 function updateEmptyHint() {
   $('#empty-hint').classList.toggle('hidden', !layers.isBlank());
   positionEmptyHint();
+  scheduleStorageCheck();   // the map just gained (or lost) its content
 }
 
 // anchor the empty prompt to the map's centre so it pans/zooms with the map
@@ -3520,6 +3624,12 @@ function buildToolbar() {
   });
 
   $('#btn-export').addEventListener('click', exportAll);
+  $('#btn-sn-export').addEventListener('click', exportAll);
+  // hiding it settles nothing, so it comes back next visit
+  $('#btn-sn-hide').addEventListener('click', () => {
+    noteDismissed = true;
+    $('#storage-note').classList.add('hidden');
+  });
   $('#btn-import').addEventListener('click', () => $('#import-file').click());
   $('#import-file').addEventListener('change', e => {
     if (e.target.files[0]) importAll(e.target.files[0]);
@@ -3633,7 +3743,7 @@ async function init() {
   pins = new PinManager($('#pin-layer'), $('#pin-top'), view, {
     onChange: persistPin,
     onLightbox: showLightbox,
-    onPinsChanged: () => updateCatCounts(),
+    onPinsChanged: () => { updateCatCounts(); scheduleStorageCheck(); },
     onRequestAttach: data => {
       pins.setAwaiting(data.id);
       showAwaitDialog('Paste the screenshot for this pin',
@@ -3716,6 +3826,13 @@ async function init() {
     openHelp();
     store.putMeta('helped', true);
   }
+
+  // Ask to keep this origin's data before anything else can go wrong, then say
+  // where things stand. Both are off the critical path — a browser that won't
+  // answer must not stop the app starting.
+  requestPersistence()
+    .then(ok => { dataProtected = ok; return refreshStorageSafety(); })
+    .catch(() => {});
 
   // debug / testing hooks
   window.__ssmc = {
